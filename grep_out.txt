@@ -1,0 +1,558 @@
+4872-                                .size(12.dp, 8.dp)
+4873-                                .offset(y = (-8).dp)
+4874-                                .clip(RoundedCornerShape(bottomStart = 4.dp, bottomEnd = 4.dp))
+4875-                                .background(Color.White)
+4876-                        )
+4877-                    }
+4878-                }
+4879-            }
+4880-        }
+4881-        
+4882:        AnimatedVisibility(
+4883-            visible = showSavedIndicator,
+4884-            enter = fadeIn(),
+4885-            exit = fadeOut(),
+4886-            modifier = Modifier
+4887-                .align(Alignment.BottomEnd)
+--
+4905-                    Spacer(modifier = Modifier.width(4.dp))
+4906-                    Text(
+4907-                        text = "Saved",
+4908-                        style = MaterialTheme.typography.labelSmall,
+4909-                        fontWeight = FontWeight.Bold,
+4910-                        color = MaterialTheme.colorScheme.onPrimaryContainer
+4911-                    )
+4912-                }
+4913-            }
+4914-        }
+4915:        AnimatedVisibility(
+4916-            visible = showAudioPanel && (selectedClipId != null || selectedAudioId != null),
+4917-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+4918-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+4919-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+4920-        ) {
+--
+5528-                                }
+5529-                            }) {
+5530-                                Text("Separate Vocals")
+5531-                            }
+5532-                        }
+5533-                    }
+5534-                }
+5535-            }
+5536-        }
+5537-        
+5538:        AnimatedVisibility(
+5539-            visible = isVoiceoverMode,
+5540-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+5541-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+5542-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+5543-        ) {
+--
+5555-                        startTimeOnTimelineMs = currentPositionMs,
+5556-                        sourceDurationMs = duration,
+5557-                        trimEndMs = duration
+5558-                    )
+5559-                    audioClips = audioClips + newAudio
+5560-                    persistHistory()
+5561-                }
+5562-            )
+5563-        }
+5564-
+5565:        AnimatedVisibility(
+5566-            visible = showSpeedPanel && selectedClipId != null,
+5567-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+5568-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+5569-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+5570-        ) {
+--
+5834-                        }
+5835-                        
+5836-                        val oldDurSecs = (selectedClip.trimEndMs - selectedClip.trimStartMs) / 1000f
+5837-                        val newDurSecs = (selectedClip.durationMs) / 1000f
+5838-                        Text("Duration: ${String.format("%.1fs", oldDurSecs)} → ${String.format("%.1fs", newDurSecs)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+5839-                    }
+5840-                }
+5841-            }
+5842-        }
+5843-        
+5844:        AnimatedVisibility(
+5845-            visible = showTransformPanel && selectedClipId != null,
+5846-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+5847-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+5848-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+5849-        ) {
+--
+5984-                                    label = { Text(name) }
+5985-                                )
+5986-                            }
+5987-                        }
+5988-                        
+5989-                    }
+5990-                }
+5991-            }
+5992-        }
+5993-        
+5994:        AnimatedVisibility(
+5995-            visible = showOverlayPanel,
+5996-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+5997-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+5998-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+5999-        ) {
+--
+6190-                                        )
+6191-                                    }
+6192-                                }
+6193-                            }
+6194-                        }
+6195-                    }
+6196-                }
+6197-            }
+6198-        }
+6199-        
+6200:        AnimatedVisibility(
+6201-            visible = showFiltersPanel,
+6202-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+6203-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+6204-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+6205-        ) {
+--
+6303-                                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+6304-                                )
+6305-                                Text("100%", style = MaterialTheme.typography.bodySmall)
+6306-                            }
+6307-                        }
+6308-                    }
+6309-                }
+6310-            }
+6311-        }
+6312-        
+6313:        AnimatedVisibility(
+6314-            visible = showBgBlurPanel,
+6315-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+6316-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+6317-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+6318-        ) {
+--
+6413-                                modifier = Modifier.fillMaxWidth()
+6414-                            ) {
+6415-                                Text(if (isPaintingMask) "Done Painting Mask" else "Manual Paint / Erase Mask")
+6416-                            }
+6417-                        }
+6418-                    }
+6419-                }
+6420-            }
+6421-        }
+6422-
+6423:        AnimatedVisibility(
+6424-            visible = showAISmartPanel,
+6425-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+6426-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+6427-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+6428-        ) {
+--
+6487-                    } else if (currentMs >= targetMs) {
+6488-                        newClips = newClips.take(idx)
+6489-                    }
+6490-                    clips = newClips
+6491-                    saveState(newClips, canvasSettings, "AI Highlights Reel")
+6492-                },
+6493-                onClose = { showAISmartPanel = false }
+6494-            )
+6495-        }
+6496-
+6497:        AnimatedVisibility(
+6498-            visible = showSmartReframePanel,
+6499-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+6500-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+6501-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+6502-        ) {
+--
+6522-                        clips = newClips
+6523-                        saveState(newClips, canvasSettings, "Smart Reframe")
+6524-                    },
+6525-                    onClose = { showSmartReframePanel = false }
+6526-                )
+6527-            } else {
+6528-                showSmartReframePanel = false
+6529-            }
+6530-        }
+6531-
+6532:        AnimatedVisibility(
+6533-            visible = showPhotoAnimationPanel,
+6534-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+6535-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+6536-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+6537-        ) {
+--
+6549-                        mut[clipIndex] = c
+6550-                        newClips = mut
+6551-                        clips = newClips
+6552-                        saveState(newClips, canvasSettings, "Photo Animation")
+6553-                    },
+6554-                    onClose = { showPhotoAnimationPanel = false }
+6555-                )
+6556-            }
+6557-        }
+6558-
+6559:        AnimatedVisibility(
+6560-            visible = showAITTSPanel,
+6561-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+6562-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+6563-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+6564-        ) {
+--
+6574-                        isLooped = false
+6575-                    )
+6576-                    audioClips = audioClips + newAudio
+6577-                    saveState(clips, canvasSettings, "Add AI Voice")
+6578-                    persistHistory()
+6579-                },
+6580-                onClose = { showAITTSPanel = false }
+6581-            )
+6582-        }
+6583-
+6584:        AnimatedVisibility(
+6585-            visible = showExportPanel && !showBatchExportPanel,
+6586-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+6587-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+6588-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+6589-        ) {
+6590-            ExportSettingsScreen(
+6591-                videoDurationMs = videoDurationMs.takeIf { it > 0 } ?: 15000L,
+6592-                thumbnailUri = clips.firstOrNull()?.sourceUri,
+6593-                onClose = { showExportPanel = false },
+6594-                onExportComplete = { showExportPanel = false },
+6595-                onOpenBatchExport = { showBatchExportPanel = true }
+6596-            )
+6597-        }
+6598-
+6599:        AnimatedVisibility(
+6600-            visible = showBatchExportPanel,
+6601-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+6602-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+6603-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(11f)
+6604-        ) {
+--
+6684-                    }
+6685-                },
+6686-                dismissButton = {
+6687-                    TextButton(onClick = { showSaveTemplateDialog = false }) {
+6688-                        Text("Cancel")
+6689-                    }
+6690-                }
+6691-            )
+6692-        }
+6693-
+6694:        AnimatedVisibility(
+6695-            visible = showAIMusicPanel,
+6696-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+6697-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+6698-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+6699-        ) {
+--
+6711-                        isLooped = duration < videoDurationMs
+6712-                    )
+6713-                    audioClips = audioClips + newAudio
+6714-                    saveState(clips, canvasSettings, "Add AI music")
+6715-                    persistHistory()
+6716-                },
+6717-                onClose = { showAIMusicPanel = false }
+6718-            )
+6719-        }
+6720-
+6721:        AnimatedVisibility(
+6722-            visible = showAIEnhancePanel,
+6723-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+6724-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+6725-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+6726-        ) {
+--
+6741-                        clips = newClips
+6742-                        saveState(newClips, canvasSettings, "AI Enhance")
+6743-                    },
+6744-                    onClose = { showAIEnhancePanel = false }
+6745-                )
+6746-            } else {
+6747-                showAIEnhancePanel = false
+6748-            }
+6749-        }
+6750-
+6751:        AnimatedVisibility(
+6752-            visible = showAIObjectRemovePanel,
+6753-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+6754-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+6755-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+6756-        ) {
+--
+6771-                        clips = newClips
+6772-                        saveState(newClips, canvasSettings, "AI Object Remove")
+6773-                    },
+6774-                    onClose = { showAIObjectRemovePanel = false }
+6775-                )
+6776-            } else {
+6777-                showAIObjectRemovePanel = false
+6778-            }
+6779-        }
+6780-
+6781:        AnimatedVisibility(
+6782-            visible = showCaptionsPanel,
+6783-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+6784-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+6785-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+6786-        ) {
+--
+6823-                            durationMs = segEnd - currentStart
+6824-                        ))
+6825-                        currentStart = segEnd
+6826-                    }
+6827-                    captions = generated
+6828-                },
+6829-                onClose = { showCaptionsPanel = false }
+6830-            )
+6831-        }
+6832-
+6833:        AnimatedVisibility(
+6834-            visible = showBgRemovalPanel,
+6835-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+6836-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+6837-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+6838-        ) {
+--
+6868-                                val newClips = clips.toMutableList()
+6869-                                newClips[clipIndex] = clip.copy(bgRemovalSettings = newSettings)
+6870-                                clips = newClips
+6871-                            }
+6872-                        )
+6873-                    }
+6874-                }
+6875-            }
+6876-        }
+6877-
+6878:        AnimatedVisibility(
+6879-            visible = showLutPanel,
+6880-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+6881-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+6882-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+6883-        ) {
+--
+7024-                                        Text(grade.name, style = MaterialTheme.typography.labelSmall, textAlign = androidx.compose.ui.text.style.TextAlign.Center, maxLines = 1)
+7025-                                    }
+7026-                                }
+7027-                            }
+7028-                        }
+7029-                    }
+7030-                }
+7031-            }
+7032-        }
+7033-
+7034:        AnimatedVisibility(
+7035-            visible = showAdjustPanel,
+7036-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+7037-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+7038-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+7039-        ) {
+--
+7136-                                    )
+7137-                                    Text("${value.toInt()}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(0.15f), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+7138-                                }
+7139-                            }
+7140-                        }
+7141-                    }
+7142-                }
+7143-            }
+7144-        }
+7145-        
+7146:        AnimatedVisibility(
+7147-            visible = showEffectsPanel,
+7148-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+7149-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+7150-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+7151-        ) {
+--
+7313-                                    Spacer(modifier = Modifier.height(4.dp))
+7314-                                    Text(tType.label, style = MaterialTheme.typography.labelSmall, color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+7315-                                }
+7316-                            }
+7317-                        }
+7318-                    }
+7319-                }
+7320-            }
+7321-        }
+7322-        
+7323:        AnimatedVisibility(
+7324-            visible = showTextToolbar,
+7325-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+7326-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+7327-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+7328-        ) {
+--
+7371-                        val idx = newTexts.indexOfFirst { it.id == updatedText.id }
+7372-                        if (idx != -1) {
+7373-                            newTexts[idx] = updatedText
+7374-                            texts = newTexts
+7375-                        }
+7376-                    }
+7377-                )
+7378-            }
+7379-        }
+7380-        
+7381:        AnimatedVisibility(
+7382-            visible = showStickerPicker,
+7383-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+7384-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+7385-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+7386-        ) {
+--
+7401-                    showStickerPicker = false
+7402-                    showStickerToolbar = true
+7403-                    
+7404-                    selectedClipId = null
+7405-                    selectedTextId = null
+7406-                    selectedOverlayId = null
+7407-                }
+7408-            )
+7409-        }
+7410-        
+7411:        AnimatedVisibility(
+7412-            visible = showStickerToolbar,
+7413-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+7414-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+7415-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+7416-        ) {
+--
+7435-                        val idx = newStickers.indexOfFirst { it.id == updatedSticker.id }
+7436-                        if (idx != -1) {
+7437-                            newStickers[idx] = updatedSticker
+7438-                            stickers = newStickers
+7439-                        }
+7440-                    }
+7441-                )
+7442-            }
+7443-        }
+7444-        
+7445:        AnimatedVisibility(
+7446-            visible = showFramePicker,
+7447-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+7448-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+7449-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+7450-        ) {
+--
+7454-                    frames = frames + newFrame
+7455-                    selectedFrameId = newFrame.id
+7456-                    showFramePicker = false
+7457-                    showFrameToolbar = true
+7458-                    saveState(clips, canvasSettings, "Add frame")
+7459-                },
+7460-                onClose = { showFramePicker = false }
+7461-            )
+7462-        }
+7463-        
+7464:        AnimatedVisibility(
+7465-            visible = showFrameToolbar,
+7466-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+7467-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+7468-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+7469-        ) {
+--
+7489-                        val idx = newFrames.indexOfFirst { it.id == updatedFrame.id }
+7490-                        if (idx != -1) {
+7491-                            newFrames[idx] = updatedFrame
+7492-                            frames = newFrames
+7493-                        }
+7494-                    }
+7495-                )
+7496-            }
+7497-        }
+7498-        
+7499:        AnimatedVisibility(
+7500-            visible = showDrawToolbar,
+7501-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+7502-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+7503-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+7504-        ) {
+--
+7568-                            newDrawings[idx] = active.copy(durationMs = durMs)
+7569-                            drawings = newDrawings
+7570-                            saveState(clips, canvasSettings, "Update Draw Duration")
+7571-                        }
+7572-                    }
+7573-                },
+7574-                durationMs = activeDrawing?.durationMs ?: 5000L
+7575-            )
+7576-        }
+7577-        
+7578:        AnimatedVisibility(
+7579-            visible = showCanvasPanel,
+7580-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+7581-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+7582-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+7583-        ) {
+--
+7638-                        val modes = FitMode.values()
+7639-                        modes.forEach { mode ->
+7640-                            FilterChip(
+7641-                                selected = canvasSettings.fitMode == mode,
+7642-                                onClick = { saveState(clips, canvasSettings.copy(fitMode = mode), "Change fit mode") },
+7643-                                label = { Text(mode.name) }
+7644-                            )
+7645-                        }
+7646-                    }
+7647-                    
+7648:                    AnimatedVisibility(visible = canvasSettings.fitMode == FitMode.Fit) {
+7649-                        Column {
+7650-                            Spacer(Modifier.height(8.dp))
+7651-                            Text("Background", style = MaterialTheme.typography.labelMedium)
+7652-                            Spacer(Modifier.height(8.dp))
+7653-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+--
+7675-                                        )
+7676-                                    }
+7677-                                }
+7678-                            }
+7679-                        }
+7680-                    }
+7681-                }
+7682-            }
+7683-        }
+7684-        
+7685:        AnimatedVisibility(
+7686-            visible = showLayerPanel,
+7687-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+7688-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+7689-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+7690-        ) {
+--
+7757-                        if (changed) {
+7758-                            overlays = mOverlays; texts = mTexts; stickers = mStickers; drawings = mDraws; frames = mFrames
+7759-                            persistHistory()
+7760-                        }
+7761-                    },
+7762-                    onClose = { showLayerPanel = false }
+7763-                )
+7764-            }
+7765-        }
+7766-    }
+7767:        AnimatedVisibility(
+7768-            visible = showTransitionPickerForClipId != null,
+7769-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+7770-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+7771-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+7772-        ) {
+--
+7904-                            val st = currentClipForFullscreen!!.enhanceSettings.stabilizationStrength
+7905-                            val stabScale = 1f + (st * 0.3f)
+7906-                            Modifier.graphicsLayer { scaleX = stabScale; scaleY = stabScale }
+7907-                        } else Modifier)
+7908-                        .then(if (!isComparing && currentClipForFullscreen != null) Modifier.applyBgRemoval(currentClipForFullscreen.bgRemovalSettings, isComparing, currentPositionMs) else Modifier)
+7909-                        .then(if (!isComparing && currentClipForFullscreen != null) Modifier.applyObjectRemoval(currentClipForFullscreen.objectRemovalSettings) else Modifier)
+7910-                        .applyAllVisualEffects(if (!isComparing && currentClipForFullscreen != null) currentClipForFullscreen.effects else emptyList(), currentPositionMs, currentClipForFullscreen?.durationMs ?: 0L)
+7911-                )
+7912-            }
+7913-            
+7914:            AnimatedVisibility(
+7915-                visible = showFullscreenControls,
+7916-                enter = fadeIn(),
+7917-                exit = fadeOut(),
+7918-                modifier = Modifier.fillMaxSize()
+7919-            ) {
