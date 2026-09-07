@@ -615,8 +615,8 @@ data class OnboardingPage(val title: String, val description: String, val icon: 
 fun OnboardingScreen(onComplete: () -> Unit) {
   val pages = listOf(
     OnboardingPage("Edit Locally", "Choose photos and videos from the system picker and build a local project on your device.", Icons.Filled.Folder),
-    OnboardingPage("Core Editing", "Trim and reorder clips, add local audio, and adjust the canvas before exporting.", Icons.Filled.ContentCut),
-    OnboardingPage("Verified MP4 Export", "Export a real MP4 without a watermark when the project uses the currently supported editing features.", Icons.Filled.MovieCreation),
+    OnboardingPage("Core Editing", "Trim, split, and reorder source clips while keeping the project stored locally on your device.", Icons.Filled.ContentCut),
+    OnboardingPage("Verified MP4 Export", "Export a real MP4 without a watermark when the project uses the currently supported trim and mute edits.", Icons.Filled.MovieCreation),
     OnboardingPage("Private by Default", "Clipp does not upload your media. Cloud sync, accounts, subscriptions, and AI tools are not active in this build.", Icons.Filled.PrivacyTip)
   )
 
