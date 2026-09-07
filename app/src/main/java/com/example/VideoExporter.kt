@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.Log
 import androidx.core.content.FileProvider
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -146,7 +147,11 @@ class VideoExporter(context: Context) {
             .onFailure {
                 progressJob?.cancel()
                 cleanupTemporaryOutput()
-                if (!canceled.get()) onError("Could not start export: ${it.message ?: "unknown error"}")
+                if (BuildConfig.DEBUG) Log.e("ClippExporter", "Could not start export", it)
+                if (!canceled.get()) {
+                    val detail = it.message?.takeIf(String::isNotBlank) ?: it::class.simpleName
+                    onError("Could not start export${detail?.let { value -> ": $value" } ?: ""}")
+                }
             }
 
         return ExportHandle {
@@ -173,9 +178,14 @@ class VideoExporter(context: Context) {
         val endMs = normalized.effectiveTrimEndMs
         if (endMs <= startMs) return null
         val safeSpeed = normalized.playbackSpeed
+        val imageDurationMs = if (normalized.isPhoto) {
+            ((endMs - startMs) / safeSpeed).toLong().coerceAtLeast(1L)
+        } else {
+            0L
+        }
         val builder = MediaItem.Builder().setUri(Uri.parse(normalized.sourceUri))
         if (normalized.isPhoto) {
-            builder.setImageDurationMs(((endMs - startMs) / safeSpeed).toLong().coerceAtLeast(1L))
+            builder.setImageDurationMs(imageDurationMs)
         } else {
             builder.setClippingConfiguration(
                 MediaItem.ClippingConfiguration.Builder()
@@ -212,6 +222,11 @@ class VideoExporter(context: Context) {
 
         val editedItem = EditedMediaItem.Builder(builder.build())
             .setRemoveAudio(normalized.isPhoto || normalized.isMuted)
+        if (normalized.isPhoto) {
+            editedItem
+                .setDurationUs(imageDurationMs * 1_000L)
+                .setFrameRate(30)
+        }
         if (videoEffects.isNotEmpty() || audioProcessors.isNotEmpty()) {
             editedItem.setEffects(Effects(audioProcessors, videoEffects))
         }
