@@ -5,7 +5,11 @@ import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.compose.ui.graphics.Color
 import java.io.File
+import java.io.FileOutputStream
+import kotlin.math.PI
+import kotlin.math.sin
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -67,10 +71,125 @@ class ExportInstrumentedTest {
         }
     }
 
+    @Test
+    fun staticLayersAndColorEditsAreRenderedAndPublished() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val source = File.createTempFile("clipp-export-layers-", ".png", context.cacheDir)
+        val bitmap = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(android.graphics.Color.rgb(210, 70, 40))
+        }
+        source.outputStream().use { output ->
+            assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
+        }
+        bitmap.recycle()
+
+        val clip = MediaClip(
+            sourceUri = Uri.fromFile(source).toString(),
+            originalDurationMs = 1_000L,
+            trimEndMs = 1_000L,
+            isPhoto = true,
+            cropRect = androidx.compose.ui.geometry.Rect(0.05f, 0.05f, 0.95f, 0.95f),
+            filterType = FilterType.WARM,
+            filterIntensity = 0.7f,
+            adjustments = ColorAdjustments(brightness = 8f, saturation = 12f),
+            effects = listOf(AppliedEffect(type = EffectType.GAUSSIAN_BLUR, intensity = 0.05f)),
+            transitionNext = Transition(TransitionType.FADE_TO_BLACK, 200L)
+        )
+        val state = EditorState(
+            clips = listOf(clip),
+            texts = listOf(TextOverlay(text = "Clipp", durationMs = 1_000L, fontSize = 42f)),
+            stickers = listOf(
+                StickerOverlay(
+                    modelId = "star",
+                    content = "★",
+                    category = StickerCategory.SHAPE,
+                    durationMs = 1_000L,
+                    posX = 0.2f,
+                    posY = 0.2f
+                )
+            ),
+            drawings = listOf(
+                DrawOverlay(
+                    durationMs = 1_000L,
+                    strokes = listOf(
+                        DrawStroke(
+                            path = listOf(NormalizedOffset(0.1f, 0.1f), NormalizedOffset(0.9f, 0.9f)),
+                            color = Color.Cyan,
+                            width = 0.01f,
+                            brushType = BrushType.PEN
+                        )
+                    )
+                )
+            ),
+            frames = listOf(FrameOverlay(typeId = "clean_solid", durationMs = 1_000L, color = Color.White)),
+            captions = listOf(AutoCaptionSegment(text = "caption", words = emptyList(), startTimeMs = 0L, durationMs = 1_000L))
+        )
+        val exporter = VideoExporter(context)
+        var result: Outcome? = null
+        try {
+            result = awaitExport(exporter, listOf(clip), "Clipp_instrumented_layers.mp4", state)
+            assertSuccessful(result!!)
+            assertPublishedMp4(context, result!!)
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            source.delete()
+        }
+    }
+
+    @Test
+    fun separateAudioTrackIsMixedIntoPublishedMp4() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val source = File.createTempFile("clipp-export-audio-base-", ".png", context.cacheDir)
+        val audio = File.createTempFile("clipp-export-audio-", ".wav", context.cacheDir)
+        val bitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(android.graphics.Color.rgb(40, 120, 220))
+        }
+        source.outputStream().use { output ->
+            assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
+        }
+        bitmap.recycle()
+        writeMonoWav(audio, durationMs = 1_000L)
+
+        val clip = MediaClip(
+            sourceUri = Uri.fromFile(source).toString(),
+            originalDurationMs = 1_000L,
+            trimEndMs = 1_000L,
+            isPhoto = true,
+            isMuted = true
+        )
+        val state = EditorState(
+            clips = listOf(clip),
+            audioClips = listOf(
+                AudioClip(
+                    sourceUri = Uri.fromFile(audio).toString(),
+                    displayName = "Music",
+                    startTimeOnTimelineMs = 0L,
+                    sourceDurationMs = 1_000L,
+                    trimEndMs = 1_000L,
+                    volume = 0.65f
+                )
+            )
+        )
+        val exporter = VideoExporter(context)
+        var result: Outcome? = null
+        try {
+            result = awaitExport(exporter, listOf(clip), "Clipp_instrumented_audio.mp4", state)
+            assertSuccessful(result!!)
+            assertPublishedMp4(context, result!!, requireAudio = true)
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            source.delete()
+            audio.delete()
+        }
+    }
+
     private fun awaitExport(
         exporter: VideoExporter,
         clips: List<MediaClip>,
-        outputName: String
+        outputName: String,
+        editorState: EditorState = EditorState(clips = clips)
     ): Outcome {
         val completed = CountDownLatch(1)
         val outcome = AtomicReference<Outcome>()
@@ -78,6 +197,7 @@ class ExportInstrumentedTest {
             exporter.export(
                 clips = clips,
                 outputName = outputName,
+                editorState = editorState,
                 onProgress = {},
                 onSuccess = { uri, metadata ->
                     outcome.set(Outcome(uri = uri, metadata = metadata))
@@ -102,7 +222,8 @@ class ExportInstrumentedTest {
 
     private fun assertPublishedMp4(
         context: android.content.Context,
-        result: Outcome
+        result: Outcome,
+        requireAudio: Boolean = false
     ) {
         val publishedUri = result.uri!!
         context.contentResolver.openAssetFileDescriptor(publishedUri, "r")?.use { descriptor ->
@@ -116,8 +237,46 @@ class ExportInstrumentedTest {
                 android.media.MediaMetadataRetriever.METADATA_KEY_DURATION
             )?.toLongOrNull() ?: 0L
             assertTrue(duration > 0L)
+            if (requireAudio) {
+                assertTrue(retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO) == "yes")
+            }
         } finally {
             retriever.release()
+        }
+    }
+
+    private fun writeMonoWav(file: File, durationMs: Long) {
+        val sampleRate = 44_100
+        val sampleCount = (sampleRate * durationMs / 1_000L).toInt()
+        val dataSize = sampleCount * 2
+        FileOutputStream(file).use { output ->
+            fun writeAscii(value: String) = output.write(value.toByteArray(Charsets.US_ASCII))
+            fun writeIntLe(value: Int) {
+                output.write(value and 0xFF)
+                output.write((value shr 8) and 0xFF)
+                output.write((value shr 16) and 0xFF)
+                output.write((value shr 24) and 0xFF)
+            }
+            fun writeShortLe(value: Int) {
+                output.write(value and 0xFF)
+                output.write((value shr 8) and 0xFF)
+            }
+            writeAscii("RIFF")
+            writeIntLe(36 + dataSize)
+            writeAscii("WAVEfmt ")
+            writeIntLe(16)
+            writeShortLe(1)
+            writeShortLe(1)
+            writeIntLe(sampleRate)
+            writeIntLe(sampleRate * 2)
+            writeShortLe(2)
+            writeShortLe(16)
+            writeAscii("data")
+            writeIntLe(dataSize)
+            for (i in 0 until sampleCount) {
+                val sample = (sin(2.0 * PI * 440.0 * i / sampleRate) * 8_000.0).toInt()
+                writeShortLe(sample)
+            }
         }
     }
 

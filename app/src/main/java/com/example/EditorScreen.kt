@@ -1,6 +1,9 @@
 package com.example
 
 import com.example.R
+import android.Manifest
+import android.content.pm.PackageManager
+import android.media.MediaRecorder
 import android.os.Build
 import android.content.Context
 import android.net.Uri
@@ -102,10 +105,14 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -130,6 +137,8 @@ import com.example.data.ProjectEntity
 import com.example.viewmodel.ProjectViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.File
+import java.util.UUID
 
 import androidx.compose.ui.geometry.Rect
 
@@ -989,6 +998,105 @@ fun EditorScreen(
             project = savedProject
         }
     }
+
+    var isRecordingVoiceover by remember { mutableStateOf(false) }
+    var voiceRecorder by remember { mutableStateOf<MediaRecorder?>(null) }
+    var voiceRecordingFile by remember { mutableStateOf<File?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            voiceRecorder?.let { recorder ->
+                runCatching { recorder.stop() }
+                runCatching { recorder.reset() }
+                runCatching { recorder.release() }
+            }
+            voiceRecordingFile?.delete()
+        }
+    }
+
+    fun addAudioTrack(uri: Uri, displayName: String?) {
+        scope.launch {
+            val durationMs = MediaMetadataReader.readAudioDuration(context, uri)
+            if (durationMs == null || durationMs <= 0L) {
+                android.widget.Toast.makeText(context, "Clipp could not read this audio file.", android.widget.Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            val audio = AudioClip(
+                sourceUri = uri.toString(),
+                displayName = displayName ?: uri.lastPathSegment?.substringAfterLast('/') ?: "Audio",
+                startTimeOnTimelineMs = currentPositionMs.coerceIn(0L, videoDurationMs),
+                sourceDurationMs = durationMs,
+                trimEndMs = durationMs
+            )
+            audioClips = audioClips + audio
+            selectedAudioId = audio.id
+            persistHistory()
+            android.widget.Toast.makeText(context, "Audio track added", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val musicPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            addAudioTrack(uri, uri.lastPathSegment?.substringAfterLast('/'))
+        }
+    }
+
+    fun startVoiceoverRecording() {
+        if (isRecordingVoiceover) return
+        val directory = File(context.filesDir, "voiceovers")
+        if (!directory.exists() && !directory.mkdirs()) {
+            android.widget.Toast.makeText(context, "Could not create a voiceover file.", android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
+        val file = File(directory, "voiceover-${UUID.randomUUID()}.m4a")
+        runCatching {
+            val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) MediaRecorder(context) else MediaRecorder()
+            recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+            recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            recorder.setAudioSamplingRate(44_100)
+            recorder.setAudioEncodingBitRate(128_000)
+            recorder.setOutputFile(file.absolutePath)
+            recorder.prepare()
+            recorder.start()
+            voiceRecorder = recorder
+            voiceRecordingFile = file
+            isRecordingVoiceover = true
+            android.widget.Toast.makeText(context, "Recording voiceover… tap Stop Voiceover when finished.", android.widget.Toast.LENGTH_LONG).show()
+        }.onFailure {
+            file.delete()
+            android.widget.Toast.makeText(context, "Could not start voiceover recording.", android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+
+    fun stopVoiceoverRecording() {
+        val recorder = voiceRecorder ?: return
+        val file = voiceRecordingFile
+        voiceRecorder = null
+        voiceRecordingFile = null
+        isRecordingVoiceover = false
+        runCatching { recorder.stop() }
+            .onFailure { file?.delete() }
+        runCatching { recorder.reset() }
+        runCatching { recorder.release() }
+        if (file == null || !file.exists() || file.length() == 0L) {
+            android.widget.Toast.makeText(context, "Voiceover recording was empty.", android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
+        addAudioTrack(Uri.fromFile(file), "Voiceover")
+    }
+
+    val recordAudioPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) startVoiceoverRecording()
+        else android.widget.Toast.makeText(context, "Microphone permission is required for voiceover.", android.widget.Toast.LENGTH_LONG).show()
+    }
     
     fun seekToGlobal(globalMs: Long, player: ExoPlayer) {
         val clampedGlobalMs = globalMs.coerceIn(0L, videoDurationMs)
@@ -1759,6 +1867,8 @@ fun EditorScreen(
                     val tools = mutableListOf(
                         "Split" to Icons.Filled.ContentCut,
                         "Mute" to Icons.Filled.VolumeOff,
+                        "Music" to Icons.Filled.LibraryMusic,
+                        "Voiceover" to Icons.Filled.RecordVoiceOver,
                     )
                     items(tools.size) { index ->
                         val toolName = tools[index].first
@@ -1807,13 +1917,26 @@ fun EditorScreen(
                                             }
                                         }
                                     }
+                                    "Music" -> musicPicker.launch(arrayOf("audio/*"))
+                                    "Voiceover" -> if (isRecordingVoiceover) {
+                                        stopVoiceoverRecording()
+                                    } else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                                        startVoiceoverRecording()
+                                    } else {
+                                        recordAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
+                                    }
                                 }
                             }
                         ) {
                             Box {
-                                Icon(tools[index].second, contentDescription = toolName, modifier = Modifier.padding(8.dp), tint = MaterialTheme.colorScheme.onSurface)
+                                Icon(
+                                    if (toolName == "Voiceover" && isRecordingVoiceover) Icons.Filled.Stop else tools[index].second,
+                                    contentDescription = toolName,
+                                    modifier = Modifier.padding(8.dp),
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
                             }
-                            Text(text = toolName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(text = if (toolName == "Voiceover" && isRecordingVoiceover) "Stop Voiceover" else toolName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
@@ -5391,19 +5514,23 @@ fun EditorScreen(
         ) {
             ExportSettingsScreen(
                 clips = clips,
+                editorState = EditorState(
+                    clips = clips,
+                    canvasSettings = canvasSettings,
+                    overlays = overlays,
+                    texts = texts,
+                    captions = captions,
+                    captionSettings = captionSettings,
+                    stickers = stickers,
+                    drawings = drawings,
+                    frames = frames,
+                    audioClips = audioClips,
+                    layerOrder = layerOrder
+                ),
                 videoDurationMs = videoDurationMs,
                 thumbnailUri = clips.firstOrNull()?.sourceUri,
                 onClose = { showExportPanel = false },
-                onExportComplete = { showExportPanel = false },
-                hasUnsupportedEdits = clips.any { it.hasUnsupportedExportEdits() } ||
-                    overlays.isNotEmpty() ||
-                    texts.isNotEmpty() ||
-                    captions.isNotEmpty() ||
-                    stickers.isNotEmpty() ||
-                    drawings.isNotEmpty() ||
-                    frames.isNotEmpty() ||
-                    audioClips.isNotEmpty() ||
-                    canvasSettings != CanvasSettingsState()
+                onExportComplete = { showExportPanel = false }
             )
         }
         

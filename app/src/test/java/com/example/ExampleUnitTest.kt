@@ -22,13 +22,13 @@ class ExampleUnitTest {
   }
 
   @Test
-  fun basicTimelineCanBeExportedAndAdvancedEditsAreBlocked() {
+  fun basicTimelineAndSupportedVisualEditsCanBeExported() {
     val basic = MediaClip(
       sourceUri = "content://media/video/1",
       originalDurationMs = 1_000L,
       trimEndMs = 1_000L
     )
-    val advanced = basic.copy(cropRect = Rect(0f, 0f, 0.8f, 1f))
+    val cropped = basic.copy(cropRect = Rect(0f, 0f, 0.8f, 1f))
     val supported = basic.copy(
       playbackSpeed = 1.5f,
       maintainPitch = false,
@@ -39,7 +39,10 @@ class ExampleUnitTest {
 
     assertFalse(basic.hasUnsupportedExportEdits())
     assertFalse(supported.hasUnsupportedExportEdits())
-    assertTrue(advanced.hasUnsupportedExportEdits())
+    assertFalse(cropped.hasUnsupportedExportEdits())
+
+    val unsupported = EditorState(clips = listOf(basic.copy(posX = 0.2f)))
+    assertTrue(unsupported.hasUnsupportedExportEdits())
   }
 
   @Test

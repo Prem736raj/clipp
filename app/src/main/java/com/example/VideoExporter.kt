@@ -14,7 +14,6 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.audio.SonicAudioProcessor
-import androidx.media3.effect.ScaleAndRotateTransformation
 import androidx.media3.effect.SpeedChangeEffect
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
@@ -65,6 +64,7 @@ class VideoExporter(context: Context) {
     fun export(
         clips: List<MediaClip>,
         outputName: String = "Clipp_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}.mp4",
+        editorState: EditorState = EditorState(clips = clips),
         onProgress: (Int) -> Unit,
         onSuccess: (Uri, ExportMetadata) -> Unit,
         onError: (String) -> Unit
@@ -73,15 +73,24 @@ class VideoExporter(context: Context) {
         val outputFile = File(appContext.cacheDir, "export-${UUID.randomUUID()}.mp4")
         temporaryOutput = outputFile
 
-        val editedItems = clips.mapNotNull { clip -> clip.toEditedMediaItem() }
+        val editedItems = mutableListOf<EditedMediaItem>()
+        var clipStartMs = 0L
+        clips.forEachIndexed { index, clip ->
+            clip.toEditedMediaItem(
+                state = editorState,
+                clipIndex = index,
+                clipStartMs = clipStartMs
+            )?.let { editedItems += it }
+            clipStartMs += clip.durationMs
+        }
         if (editedItems.isEmpty()) {
             onError("There are no exportable clips in this project")
             return ExportHandle { canceled.set(true) }
         }
 
-        val composition = Composition.Builder(
-            EditedMediaItemSequence(editedItems)
-        ).build()
+        val sequences = mutableListOf(EditedMediaItemSequence(editedItems))
+        sequences += buildAudioSequences(editorState, clips, clipStartMs)
+        val composition = Composition.Builder(sequences).build()
 
         val builtTransformer = Transformer.Builder(appContext)
             .setVideoMimeType(MimeTypes.VIDEO_H264)
@@ -124,6 +133,9 @@ class VideoExporter(context: Context) {
                 ) {
                     progressJob?.cancel()
                     cleanupTemporaryOutput()
+                    if (BuildConfig.DEBUG) {
+                        Log.e("ClippExporter", "Media3 export failed", exportException)
+                    }
                     if (!canceled.get()) {
                         onError("Export failed: ${exportException.getErrorCodeName()}")
                     }
@@ -170,7 +182,11 @@ class VideoExporter(context: Context) {
         scope.coroutineContext[Job]?.cancel()
     }
 
-    private fun MediaClip.toEditedMediaItem(): EditedMediaItem? {
+    private fun MediaClip.toEditedMediaItem(
+        state: EditorState,
+        clipIndex: Int,
+        clipStartMs: Long
+    ): EditedMediaItem? {
         val normalized = normalized()
         if (normalized.sourceUri.isBlank()) return null
         normalized.safeOriginalDurationMs.takeIf { it > 0L } ?: return null
@@ -195,20 +211,16 @@ class VideoExporter(context: Context) {
             )
         }
 
-        val videoEffects = mutableListOf<androidx.media3.common.Effect>()
+        val videoEffects = buildExportVideoEffects(
+            context = appContext,
+            state = state,
+            clip = normalized,
+            clipStartMs = clipStartMs,
+            clipDurationMs = normalized.durationMs
+        ).toMutableList()
         if (!normalized.isPhoto && safeSpeed != 1f) {
             videoEffects += SpeedChangeEffect(safeSpeed)
         }
-        if (normalized.rotation != 0f || normalized.flipHorizontal || normalized.flipVertical) {
-            videoEffects += ScaleAndRotateTransformation.Builder()
-                .setScale(
-                    if (normalized.flipHorizontal) -1f else 1f,
-                    if (normalized.flipVertical) -1f else 1f
-                )
-                .setRotationDegrees(normalized.rotation)
-                .build()
-        }
-
         val audioProcessors = mutableListOf<AudioProcessor>()
         if (!normalized.isPhoto && !normalized.isMuted && safeSpeed != 1f) {
             audioProcessors += SonicAudioProcessor().apply {
@@ -216,8 +228,9 @@ class VideoExporter(context: Context) {
                 setPitch(if (normalized.maintainPitch) 1f else safeSpeed)
             }
         }
-        if (!normalized.isPhoto && !normalized.isMuted && normalized.volume != 1f) {
-            audioProcessors += VolumeAudioProcessor(normalized.volume)
+        val effectiveVolume = (normalized.volume * state.canvasSettings.masterVolume).coerceIn(0f, 1f)
+        if (!normalized.isPhoto && !normalized.isMuted && effectiveVolume != 1f) {
+            audioProcessors += VolumeAudioProcessor(effectiveVolume)
         }
 
         val editedItem = EditedMediaItem.Builder(builder.build())
@@ -231,6 +244,48 @@ class VideoExporter(context: Context) {
             editedItem.setEffects(Effects(audioProcessors, videoEffects))
         }
         return editedItem.build()
+    }
+
+    private fun buildAudioSequences(
+        state: EditorState,
+        clips: List<MediaClip>,
+        videoDurationMs: Long
+    ): List<EditedMediaItemSequence> {
+        return state.audioClips.mapNotNull { audioClip ->
+            if (videoDurationMs <= 0L) return@mapNotNull null
+            val sourceUri = audioClip.sourceUri
+                ?: audioClip.sourceClipId?.let { id -> clips.find { it.id == id }?.sourceUri }
+                ?: return@mapNotNull null
+            val sourceStart = audioClip.trimStartMs.coerceAtLeast(0L)
+            val timelineStartMs = audioClip.startTimeOnTimelineMs.coerceIn(0L, (videoDurationMs - 1L).coerceAtLeast(0L))
+            val availableTimelineMs = (videoDurationMs - timelineStartMs).coerceAtLeast(1L)
+            val sourceEnd = audioClip.trimEndMs
+                .coerceAtLeast(sourceStart + 1L)
+                .coerceAtMost(sourceStart + availableTimelineMs)
+            val mediaItem = MediaItem.Builder()
+                .setUri(Uri.parse(sourceUri))
+                .setClippingConfiguration(
+                    MediaItem.ClippingConfiguration.Builder()
+                        .setStartPositionMs(sourceStart)
+                        .setEndPositionMs(sourceEnd)
+                        .build()
+                )
+                .build()
+            val processors = mutableListOf<AudioProcessor>()
+            val effectiveVolume = (audioClip.volume * state.canvasSettings.masterVolume).coerceIn(0f, 1f)
+            if (!audioClip.isMuted && effectiveVolume != 1f) {
+                processors += VolumeAudioProcessor(effectiveVolume)
+            }
+            val item = EditedMediaItem.Builder(mediaItem)
+                .setRemoveVideo(true)
+                .setRemoveAudio(audioClip.isMuted)
+                .setEffects(Effects(processors, emptyList()))
+                .build()
+            val sequenceBuilder = EditedMediaItemSequence.Builder()
+            val startTimeUs = timelineStartMs * 1_000L
+            if (startTimeUs > 0L) sequenceBuilder.addGap(startTimeUs)
+            sequenceBuilder.addItem(item).build()
+        }
     }
 
     private fun publishAndValidate(
@@ -334,21 +389,14 @@ class VideoExporter(context: Context) {
 }
 
 fun MediaClip.hasUnsupportedExportEdits(): Boolean {
-    val defaultCrop = androidx.compose.ui.geometry.Rect(0f, 0f, 1f, 1f)
     return !playbackSpeed.isFinite() || playbackSpeed !in 0.1f..10f ||
         !volume.isFinite() || volume !in 0f..1f ||
-        cropRect != defaultCrop ||
-        scale != 1f ||
-        posX != 0.5f ||
-        posY != 0.5f ||
-        transitionNext.type != TransitionType.NONE ||
-        filterType != FilterType.NONE ||
-        adjustments != ColorAdjustments() ||
-        effects.isNotEmpty() ||
+        cropRect.left !in 0f..1f || cropRect.top !in 0f..1f ||
+        cropRect.right !in 0f..1f || cropRect.bottom !in 0f..1f ||
+        cropRect.right <= cropRect.left || cropRect.bottom <= cropRect.top ||
+        scale <= 0f ||
         photoAnimationSettings.type != PhotoAnimationType.NONE ||
-        keyframes.isNotEmpty() ||
-        speedCurve != null ||
-        audioEffects != AudioEffects()
+        speedCurve != null
 }
 
 /** Applies a clip's simple linear volume change to decoded PCM audio. */

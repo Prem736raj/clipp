@@ -41,11 +41,11 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun ExportSettingsScreen(
     clips: List<MediaClip>,
+    editorState: EditorState = EditorState(clips = clips),
     videoDurationMs: Long,
     thumbnailUri: String?,
     onClose: () -> Unit,
-    onExportComplete: () -> Unit,
-    hasUnsupportedEdits: Boolean = false
+    onExportComplete: () -> Unit
 ) {
     val context = LocalContext.current
     val exporter = remember { VideoExporter(context) }
@@ -62,6 +62,7 @@ fun ExportSettingsScreen(
 
     val uri = outputUri
     val metadata = outputMetadata
+    val unsupportedReasons = editorState.exportUnsupportedReasons()
     fun cancelExport() {
         activeExportHandle?.cancel()
         activeExportHandle = null
@@ -101,7 +102,7 @@ fun ExportSettingsScreen(
                     Spacer(Modifier.height(8.dp))
                     Text("MP4 export", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     Text(
-                        "Clipp will render the selected source clips, trims, basic speed, rotation/flip, volume, and mute settings into a real MP4.",
+                        "Clipp will render the source timeline, trims, speed, crop, filters, basic visual layers, fades, and audio tracks into a real MP4.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -115,10 +116,10 @@ fun ExportSettingsScreen(
                             Icon(Icons.Filled.Info, contentDescription = null)
                             Spacer(Modifier.width(8.dp))
                             Text(
-                                if (hasUnsupportedEdits) {
-                                    "This project contains an edit that the current renderer cannot safely include yet, such as crop, filters, overlays, captions, transitions, or separate audio. Remove that edit before exporting."
+                                if (unsupportedReasons.isNotEmpty()) {
+                                    "This project still contains export-blocked items: ${unsupportedReasons.distinct().joinToString(", ")}. Remove them before exporting."
                                 } else {
-                                    "Advanced effects, text, captions, overlays, transitions, and separate audio layers are not included in this export yet."
+                                    "The current renderer includes static text, captions, stickers, drawings, frames, image overlays, crop, filters, blur, supported fades, and separate audio tracks."
                                 },
                                 style = MaterialTheme.typography.bodySmall
                             )
@@ -169,6 +170,7 @@ fun ExportSettingsScreen(
                         isExporting = true
                         activeExportHandle = exporter.export(
                             clips = clips,
+                            editorState = editorState,
                             onProgress = { progress = it },
                             onSuccess = { publishedUri, metadataValue ->
                                 isExporting = false
@@ -186,7 +188,7 @@ fun ExportSettingsScreen(
                         )
                     },
                     modifier = Modifier.fillMaxWidth().padding(16.dp).height(54.dp),
-                    enabled = !isExporting && clips.isNotEmpty() && !hasUnsupportedEdits
+                    enabled = !isExporting && clips.isNotEmpty() && unsupportedReasons.isEmpty()
                 ) {
                     Icon(Icons.Filled.Download, contentDescription = null)
                     Spacer(Modifier.width(8.dp))

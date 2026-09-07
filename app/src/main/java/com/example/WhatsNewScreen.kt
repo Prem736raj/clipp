@@ -23,8 +23,9 @@ val changelog = listOf(
         "September 2026",
         listOf(
             "Projects and media references stay local to the device.",
-            "MP4 export supports source clips, trims, basic speed, rotation/flip, volume, and mute.",
-            "Unsupported AI, template, batch-export, and subscription flows are clearly disabled."
+            "MP4 export now renders crop, filters, blur, static text, captions, stickers, drawings, frames, image overlays, supported fades, and separate audio tracks.",
+            "Music import and microphone voiceover recording are available in the editor.",
+            "Unsupported AI, cloud, template, batch-export, and subscription flows remain clearly disabled."
         )
     )
 )
