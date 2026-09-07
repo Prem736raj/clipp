@@ -30,8 +30,6 @@ class ExportInstrumentedTest {
         bitmap.recycle()
 
         val exporter = VideoExporter(context)
-        val completed = CountDownLatch(1)
-        val outcome = AtomicReference<Outcome>()
         val clip = MediaClip(
             sourceUri = Uri.fromFile(source).toString(),
             originalDurationMs = 1_000L,
@@ -41,10 +39,45 @@ class ExportInstrumentedTest {
             flipHorizontal = true
         )
 
+        var photoResult: Outcome? = null
+        var videoResult: Outcome? = null
+        try {
+            photoResult = awaitExport(exporter, listOf(clip), "Clipp_instrumented_photo.mp4")
+            assertSuccessful(photoResult!!)
+            assertPublishedMp4(context, photoResult!!)
+
+            val photoUri = photoResult!!.uri!!
+            val photoDurationMs = photoResult!!.metadata!!.durationMs
+            val videoClip = MediaClip(
+                sourceUri = photoUri.toString(),
+                originalDurationMs = photoDurationMs,
+                trimEndMs = photoDurationMs,
+                playbackSpeed = 1.5f,
+                rotation = -90f,
+                flipVertical = true
+            )
+            videoResult = awaitExport(exporter, listOf(videoClip), "Clipp_instrumented_video.mp4")
+            assertSuccessful(videoResult!!)
+            assertPublishedMp4(context, videoResult!!)
+        } finally {
+            photoResult?.uri?.let { context.contentResolver.delete(it, null, null) }
+            videoResult?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            source.delete()
+        }
+    }
+
+    private fun awaitExport(
+        exporter: VideoExporter,
+        clips: List<MediaClip>,
+        outputName: String
+    ): Outcome {
+        val completed = CountDownLatch(1)
+        val outcome = AtomicReference<Outcome>()
         InstrumentationRegistry.getInstrumentation().runOnMainSync {
             exporter.export(
-                clips = listOf(clip),
-                outputName = "Clipp_instrumented_photo.mp4",
+                clips = clips,
+                outputName = outputName,
                 onProgress = {},
                 onSuccess = { uri, metadata ->
                     outcome.set(Outcome(uri = uri, metadata = metadata))
@@ -56,35 +89,35 @@ class ExportInstrumentedTest {
                 }
             )
         }
+        assertTrue("Export did not complete", completed.await(60, TimeUnit.SECONDS))
+        return outcome.get() ?: error("Export completed without a result")
+    }
 
+    private fun assertSuccessful(result: Outcome) {
+        assertNull(result.error)
+        assertNotNull(result.uri)
+        assertTrue((result.metadata?.durationMs ?: 0L) > 0L)
+        assertTrue((result.metadata?.fileSizeBytes ?: 0L) > 0L)
+    }
+
+    private fun assertPublishedMp4(
+        context: android.content.Context,
+        result: Outcome
+    ) {
+        val publishedUri = result.uri!!
+        context.contentResolver.openAssetFileDescriptor(publishedUri, "r")?.use { descriptor ->
+            assertTrue(descriptor.length > 0L)
+        } ?: error("Published output cannot be opened")
+
+        val retriever = android.media.MediaMetadataRetriever()
         try {
-            assertTrue("Export did not complete", completed.await(60, TimeUnit.SECONDS))
-            val result = outcome.get()
-            assertNotNull(result)
-            assertNull(result?.error)
-            assertNotNull(result?.uri)
-            assertTrue((result?.metadata?.durationMs ?: 0L) > 0L)
-            assertTrue((result?.metadata?.fileSizeBytes ?: 0L) > 0L)
-
-            val publishedUri = result!!.uri!!
-            context.contentResolver.openAssetFileDescriptor(publishedUri, "r")?.use { descriptor ->
-                assertTrue(descriptor.length > 0L)
-            } ?: error("Published output cannot be opened")
-
-            val retriever = android.media.MediaMetadataRetriever()
-            try {
-                retriever.setDataSource(context, publishedUri)
-                val duration = retriever.extractMetadata(
-                    android.media.MediaMetadataRetriever.METADATA_KEY_DURATION
-                )?.toLongOrNull() ?: 0L
-                assertTrue(duration > 0L)
-            } finally {
-                retriever.release()
-            }
-            context.contentResolver.delete(publishedUri, null, null)
+            retriever.setDataSource(context, publishedUri)
+            val duration = retriever.extractMetadata(
+                android.media.MediaMetadataRetriever.METADATA_KEY_DURATION
+            )?.toLongOrNull() ?: 0L
+            assertTrue(duration > 0L)
         } finally {
-            exporter.close()
-            source.delete()
+            retriever.release()
         }
     }
 
