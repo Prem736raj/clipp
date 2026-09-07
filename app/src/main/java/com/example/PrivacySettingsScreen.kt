@@ -24,7 +24,6 @@ fun PrivacySettingsScreen(onClose: () -> Unit) {
     
     var analyticsEnabled by remember { mutableStateOf(prefs.getBoolean("analytics_enabled", true)) }
     var crashReportingEnabled by remember { mutableStateOf(prefs.getBoolean("crash_reporting_enabled", true)) }
-    var personalizedEnabled by remember { mutableStateOf(prefs.getBoolean("personalized_recommendations", true)) }
     
     var showPrivacyPolicy by remember { mutableStateOf(false) }
 
@@ -52,7 +51,7 @@ fun PrivacySettingsScreen(onClose: () -> Unit) {
                         Spacer(Modifier.width(16.dp))
                         Column {
                             Text("Your Content is Private", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSecondaryContainer)
-                            Text("Clipp DOES NOT track, analyze, or upload your video content. Your videos stay on your device unless you manually sync them to cloud storage.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                            Text("Clipp does not upload or analyze your video content. Media processing and project data stay on this device; cloud sync is not available.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
                         }
                     }
                 }
@@ -62,8 +61,8 @@ fun PrivacySettingsScreen(onClose: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
                 
                 SwitchSettingItem(
-                    title = "Anonymous Usage Analytics",
-                    subtitle = "Help us improve by sharing which features you use.",
+                    title = "Local Usage Statistics",
+                    subtitle = "Keep editing counts and feature usage on this device for the creator dashboard.",
                     checked = analyticsEnabled,
                     onCheckedChange = { 
                         analyticsEnabled = it
@@ -72,22 +71,12 @@ fun PrivacySettingsScreen(onClose: () -> Unit) {
                 )
                 
                 SwitchSettingItem(
-                    title = "Crash Reporting",
-                    subtitle = "Automatically send error logs if the app crashes.",
+                    title = "Local Crash Recovery",
+                    subtitle = "Keep the latest local crash message so you can recover or include it in a support report. Nothing is sent automatically.",
                     checked = crashReportingEnabled,
                     onCheckedChange = { 
                         crashReportingEnabled = it
                         prefs.edit().putBoolean("crash_reporting_enabled", it).apply()
-                    }
-                )
-                
-                SwitchSettingItem(
-                    title = "Personalized Recommendations",
-                    subtitle = "Show tutorials and tips based on your editing habits.",
-                    checked = personalizedEnabled,
-                    onCheckedChange = { 
-                        personalizedEnabled = it
-                        prefs.edit().putBoolean("personalized_recommendations", it).apply()
                     }
                 )
                 
@@ -132,15 +121,15 @@ fun PrivacyPolicyDialog(onDismiss: () -> Unit) {
         title = { Text("Privacy Policy") },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                Text("Last Updated: October 2026", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Last Updated: September 2026", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(8.dp))
                 Text("1. Your Media is Yours\nWe do not upload, analyze, or view your videos, photos, or audio. Processing happens locally on your device.", style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.height(8.dp))
-                Text("2. What We Collect\nIf you opt-in, we collect anonymous usage data (e.g., button taps) and crash logs to improve stability.", style = MaterialTheme.typography.bodyMedium)
+                Text("2. Local App Data\nOptional usage statistics and crash-recovery messages are stored in the app's private storage. Clipp does not transmit them automatically.", style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.height(8.dp))
-                Text("3. Third-Party Services\nWe use Google Play Billing for subscriptions. Their privacy policy applies to payment processing.", style = MaterialTheme.typography.bodyMedium)
+                Text("3. Third-Party Services\nCloud sync, accounts, AI services, and subscriptions are not active in this build.", style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.height(8.dp))
-                Text("4. Data Retention\nLocal drafts auto-delete after 90 days of inactivity. Analytics data is retained for 14 months.", style = MaterialTheme.typography.bodyMedium)
+                Text("4. Data Retention\nLocal projects and preferences remain until you delete them. Use My Data to export or delete local project data.", style = MaterialTheme.typography.bodyMedium)
             }
         },
         confirmButton = {

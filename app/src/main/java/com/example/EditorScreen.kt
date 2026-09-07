@@ -80,7 +80,6 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Animation
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Face
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material.icons.filled.Block
@@ -117,8 +116,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.googlefonts.GoogleFont
-import androidx.compose.ui.text.googlefonts.Font
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
@@ -230,22 +227,7 @@ fun AudioPlayerComponent(
     
     val actualUri = clip.sourceUri ?: clips.find { it.id == clip.sourceClipId }?.sourceUri
     
-    // Auto ducking state
-    val baseVolume = clip.keyframes.getValueAtTime("volume", currentPositionMs - clip.startTimeOnTimelineMs, clip.volume)
-    val relTime = currentPositionMs - clip.startTimeOnTimelineMs
-    var fadeMultiplier = 1f
-    
-    if (relTime < clip.audioEffects.fadeInMs) {
-        fadeMultiplier = if (clip.audioEffects.fadeInMs > 0) relTime.toFloat() / clip.audioEffects.fadeInMs else 1f
-    } else if (clip.durationMs - relTime < clip.audioEffects.fadeOutMs) {
-        fadeMultiplier = if (clip.audioEffects.fadeOutMs > 0) (clip.durationMs - relTime).toFloat() / clip.audioEffects.fadeOutMs else 1f
-    }
-    
-    val isSpeechLikely = clip.autoDucking && clips.any {
-        it.isMuted == false && !it.hasDetachedAudio &&
-        currentPositionMs >= it.trimStartMs && currentPositionMs <= it.trimEndMs
-    } && Math.sin(currentPositionMs / 2000.0) > 0.0
-    val targetVolume = if (isSpeechLikely) baseVolume * 0.3f else baseVolume * fadeMultiplier
+    val targetVolume = if (isMuted || clip.isMuted) 0f else clip.volume * masterVolume
     
     val smoothedVolume by androidx.compose.animation.core.animateFloatAsState(
         targetValue = targetVolume,
@@ -260,11 +242,6 @@ fun AudioPlayerComponent(
         }
     }
     
-    LaunchedEffect(clip.audioEffects.pitchSemitones) {
-        val pitch = Math.pow(2.0, clip.audioEffects.pitchSemitones / 12.0).toFloat()
-        exoPlayer.playbackParameters = androidx.media3.common.PlaybackParameters(1f, pitch)
-    }
-    
     LaunchedEffect(currentPositionMs, isPlaying, clip, isMuted, masterVolume, smoothedVolume) {
         if (actualUri == null) return@LaunchedEffect
         
@@ -277,7 +254,7 @@ fun AudioPlayerComponent(
                 clip.trimStartMs + relativeTimeMs
             }
             
-            exoPlayer.volume = if (isMuted || clip.isMuted) 0f else (smoothedVolume * masterVolume)
+            exoPlayer.volume = smoothedVolume
             
             if (Math.abs(exoPlayer.currentPosition - srcPos) > 100) {
                 exoPlayer.seekTo(srcPos)
@@ -306,27 +283,20 @@ fun VUMeter(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.Bottom
     ) {
-        // Use a continuous loop to re-trigger random heights while playing
-        var trigger by remember { mutableStateOf(false) }
-        LaunchedEffect(isPlaying, trigger) {
-            if (isPlaying) {
-                kotlinx.coroutines.delay(150)
-                trigger = !trigger
-            }
-        }
-        
         for (i in 0 until 5) {
-            val randVal = remember(trigger) { if (isPlaying && !isMuted) (Math.random().toFloat() * masterVolume).coerceIn(0.1f, 1f) else 0.1f }
+            val level = if (isMuted || !isPlaying) 0f else masterVolume.coerceIn(0f, 1f)
+            val isActive = level >= (i + 1) / 5f
             val h by androidx.compose.animation.core.animateFloatAsState(
-                targetValue = randVal,
-                animationSpec = if (isPlaying) androidx.compose.animation.core.tween(150, easing = androidx.compose.animation.core.LinearEasing) else androidx.compose.animation.core.tween(300)
+                targetValue = if (isActive) 1f else 0.18f,
+                animationSpec = androidx.compose.animation.core.tween(150),
+                label = "volume_level"
             )
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight(h)
                     .padding(horizontal = 1.dp)
-                    .background(if (h > 0.8f) Color.Red else if (h > 0.5f) Color.Yellow else MaterialTheme.colorScheme.primary)
+                    .background(if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
             )
         }
     }
@@ -344,86 +314,34 @@ fun AudioWaveform(
     modifier: Modifier = Modifier,
     color: Color = MaterialTheme.colorScheme.primary
 ) {
-    val waveform = remember(clipId) {
-        val rand = java.util.Random(clipId.hashCode().toLong())
-        FloatArray(100) { rand.nextFloat() * 0.8f + 0.2f }
-    }
-    
     Canvas(modifier = modifier) {
         val totalWidth = size.width
         val height = size.height
-        val rectWidth = 4.dp.toPx()
-        val spacing = 2.dp.toPx()
-        val step = rectWidth + spacing
-        val count = (totalWidth / step).toInt()
-        
-        if (count > 0 && durationMs > 0) {
-            val trimStartRatio = trimStartMs.toFloat() / durationMs
-            val trimEndRatio = trimEndMs.toFloat() / durationMs
-            
-            for (i in 0 until count) {
-                val progress = i.toFloat() / count
-                val globalProgress = trimStartRatio + progress * (trimEndRatio - trimStartRatio)
-                val waveIndex = (globalProgress * waveform.size).toInt().coerceIn(0, waveform.size - 1)
-                
-                val curTimeMs = trimStartMs + (progress * (trimEndMs - trimStartMs)).toLong()
-                val volRatio = keyframes.getValueAtTime("volume", curTimeMs, 1f)
-                
-                var fadeMult = 1f
-                val playingTime = curTimeMs - trimStartMs
-                if (playingTime < audioEffects.fadeInMs) {
-                    fadeMult = if (audioEffects.fadeInMs > 0) playingTime.toFloat() / audioEffects.fadeInMs else 1f
-                } else if ((trimEndMs - trimStartMs) - playingTime < audioEffects.fadeOutMs) {
-                    fadeMult = if (audioEffects.fadeOutMs > 0) ((trimEndMs - trimStartMs) - playingTime).toFloat() / audioEffects.fadeOutMs else 1f
-                }
-                
-                val amplitude = waveform[waveIndex] * volRatio * fadeMult
-                val h = height * amplitude.coerceIn(0f, 1f)
-                val y = (height - h) / 2
-                val x = i * step
-                
-                drawRect(
-                    color = color,
-                    topLeft = androidx.compose.ui.geometry.Offset(x, y),
-                    size = androidx.compose.ui.geometry.Size(rectWidth, h)
-                )
-            }
-            
-            // Draw fade indicators
-            if (audioEffects.fadeInMs > 0) {
-                val fadePx = audioEffects.fadeInMs * pixelsPerMs
-                drawRect(
-                    color = Color.White.copy(alpha = 0.3f),
-                    topLeft = androidx.compose.ui.geometry.Offset(0f, 0f),
-                    size = androidx.compose.ui.geometry.Size(fadePx, height)
-                )
-                drawLine(color = Color.White, start = androidx.compose.ui.geometry.Offset(0f, height), end = androidx.compose.ui.geometry.Offset(fadePx, 0f), strokeWidth = 2f)
-            }
-            if (audioEffects.fadeOutMs > 0) {
-                val totalPx = (trimEndMs - trimStartMs) * pixelsPerMs
-                val startPx = totalPx - (audioEffects.fadeOutMs * pixelsPerMs)
-                drawRect(
-                    color = Color.White.copy(alpha = 0.3f),
-                    topLeft = androidx.compose.ui.geometry.Offset(startPx, 0f),
-                    size = androidx.compose.ui.geometry.Size(audioEffects.fadeOutMs * pixelsPerMs, height)
-                )
-                drawLine(color = Color.White, start = androidx.compose.ui.geometry.Offset(startPx, 0f), end = androidx.compose.ui.geometry.Offset(totalPx, height), strokeWidth = 2f)
-            }
-            
-            // Draw Keyframe Points
-            val volKeys = keyframes["volume"]
-            if (volKeys != null) {
-                for (kf in volKeys) {
-                    if (kf.timeMs in trimStartMs..trimEndMs) {
-                        val kpx = (kf.timeMs - trimStartMs) * pixelsPerMs
-                        drawCircle(
-                            color = Color.Red,
-                            radius = 6.dp.toPx(),
-                            center = androidx.compose.ui.geometry.Offset(kpx, height * (1f - (kf.value / 2f).coerceIn(0f, 1f)))
-                        )
-                    }
-                }
-            }
+        if (durationMs <= 0L || totalWidth <= 0f) return@Canvas
+
+        // A measured waveform is not available yet. Keep a neutral reference line
+        // instead of presenting synthetic amplitudes as audio analysis.
+        drawLine(
+            color = color.copy(alpha = 0.55f),
+            start = androidx.compose.ui.geometry.Offset(0f, height / 2f),
+            end = androidx.compose.ui.geometry.Offset(totalWidth, height / 2f),
+            strokeWidth = 1.dp.toPx()
+        )
+
+        val totalTrimMs = (trimEndMs - trimStartMs).coerceAtLeast(0L)
+        val fadeInPx = (audioEffects.fadeInMs.coerceAtMost(totalTrimMs) * pixelsPerMs).coerceIn(0f, totalWidth)
+        val fadeOutPx = (audioEffects.fadeOutMs.coerceAtMost(totalTrimMs) * pixelsPerMs).coerceIn(0f, totalWidth)
+        if (fadeInPx > 0f) {
+            drawLine(color = color, start = androidx.compose.ui.geometry.Offset(0f, height), end = androidx.compose.ui.geometry.Offset(fadeInPx, 0f), strokeWidth = 2.dp.toPx())
+        }
+        if (fadeOutPx > 0f) {
+            val startPx = (totalWidth - fadeOutPx).coerceAtLeast(0f)
+            drawLine(color = color, start = androidx.compose.ui.geometry.Offset(startPx, 0f), end = androidx.compose.ui.geometry.Offset(totalWidth, height), strokeWidth = 2.dp.toPx())
+        }
+
+        keyframes["volume"]?.forEach { keyframe ->
+            val kpx = ((keyframe.timeMs - trimStartMs) * pixelsPerMs).coerceIn(0f, totalWidth)
+            drawCircle(color = Color.Red, radius = 4.dp.toPx(), center = androidx.compose.ui.geometry.Offset(kpx, height / 2f))
         }
     }
 }
@@ -490,22 +408,36 @@ data class MediaClip(
     val filterIntensity: Float = 1f,
     val adjustments: ColorAdjustments = ColorAdjustments(),
     val effects: List<AppliedEffect> = emptyList(),
-    val bgBlurSettings: BgBlurSettings = BgBlurSettings(),
-    val bgRemovalSettings: BgRemovalSettings = BgRemovalSettings(),
-    val enhanceSettings: AIEnhanceSettings = AIEnhanceSettings(),
-    val objectRemovalSettings: ObjectRemovalSettings = ObjectRemovalSettings(),
     val photoAnimationSettings: PhotoAnimationSettings = PhotoAnimationSettings(),
     val keyframes: Map<String, List<Keyframe>> = emptyMap(),
     val speedCurve: SpeedCurve? = null,
     val isMuted: Boolean = false,
-    val hasDetachedAudio: Boolean = false,
     val volume: Float = 1.0f,
     val audioEffects: AudioEffects = AudioEffects()
 ) {
-    val durationMs: Long get() = if (speedCurve != null) {
-        calculateDurationWithSpeedCurve((trimEndMs - trimStartMs), speedCurve)
-    } else {
-        ((trimEndMs - trimStartMs) / playbackSpeed).toLong()
+    val safeOriginalDurationMs: Long get() = originalDurationMs.coerceAtLeast(0L)
+    val effectiveTrimStartMs: Long
+        get() = trimStartMs.coerceIn(0L, safeOriginalDurationMs)
+    val effectiveTrimEndMs: Long
+        get() = trimEndMs.coerceIn(effectiveTrimStartMs, safeOriginalDurationMs)
+
+    fun normalized(): MediaClip = copy(
+        originalDurationMs = safeOriginalDurationMs,
+        trimStartMs = effectiveTrimStartMs,
+        trimEndMs = effectiveTrimEndMs,
+        playbackSpeed = playbackSpeed.coerceIn(0.1f, 10f),
+        volume = volume.coerceIn(0f, 1f)
+    )
+
+    val durationMs: Long get() {
+        val sourceDurationMs = effectiveTrimEndMs - effectiveTrimStartMs
+        if (sourceDurationMs == 0L) return 0L
+        val safeSpeed = playbackSpeed.coerceIn(0.1f, 10f)
+        return if (speedCurve != null) {
+            calculateDurationWithSpeedCurve(sourceDurationMs, speedCurve).coerceAtLeast(1L)
+        } else {
+            (sourceDurationMs / safeSpeed).toLong().coerceAtLeast(1L)
+        }
     }
 }
 
@@ -525,7 +457,7 @@ data class AudioClip(
     val autoDucking: Boolean = false,
     val audioEffects: AudioEffects = AudioEffects()
 ) {
-    val durationMs: Long get() = trimEndMs - trimStartMs
+    val durationMs: Long get() = (trimEndMs - trimStartMs).coerceAtLeast(0L)
 }
 
 enum class AspectRatioOption(val label: String, val ratio: Float, val subtitle: String) {
@@ -564,33 +496,20 @@ enum class OverlayBlendModeType {
 
 enum class TextAlignmentType { Left, Center, Right }
 
-val provider = GoogleFont.Provider(
-    providerAuthority = "com.google.android.gms.fonts",
-    providerPackage = "com.google.android.gms",
-    certificates = R.array.com_google_android_gms_fonts_certs
-)
+/**
+ * Fonts are deliberately local. Legacy saved names are mapped to the closest
+ * platform family so opening an old project never triggers a network request.
+ */
+val availableFonts = listOf("System Sans", "System Serif", "System Monospace")
 
-val availableFonts = listOf(
-    // Sans Serif
-    "Roboto", "Open Sans", "Lato", "Montserrat", "Oswald", "Source Sans Pro", "Slabo 27px", "Raleway", "PT Sans", "Poppins", "Nunito", "Ubuntu", "Rubik", "Mukta",
-    // Serif
-    "Merriweather", "Lora", "PT Serif", "Noto Serif", "Libre Baskerville", "Crimson Text", "Playfair Display", "Anton", "Cinzel", "Josefin Sans",
-    // Handwritten / Cursive
-    "Dancing Script", "Pacifico", "Shadows Into Light", "Caveat", "Indie Flower", "Amatic SC", "Satisfy", "Courgette", "Great Vibes", "Sacramento",
-    // Display
-    "Abril Fatface", "Righteous", "Bebas Neue", "Lobster", "Comfortaa", "Fredoka One", "Russo One", "Bangers", "Alfa Slab One", "Acme",
-    // Monospace
-    "Inconsolata", "Fira Code", "Space Mono", "IBM Plex Mono", "Source Code Pro", "Nanum Gothic Coding"
-)
-
-fun getFontFamily(fontName: String): FontFamily {
-    val font = GoogleFont(fontName)
-    return FontFamily(
-        Font(googleFont = font, fontProvider = provider),
-        Font(googleFont = font, fontProvider = provider, weight = FontWeight.Bold),
-        Font(googleFont = font, fontProvider = provider, style = FontStyle.Italic),
-        Font(googleFont = font, fontProvider = provider, weight = FontWeight.Bold, style = FontStyle.Italic)
-    )
+fun getFontFamily(fontName: String): FontFamily = when {
+    fontName.equals("System Serif", ignoreCase = true) ||
+        listOf("Merriweather", "Lora", "PT Serif", "Noto Serif", "Libre Baskerville", "Crimson Text", "Playfair Display", "Anton", "Cinzel")
+            .any { fontName.equals(it, ignoreCase = true) } -> FontFamily.Serif
+    fontName.equals("System Monospace", ignoreCase = true) ||
+        listOf("Inconsolata", "Fira Code", "Space Mono", "IBM Plex Mono", "Source Code Pro", "Nanum Gothic Coding")
+            .any { fontName.equals(it, ignoreCase = true) } -> FontFamily.Monospace
+    else -> FontFamily.SansSerif
 }
 
 enum class TextAnimIn { NONE, FADE_IN, SLIDE_IN_UP, SLIDE_IN_DOWN, SLIDE_IN_LEFT, SLIDE_IN_RIGHT, SCALE_IN, TYPEWRITER, BOUNCE_IN, BLUR_IN, ROTATE_IN, GLITCH_IN }
@@ -600,7 +519,7 @@ enum class TextAnimOut { NONE, FADE_OUT, SLIDE_OUT_UP, SLIDE_OUT_DOWN, SLIDE_OUT
 data class TextOverlay(
     val id: String = java.util.UUID.randomUUID().toString(),
     val text: String = "Text",
-    val fontName: String = "Roboto",
+    val fontName: String = "System Sans",
     val fontSize: Float = 48f,
     val textColor: Color = Color.White,
     val backgroundColor: Color = Color.Transparent,
@@ -873,13 +792,7 @@ fun removeTimeRangeFromClips(clips: List<MediaClip>, startGlobal: Long, endGloba
     return result
 }
 
-fun isImageUri(context: android.content.Context, uriString: String): Boolean {
-    val uri = android.net.Uri.parse(uriString)
-    val type = context.contentResolver.getType(uri)
-    if (type != null) return type.startsWith("image/")
-    val ext = uriString.substringAfterLast('.', "").lowercase()
-    return ext in listOf("jpg", "jpeg", "png", "webp", "gif", "heic")
-}
+private const val MAX_EDITOR_HISTORY_DEPTH = 50
 
 var globalClipboardItem: Any? by androidx.compose.runtime.mutableStateOf(null)
 
@@ -888,25 +801,18 @@ var globalClipboardItem: Any? by androidx.compose.runtime.mutableStateOf(null)
 fun EditorScreen(
     projectId: String,
     onBack: () -> Unit,
-    projectViewModel: ProjectViewModel = viewModel(),
-    billingManager: com.example.billing.BillingManager? = null
+    projectViewModel: ProjectViewModel = viewModel()
 ) {
-    val currentTier = billingManager?.currentTier?.collectAsState()?.value ?: com.example.billing.SubscriptionTier.FREE
-    var showPaywallScreen by remember { mutableStateOf(false) }
     var project by remember { mutableStateOf<ProjectEntity?>(null) }
     var showSavedIndicator by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val view = androidx.compose.ui.platform.LocalView.current
     val performanceMode = remember { com.example.viewmodel.PerformanceModeManager.getMode(context) }
-    var showRenderPreviewDialog by remember { mutableStateOf(false) }
-    var isRenderingPreview by remember { mutableStateOf(false) }
-    var previewRenderProgress by remember { mutableStateOf(0f) }
     val isBudgetMode = performanceMode == com.example.viewmodel.PerformanceMode.BETTER_PERFORMANCE
     
     DisposableEffect(Unit) {
         val entryTime = System.currentTimeMillis()
-        com.example.utils.AnalyticsManager.trackVideoCreated()
         com.example.utils.AnalyticsManager.startEditingSession()
         onDispose {
             com.example.utils.ReviewManager.lastSessionDurationMs = System.currentTimeMillis() - entryTime
@@ -932,37 +838,8 @@ fun EditorScreen(
     var texts by remember { mutableStateOf<List<TextOverlay>>(emptyList()) }
     var captions by remember { mutableStateOf<List<AutoCaptionSegment>>(emptyList()) }
     var captionSettings by remember { mutableStateOf(CaptionSettings()) }
-    var showCaptionsPanel by remember { mutableStateOf(false) }
-    var showAISmartPanel by remember { mutableStateOf(false) }
-    var showSmartReframePanel by remember { mutableStateOf(false) }
-    var showAIEnhancePanel by remember { mutableStateOf(false) }
-    var showAIObjectRemovePanel by remember { mutableStateOf(false) }
-    var showAIMusicPanel by remember { mutableStateOf(false) }
-    var showAITTSPanel by remember { mutableStateOf(false) }
-    var showPhotoAnimationPanel by remember { mutableStateOf(false) }
     var showExportPanel by remember { mutableStateOf(false) }
-    var isCachingThumbnails by remember { mutableStateOf(true) }
-    
-    LaunchedEffect(projectId) {
-        val prefs = context.getSharedPreferences("clipp_thumb_cache", Context.MODE_PRIVATE)
-        val hasCached = prefs.getBoolean("cached_$projectId", false)
-        if (hasCached) {
-            isCachingThumbnails = false
-            android.widget.Toast.makeText(context, "Loaded thumbnails from disk cache", android.widget.Toast.LENGTH_SHORT).show()
-        } else {
-            isCachingThumbnails = true
-            kotlinx.coroutines.delay(1500)
-            isCachingThumbnails = false
-            prefs.edit().putBoolean("cached_$projectId", true).apply()
-            android.widget.Toast.makeText(context, "Generated and cached thumbnails", android.widget.Toast.LENGTH_SHORT).show()
-        }
-    }
-    var showBatchExportPanel by remember { mutableStateOf(false) }
     var isScreenshotMode by remember { mutableStateOf(false) }
-    var showThumbnailGenerator by remember { mutableStateOf(false) }
-    var showSaveTemplateDialog by remember { mutableStateOf(false) }
-    var detectedScenes by remember { mutableStateOf<List<SceneMarker>>(emptyList()) }
-    var detectedSilences by remember { mutableStateOf<List<SilenceGap>>(emptyList()) }
     var stickers by remember { mutableStateOf<List<StickerOverlay>>(emptyList()) }
     var drawings by remember { mutableStateOf<List<DrawOverlay>>(emptyList()) }
     var frames by remember { mutableStateOf<List<FrameOverlay>>(emptyList()) }
@@ -990,7 +867,6 @@ fun EditorScreen(
     var showStickerToolbar by remember { mutableStateOf(false) }
     var showFramePicker by remember { mutableStateOf(false) }
     var showFrameToolbar by remember { mutableStateOf(false) }
-    var showAudioPanel by remember { mutableStateOf(false) }
     var showDrawToolbar by remember { mutableStateOf(false) }
     var isDrawingMode by remember { mutableStateOf(false) }
     var currentBrushType by remember { mutableStateOf(BrushType.PEN) }
@@ -1022,28 +898,29 @@ fun EditorScreen(
         }
     }
     
-    val maxTextTime = texts.maxOfOrNull { it.startTimeOnTimelineMs + it.durationMs } ?: 0L
-    val maxStickerTime = stickers.maxOfOrNull { it.startTimeOnTimelineMs + it.durationMs } ?: 0L
-    val maxDrawTime = drawings.maxOfOrNull { it.startTimeOnTimelineMs + it.durationMs } ?: 0L
-    val maxFrameTime = frames.maxOfOrNull { it.startTimeOnTimelineMs + it.durationMs } ?: 0L
-    val maxAudioTime = audioClips.maxOfOrNull { it.startTimeOnTimelineMs + it.durationMs } ?: 0L
-    val videoDurationMs = maxOf(clips.sumOf { it.durationMs }, maxOf(overlays.maxOfOrNull { it.startTimeOnTimelineMs + it.durationMs } ?: 0L, maxOf(maxTextTime, maxOf(maxStickerTime, maxOf(maxDrawTime, maxOf(maxFrameTime, maxAudioTime))))))
+    val timelineMapper = remember(clips) { TimelineMapper(clips) }
+    val videoDurationMs = timelineMapper.totalDurationMs
     var currentPositionMs by remember { mutableStateOf(0L) }
+
+    LaunchedEffect(videoDurationMs) {
+        currentPositionMs = currentPositionMs.coerceIn(0L, videoDurationMs)
+    }
     
     fun saveState(
         newClips: List<MediaClip> = clips,
         newCanvas: CanvasSettingsState = canvasSettings,
         description: String
     ) {
+        val normalizedClips = newClips.map { it.normalized() }
         val prevState = EditorState(clips, canvasSettings, overlays, texts, captions, captionSettings, stickers, drawings, frames, audioClips, layerOrder)
-        undoStack = undoStack + listOf(HistoryAction(prevState, description))
+        undoStack = (undoStack + HistoryAction(prevState, description)).takeLast(MAX_EDITOR_HISTORY_DEPTH)
         redoStack = emptyList()
-        clips = newClips
+        clips = normalizedClips
         canvasSettings = newCanvas
         
         // Save to DB
         project?.let { currentProject ->
-            val historyModel = EditorHistoryModel(undoStack, redoStack, EditorState(newClips, newCanvas, overlays, texts, captions, captionSettings, stickers, drawings, frames, audioClips, layerOrder))
+            val historyModel = EditorHistoryModel(undoStack, redoStack, EditorState(normalizedClips, newCanvas, overlays, texts, captions, captionSettings, stickers, drawings, frames, audioClips, layerOrder))
             val historyJson = try { editorHistoryMoshi.adapter(EditorHistoryModel::class.java).toJson(historyModel) } catch(e: Exception) { "" }
             val savedProject = currentProject.copy(
                 isDirty = true,
@@ -1060,7 +937,7 @@ fun EditorScreen(
         description: String
     ) {
         val prevState = EditorState(clips, canvasSettings, overlays, texts, captions, captionSettings, stickers, drawings, frames, audioClips, layerOrder)
-        undoStack = undoStack + listOf(HistoryAction(prevState, description))
+        undoStack = (undoStack + HistoryAction(prevState, description)).takeLast(MAX_EDITOR_HISTORY_DEPTH)
         redoStack = emptyList()
         overlays = newOverlays
         
@@ -1082,7 +959,7 @@ fun EditorScreen(
         description: String
     ) {
         val prevState = EditorState(clips, canvasSettings, overlays, texts, captions, captionSettings, stickers, drawings, frames, audioClips, layerOrder)
-        undoStack = undoStack + listOf(HistoryAction(prevState, description))
+        undoStack = (undoStack + HistoryAction(prevState, description)).takeLast(MAX_EDITOR_HISTORY_DEPTH)
         redoStack = emptyList()
         texts = newTexts
         
@@ -1114,22 +991,11 @@ fun EditorScreen(
     }
     
     fun seekToGlobal(globalMs: Long, player: ExoPlayer) {
-        if (clips.isEmpty()) return
-        var remaining = globalMs.coerceIn(0L, videoDurationMs)
-        var windowIndex = 0
-        for ((index, clip) in clips.withIndex()) {
-            if (remaining < clip.durationMs) {
-                windowIndex = index
-                break
-            } else if (index == clips.lastIndex) {
-                windowIndex = index
-                break
-            }
-            remaining -= clip.durationMs
+        val clampedGlobalMs = globalMs.coerceIn(0L, videoDurationMs)
+        currentPositionMs = clampedGlobalMs
+        timelineMapper.playerSeekPosition(clampedGlobalMs)?.let { seekPosition ->
+            player.seekTo(seekPosition.clipIndex, seekPosition.positionInClippedSourceMs)
         }
-        val clip = clips[windowIndex]
-        val localMs = (remaining * clip.playbackSpeed).toLong()
-        player.seekTo(windowIndex, localMs)
     }
 
     var isMuted by remember { mutableStateOf(false) }
@@ -1209,34 +1075,16 @@ fun EditorScreen(
             if (undoStack.isEmpty()) {
                 val initialClips = mutableListOf<MediaClip>()
                 for (path in paths) {
-                    val isPhoto = isImageUri(context, path)
-                    if (isPhoto) {
+                    val metadata = MediaMetadataReader.read(context, android.net.Uri.parse(path)) ?: continue
+                    val isPhoto = metadata.mimeType.startsWith("image/")
+                    val durationMs = if (isPhoto) PHOTO_DEFAULT_DURATION_MS else metadata.durationMs
+                    if (durationMs > 0L) {
                         initialClips.add(MediaClip(
                             sourceUri = path,
-                            originalDurationMs = 60000L, // 60s max for photos
-                            trimEndMs = 5000L,
-                            isPhoto = true
+                            originalDurationMs = durationMs,
+                            trimEndMs = durationMs,
+                            isPhoto = isPhoto
                         ))
-                    } else {
-                        val retriever = android.media.MediaMetadataRetriever()
-                        var dur = 0L
-                        try {
-                            retriever.setDataSource(context, android.net.Uri.parse(path))
-                            val timeStr = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
-                            dur = timeStr?.toLongOrNull() ?: 5000L
-                        } catch (e: Exception) {
-                            dur = 5000L
-                        } finally {
-                            try { retriever.release() } catch(e: Exception) {}
-                        }
-                        if (dur > 0) {
-                            initialClips.add(MediaClip(
-                                sourceUri = path,
-                                originalDurationMs = dur,
-                                trimEndMs = dur,
-                                isPhoto = false
-                            ))
-                        }
                     }
                 }
                 if (initialClips.isNotEmpty()) {
@@ -1246,18 +1094,20 @@ fun EditorScreen(
         }
     }
     
-    val exoPlaylistTokens = clips.map { "${it.id}|${it.sourceUri}|${it.trimStartMs}|${it.trimEndMs}" }.joinToString(",")
+    val exoPlaylistTokens = clips.map {
+        "${it.id}|${it.sourceUri}|${it.trimStartMs}|${it.trimEndMs}|${it.isPhoto}|${it.playbackSpeed}|${it.speedCurve}"
+    }.joinToString(",")
     LaunchedEffect(exoPlaylistTokens) {
         if (clips.isNotEmpty()) {
             val mediaItems = clips.map { clip ->
                 val builder = MediaItem.Builder().setUri(android.net.Uri.parse(clip.sourceUri))
                 if (clip.isPhoto) {
-                    builder.setImageDurationMs(clip.trimEndMs - clip.trimStartMs)
+                    builder.setImageDurationMs((clip.effectiveTrimEndMs - clip.effectiveTrimStartMs).coerceAtLeast(1L))
                 } else {
                     builder.setClippingConfiguration(
                         MediaItem.ClippingConfiguration.Builder()
-                            .setStartPositionMs(clip.trimStartMs)
-                            .setEndPositionMs(clip.trimEndMs)
+                            .setStartPositionMs(clip.effectiveTrimStartMs)
+                            .setEndPositionMs(clip.effectiveTrimEndMs.coerceAtLeast(clip.effectiveTrimStartMs + 1L))
                             .build()
                     )
                 }
@@ -1290,8 +1140,8 @@ fun EditorScreen(
                 try {
                     val historyModel = editorHistoryMoshi.adapter(EditorHistoryModel::class.java).fromJson(it.historyState)
                     if (historyModel != null) {
-                        undoStack = historyModel.undoStack
-                        redoStack = historyModel.redoStack
+                        undoStack = historyModel.undoStack.takeLast(MAX_EDITOR_HISTORY_DEPTH)
+                        redoStack = historyModel.redoStack.takeLast(MAX_EDITOR_HISTORY_DEPTH)
                         if (historyModel.currentState != null) {
                             clips = historyModel.currentState.clips
                             canvasSettings = historyModel.currentState.canvasSettings
@@ -1309,7 +1159,9 @@ fun EditorScreen(
                 } catch (e: Exception) { e.printStackTrace() }
             }
             
-            val updated = it.copy(isDirty = true, lastEdited = System.currentTimeMillis())
+            // Opening a project is not an edit. Keep the persisted dirty flag so
+            // recovery only represents an interrupted edit or an actual change.
+            val updated = it.copy(lastEdited = System.currentTimeMillis())
             projectViewModel.updateProject(updated)
             project = updated
         }
@@ -1364,17 +1216,10 @@ fun EditorScreen(
                         exoPlayer.playbackParameters = params
                     }
                     if (isPlaying) {
-                        var globalPos = 0L
-                        for (i in 0 until windowIndex) globalPos += clips[i].durationMs
-                        
-                        val localPlayTime = if (clip.speedCurve != null && clip.speedCurve.points.isNotEmpty()) {
-                            calculateDurationUpTo(exoPlayer.currentPosition, srcDur, clip.speedCurve)
-                        } else {
-                            (exoPlayer.currentPosition / clip.playbackSpeed).toLong()
-                        }
-                        
-                        globalPos += localPlayTime
-                        currentPositionMs = globalPos.coerceIn(0L, videoDurationMs)
+                        currentPositionMs = timelineMapper.globalPositionForPlayer(
+                            windowIndex,
+                            exoPlayer.currentPosition
+                        )
                     }
                 }
             } else if (isPlaying) {
@@ -1386,7 +1231,7 @@ fun EditorScreen(
                 val s = secs % 60
                 currentTime = String.format("%02d:%02d", m, s)
             }
-            delay(16)
+            delay(50)
         }
     }
     
@@ -1420,67 +1265,25 @@ fun EditorScreen(
         var isCurveMode by remember { mutableStateOf(false) }
         var showOverlayPanel by remember { mutableStateOf(false) }
         var showTransformPanel by remember { mutableStateOf(false) }
-        var showCanvasPanel by remember { mutableStateOf(false) }
         var showLayerPanel by remember { mutableStateOf(false) }
         var showFiltersPanel by remember { mutableStateOf(false) }
         var showAdjustPanel by remember { mutableStateOf(false) }
-        var showBgBlurPanel by remember { mutableStateOf(false) }
-        var showBgRemovalPanel by remember { mutableStateOf(false) }
-        var isPaintingMask by remember { mutableStateOf(false) }
         var showLutPanel by remember { mutableStateOf(false) }
         var showEffectsPanel by remember { mutableStateOf(false) }
         var showMediaPicker by remember { mutableStateOf(false) }
-        var showMusicPicker by remember { mutableStateOf(false) }
-        var showSoundEffectsPicker by remember { mutableStateOf(false) }
-        var isVoiceoverMode by remember { mutableStateOf(false) }
-        var showGifPicker by remember { mutableStateOf(false) }
         var isPickingOverlay by remember { mutableStateOf(false) }
         var showTransitionPickerForClipId by remember { mutableStateOf<String?>(null) }
-        var isProcessingAudio by remember { mutableStateOf(false) }
-        var audioProcessingText by remember { mutableStateOf("") }
         
         LaunchedEffect(projectId) {
             if (project != null) {
                 try {
                     val json = org.json.JSONObject(project!!.historyState)
                     if (json.has("zoom")) zoom = json.getDouble("zoom").toFloat()
-                    if (json.has("pos")) exoPlayer.seekTo(json.getLong("pos"))
-                    if (json.has("tool")) {
-                        activeTool = json.getString("tool")
-                        when (activeTool) {
-                            "Audio" -> showMusicPicker = true
-                            "AI Music" -> showAIMusicPanel = true
-                            "AI Voice" -> showAITTSPanel = true
-                            "Voiceover" -> isVoiceoverMode = true
-                            "Sound FX" -> showSoundEffectsPicker = true
-                            "Speed" -> showSpeedPanel = true
-                            "Transform" -> showTransformPanel = true
-                            "Photo Anim" -> showPhotoAnimationPanel = true
-                            "Overlay" -> {
-                                if (isBudgetMode && layerOrder.size >= 3) {
-                                    android.widget.Toast.makeText(context, "Budget Device Mode: Maximum 3 layers. Remove a layer to add a new one.", android.widget.Toast.LENGTH_SHORT).show()
-                                } else {
-                                    isPickingOverlay = true
-                                }
-                            }
-                            "Filters" -> showFiltersPanel = true
-                            "Adjust" -> showAdjustPanel = true
-                            "Bg Blur" -> showBgBlurPanel = true
-                            "Bg Remove" -> showBgRemovalPanel = true
-                            "LUT" -> showLutPanel = true
-                            "Effects" -> showEffectsPanel = true
-                            "Sticker" -> showStickerPicker = true
-                            "Frame" -> showFramePicker = true
-                            "Draw" -> { isDrawingMode = true; showDrawToolbar = true }
-                            "Text" -> showTextToolbar = true
-                            "Captions" -> showCaptionsPanel = true
-                            "AI Smart" -> showAISmartPanel = true
-                            "Reframe" -> showSmartReframePanel = true
-                            "Enhance" -> showAIEnhancePanel = true
-                            "Obj Remove" -> showAIObjectRemovePanel = true
-                            else -> {}
-                        }
-                    }
+                    if (json.has("pos")) currentPositionMs = json.getLong("pos").coerceAtLeast(0L)
+                    // Do not reopen editor panels from stale history. Unsupported
+                    // layers and effects are intentionally not exposed by the
+                    // current export-safe editor surface.
+                    activeTool = null
                 } catch (e: Exception) {}
             }
         }
@@ -1570,7 +1373,7 @@ fun EditorScreen(
                                 if (undoStack.isNotEmpty()) {
                                     val previousState = undoStack.last()
                                     // When we undo, we save current state to redo stack
-                                    redoStack = redoStack + listOf(HistoryAction(EditorState(clips, canvasSettings, overlays, texts, captions, captionSettings, stickers, drawings, frames, audioClips, layerOrder), "Redo " + previousState.description.replace("Undid ", "")))
+                                    redoStack = (redoStack + HistoryAction(EditorState(clips, canvasSettings, overlays, texts, captions, captionSettings, stickers, drawings, frames, audioClips, layerOrder), "Redo " + previousState.description.replace("Undid ", ""))).takeLast(MAX_EDITOR_HISTORY_DEPTH)
                                     undoStack = undoStack.dropLast(1)
                                     clips = previousState.state.clips
                                     canvasSettings = previousState.state.canvasSettings
@@ -1656,7 +1459,7 @@ fun EditorScreen(
                             onClick = { 
                                 if (redoStack.isNotEmpty()) {
                                     val nextState = redoStack.last()
-                                    undoStack = undoStack + listOf(HistoryAction(EditorState(clips, canvasSettings, overlays, texts, captions, captionSettings, stickers, drawings, frames, audioClips, layerOrder), "Undid " + nextState.description.replace("Redo ", "")))
+                                    undoStack = (undoStack + HistoryAction(EditorState(clips, canvasSettings, overlays, texts, captions, captionSettings, stickers, drawings, frames, audioClips, layerOrder), "Undid " + nextState.description.replace("Redo ", ""))).takeLast(MAX_EDITOR_HISTORY_DEPTH)
                                     redoStack = redoStack.dropLast(1)
                                     clips = nextState.state.clips
                                     canvasSettings = nextState.state.canvasSettings
@@ -1901,14 +1704,8 @@ fun EditorScreen(
                     }) {
                         Icon(Icons.Filled.Add, contentDescription = "Add Media")
                     }
-                    IconButton(onClick = { showCanvasPanel = true }) {
-                        Icon(Icons.Filled.AspectRatio, contentDescription = "Canvas")
-                    }
                     IconButton(onClick = { showLayerPanel = true }) {
                         Icon(Icons.Filled.Layers, contentDescription = "Layers")
-                    }
-                    IconButton(onClick = { showSaveTemplateDialog = true }) {
-                        Icon(Icons.Filled.Save, contentDescription = "Save as Template")
                     }
                     TextButton(onClick = saveDraft) {
                         Text("Save Draft", color = MaterialTheme.colorScheme.primary)
@@ -1930,29 +1727,6 @@ fun EditorScreen(
                             Icon(Icons.Filled.MoreVert, contentDescription = "More Options")
                         }
                         DropdownMenu(expanded = showMoreMenu, onDismissRequest = { showMoreMenu = false }) {
-                            if (performanceMode != com.example.viewmodel.PerformanceMode.BEST_QUALITY) {
-                                DropdownMenuItem(
-                                    text = { Text("Render Preview (Smooth Playback)") },
-                                    onClick = {
-                                        showMoreMenu = false
-                                        showRenderPreviewDialog = true
-                                    }
-                                )
-                            }
-                            DropdownMenuItem(
-                                text = { Text("Capture Frame") },
-                                onClick = {
-                                    showMoreMenu = false
-                                    android.widget.Toast.makeText(context, "Frame saved to Gallery as high-res PNG", android.widget.Toast.LENGTH_SHORT).show()
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Generate Thumbnail") },
-                                onClick = {
-                                    showMoreMenu = false
-                                    showThumbnailGenerator = true
-                                }
-                            )
                             DropdownMenuItem(
                                 text = { Text("Screenshot Mode") },
                                 onClick = {
@@ -1984,175 +1758,60 @@ fun EditorScreen(
                 ) {
                     val tools = mutableListOf(
                         "Split" to Icons.Filled.ContentCut,
-                        "Speed" to Icons.Filled.Timer,
-                        "Transform" to Icons.Filled.Crop,
-                        "Photo Anim" to Icons.Filled.Animation,
-                        "Overlay" to Icons.Filled.Layers,
-                        "Text" to Icons.Filled.TextFields,
-                        "Captions" to Icons.Filled.TextFields,
-                        "AI Smart" to Icons.Filled.Star,
-                        "Enhance" to Icons.Filled.Build,
-                        "Obj Remove" to Icons.Filled.AutoFixHigh,
-                        "Reframe" to Icons.Filled.Person,
-                        "Sticker" to Icons.Filled.EmojiEmotions,
-                        "Draw" to Icons.Filled.Brush,
-                        "Frame" to Icons.Filled.AspectRatio,
-                        "Audio" to Icons.Filled.Audiotrack,
-                        "AI Music" to Icons.Filled.LibraryMusic,
-                        "AI Voice" to Icons.Filled.RecordVoiceOver,
-                        "Voiceover" to Icons.Filled.Mic,
-                        "Sound FX" to Icons.Filled.QueueMusic,
-                        "Filters" to Icons.Filled.GraphicEq,
-                        "Adjust" to Icons.Filled.Tune,
-                        "Bg Blur" to Icons.Filled.Face,
-                        "Bg Remove" to Icons.Filled.ContentCut,
-                        "LUT" to Icons.Filled.Colorize,
-                        "Effects" to Icons.Filled.Star,
+                        "Mute" to Icons.Filled.VolumeOff,
                     )
-                    if (globalClipboardItem != null) {
-                        tools.add(0, "Paste" to Icons.Filled.ContentPaste)
-                    }
                     items(tools.size) { index ->
                         val toolName = tools[index].first
-                        val isProTool = toolName == "Bg Remove" || toolName == "Enhance" || toolName == "Obj Remove" || toolName == "Reframe" || toolName == "AI Smart"
-                        
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier.clickable { 
-                                val isProUser = currentTier != com.example.billing.SubscriptionTier.FREE
-                                if (isProTool && !isProUser) {
-                                    showPaywallScreen = true
-                                    return@clickable
-                                }
-                                
-                                activeTool = toolName
-                                if (toolName == "Paste") {
-                                    val item = globalClipboardItem
-                                    if (item is TextOverlay) {
-                                        val newItem = item.copy(id = java.util.UUID.randomUUID().toString(), startTimeOnTimelineMs = currentPositionMs)
-                                        texts = texts + newItem
-                                        layerOrder = layerOrder + newItem.id
-                                        saveState(clips, canvasSettings, "Paste Text")
-                                    } else if (item is StickerOverlay) {
-                                        val newItem = item.copy(id = java.util.UUID.randomUUID().toString(), startTimeOnTimelineMs = currentPositionMs)
-                                        stickers = stickers + newItem
-                                        layerOrder = layerOrder + newItem.id
-                                        saveState(clips, canvasSettings, "Paste Sticker")
-                                    } else if (item is OverlayClip) {
-                                        val newItem = item.copy(id = java.util.UUID.randomUUID().toString(), startTimeOnTimelineMs = currentPositionMs)
-                                        overlays = overlays + newItem
-                                        layerOrder = layerOrder + newItem.id
-                                        saveState(clips, canvasSettings, "Paste Overlay")
-                                    } else if (item is DrawOverlay) {
-                                        val newItem = item.copy(id = java.util.UUID.randomUUID().toString(), startTimeOnTimelineMs = currentPositionMs)
-                                        drawings = drawings + newItem
-                                        layerOrder = layerOrder + newItem.id
-                                        saveState(clips, canvasSettings, "Paste Drawing")
-                                    } else if (item is FrameOverlay) {
-                                        val newItem = item.copy(id = java.util.UUID.randomUUID().toString(), startTimeOnTimelineMs = currentPositionMs)
-                                        frames = frames + newItem
-                                        layerOrder = layerOrder + newItem.id
-                                        saveState(clips, canvasSettings, "Paste Frame")
-                                    }
-                                } else if (toolName == "Audio") {
-                                    if (selectedClipId != null || selectedAudioId != null) showAudioPanel = true
-                                    else showMusicPicker = true
-                                } else if (toolName == "AI Music") {
-                                    showAIMusicPanel = true
-                                } else if (toolName == "AI Voice") {
-                                    showAITTSPanel = true
-                                } else if (toolName == "Voiceover") {
-                                    isVoiceoverMode = true
-                                } else if (toolName == "Sound FX") {
-                                    showSoundEffectsPicker = true
-                                } else if (toolName == "Speed") {
-                                    if (selectedClipId != null) showSpeedPanel = true
-                                } else if (toolName == "Transform") {
-                                    if (selectedClipId != null) showTransformPanel = true
-                                } else if (toolName == "Photo Anim") {
-                                    if (selectedClipId != null) showPhotoAnimationPanel = true
-                                } else if (toolName == "Overlay") {
-                                    showOverlayPanel = true
-                                } else if (toolName == "Filters") {
-                                    if (selectedClipId != null) showFiltersPanel = true
-                                } else if (toolName == "Adjust") {
-                                    if (selectedClipId != null) showAdjustPanel = true
-                                } else if (toolName == "Bg Blur") {
-                                    if (selectedClipId != null) showBgBlurPanel = true
-                                } else if (toolName == "Bg Remove") {
-                                    if (selectedClipId != null) showBgRemovalPanel = true
-                                } else if (toolName == "LUT") {
-                                    if (selectedClipId != null) showLutPanel = true
-                                } else if (toolName == "Effects") {
-                                    if (selectedClipId != null) showEffectsPanel = true
-                                } else if (toolName == "Sticker") {
-                                    showStickerPicker = true
-                                } else if (toolName == "Frame") {
-                                    showFramePicker = true
-                                } else if (toolName == "Draw") {
-                                    // Enter drawing mode
-                                    isDrawingMode = true
-                                    showDrawToolbar = true
-                                    selectedClipId = null
-                                    selectedOverlayId = null
-                                    selectedTextId = null
-                                    selectedStickerId = null
-                                    selectedDrawId = null
-                                } else if (toolName == "Text") {
-                                    val newText = TextOverlay(
-                                        id = java.util.UUID.randomUUID().toString(),
-                                        text = "Double tap to edit",
-                                        startTimeOnTimelineMs = currentPositionMs,
-                                        durationMs = 5000L
-                                    )
-                                    val newTexts = texts.toMutableList()
-                                    newTexts.add(newText)
-                                    saveTextState(newTexts, "Add text")
-                                    selectedTextId = newText.id
-                                    editingTextId = newText.id
-                                    showTextToolbar = true
-                                } else if (toolName == "Captions") {
-                                    showCaptionsPanel = true
-                                } else if (toolName == "AI Smart") {
-                                    showAISmartPanel = true
-                                } else if (toolName == "Reframe") {
-                                    showSmartReframePanel = true
-                                } else if (toolName == "Enhance") {
-                                    showAIEnhancePanel = true
-                                } else if (toolName == "Obj Remove") {
-                                    showAIObjectRemovePanel = true
-                                } else if (toolName == "Split" && clips.isNotEmpty()) {
-                                    var globalAccum = 0L
-                                    for ((clipIndex, clip) in clips.withIndex()) {
-                                        // Allow splitting if the playhead is strictly inside the clip
-                                        if (currentPositionMs > globalAccum && currentPositionMs < globalAccum + clip.durationMs) {
-                                            val localSplitTimeMs = currentPositionMs - globalAccum + clip.trimStartMs
-                                            val clip1 = clip.copy(id = java.util.UUID.randomUUID().toString(), trimEndMs = localSplitTimeMs)
-                                            val clip2 = clip.copy(id = java.util.UUID.randomUUID().toString(), trimStartMs = localSplitTimeMs)
-                                            
+                                activeTool = null
+                                when (toolName) {
+                                    "Mute" -> {
+                                        val clipIndex = clips.indexOfFirst { it.id == selectedClipId }
+                                        if (clipIndex >= 0) {
+                                            val clip = clips[clipIndex]
                                             val newClips = clips.toMutableList()
-                                            newClips.removeAt(clipIndex)
-                                            newClips.add(clipIndex, clip1)
-                                            newClips.add(clipIndex + 1, clip2)
-                                            saveState(newClips, canvasSettings, "Split clip")
-                                            com.example.utils.HapticUtil.playSharpTap(view, context)
-                                            break
+                                            newClips[clipIndex] = clip.copy(isMuted = !clip.isMuted)
+                                            saveState(newClips, canvasSettings, if (clip.isMuted) "Unmute clip" else "Mute clip")
+                                        } else {
+                                            android.widget.Toast.makeText(context, "Select a video clip first.", android.widget.Toast.LENGTH_SHORT).show()
                                         }
-                                        globalAccum += clip.durationMs
+                                    }
+                                    "Split" -> if (clips.isNotEmpty()) {
+                                        val timelinePosition = timelineMapper.locate(currentPositionMs)
+                                        val clipIndex = timelinePosition?.clipIndex ?: -1
+                                        val clip = clips.getOrNull(clipIndex)
+                                        if (clip != null && timelinePosition != null &&
+                                            timelinePosition.timelineOffsetMs > 0L &&
+                                            timelinePosition.timelineOffsetMs < clip.durationMs
+                                        ) {
+                                            val sourceSplitTimeMs = timelinePosition.sourcePositionMs
+                                            if (sourceSplitTimeMs > clip.trimStartMs && sourceSplitTimeMs < clip.trimEndMs) {
+                                                val clip1 = clip.copy(
+                                                    id = java.util.UUID.randomUUID().toString(),
+                                                    trimEndMs = sourceSplitTimeMs,
+                                                    transitionNext = Transition()
+                                                )
+                                                val clip2 = clip.copy(
+                                                    id = java.util.UUID.randomUUID().toString(),
+                                                    trimStartMs = sourceSplitTimeMs
+                                                )
+
+                                                val newClips = clips.toMutableList()
+                                                newClips.removeAt(clipIndex)
+                                                newClips.add(clipIndex, clip1)
+                                                newClips.add(clipIndex + 1, clip2)
+                                                saveState(newClips, canvasSettings, "Split clip")
+                                                com.example.utils.HapticUtil.playSharpTap(view, context)
+                                            }
+                                        }
                                     }
                                 }
                             }
                         ) {
                             Box {
                                 Icon(tools[index].second, contentDescription = toolName, modifier = Modifier.padding(8.dp), tint = MaterialTheme.colorScheme.onSurface)
-                                if (isProTool) {
-                                    Icon(
-                                        Icons.Filled.Star, 
-                                        contentDescription = "Pro", 
-                                        modifier = Modifier.align(Alignment.TopEnd).size(12.dp).offset(x = 2.dp, y = 2.dp), 
-                                        tint = MaterialTheme.colorScheme.primary
-                                    )
-                                }
                             }
                             Text(text = toolName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
@@ -2167,9 +1826,6 @@ fun EditorScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            if (isCachingThumbnails) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().zIndex(100f), color = MaterialTheme.colorScheme.primary)
-            }
             Column(
                 modifier = Modifier.fillMaxSize()
             ) {
@@ -2248,24 +1904,13 @@ fun EditorScreen(
                             }
                         }
                         
-                        LaunchedEffect(isMuted, currentClipForTransform?.isMuted, currentClipForTransform?.volume, currentClipForTransform?.keyframes, canvasSettings.masterVolume, currentPositionMs, currentClipForTransform?.audioEffects) {
-                            val baseVol = currentClipForTransform?.keyframes?.getValueAtTime("volume", relativeTimeForClip, currentClipForTransform.volume ?: 1f) ?: 1f
-                            var fadeMultiplier = 1f
-                            if (currentClipForTransform != null) {
-                                val eff = currentClipForTransform.audioEffects
-                                if (relativeTimeForClip < eff.fadeInMs) {
-                                    fadeMultiplier = if (eff.fadeInMs > 0) relativeTimeForClip.toFloat() / eff.fadeInMs else 1f
-                                } else if (currentClipForTransform.durationMs - relativeTimeForClip < eff.fadeOutMs) {
-                                    fadeMultiplier = if (eff.fadeOutMs > 0) (currentClipForTransform.durationMs - relativeTimeForClip).toFloat() / eff.fadeOutMs else 1f
-                                }
+                        LaunchedEffect(isMuted, currentClipForTransform?.isMuted, currentClipForTransform?.volume, canvasSettings.masterVolume) {
+                            val clipVolume = currentClipForTransform?.volume ?: 1f
+                            exoPlayer.volume = if (isMuted || currentClipForTransform?.isMuted == true) {
+                                0f
+                            } else {
+                                (clipVolume * canvasSettings.masterVolume).coerceIn(0f, 1f)
                             }
-                            exoPlayer.volume = if (isMuted || currentClipForTransform?.isMuted == true) 0f else (baseVol * fadeMultiplier * canvasSettings.masterVolume)
-                        }
-                        
-                        LaunchedEffect(currentClipForTransform?.audioEffects?.pitchSemitones) {
-                            val pitchSemis = currentClipForTransform?.audioEffects?.pitchSemitones ?: 0f
-                            val pitch = Math.pow(2.0, pitchSemis / 12.0).toFloat()
-                            exoPlayer.playbackParameters = androidx.media3.common.PlaybackParameters(1f, pitch)
                         }
                         
                         val isPreviewingCrop = showTransformPanel && selectedClipId == currentClipForTransform?.id
@@ -2344,9 +1989,6 @@ fun EditorScreen(
                             finalColorMatrix = androidx.compose.ui.graphics.ColorMatrix().apply {
                                 timesAssign(filterColorMatrix)
                                 timesAssign(adjustMatrix)
-                                if (currentClipForTransform?.enhanceSettings?.autoEnhanceApplied == true) {
-                                    timesAssign(androidx.compose.ui.graphics.ColorMatrix().apply { setToScale(1.1f, 1.1f, 1.2f, 1f) })
-                                }
                             }
                         }
                         
@@ -2423,9 +2065,6 @@ fun EditorScreen(
                                 }
                                 .colorFilterOverlay(finalColorMatrix)
                                 .then(if (!isComparing && !skipHeavyEffects) Modifier.vignetteAndGrain(adjustments.vignette, adjustments.grain) else Modifier)
-                                .then(if (!isComparing && !skipHeavyEffects && currentClipForTransform != null) Modifier.applyBgRemoval(currentClipForTransform.bgRemovalSettings, isComparing, currentPositionMs) else Modifier)
-                                .then(if (!isComparing && !skipHeavyEffects && currentClipForTransform != null) Modifier.applyBgBlurSettings(currentClipForTransform.bgBlurSettings, currentPositionMs, currentClipForTransform.durationMs) else Modifier)
-                                .then(if (!isComparing && !skipHeavyEffects && currentClipForTransform != null) Modifier.applyObjectRemoval(currentClipForTransform.objectRemovalSettings) else Modifier)
                                 .applyAllVisualEffects(if (!isComparing && !skipHeavyEffects && currentClipForTransform != null) currentClipForTransform.effects else emptyList(), currentPositionMs, currentClipForTransform?.durationMs ?: 0L)
                                 .graphicsLayer {
                                     if (currentClipForTransform != null) {
@@ -2434,12 +2073,6 @@ fun EditorScreen(
                                         this.scaleY = animScaleY
                                         this.translationX = (animPosX - 0.5f) * this.size.width
                                         this.translationY = (animPosY - 0.5f) * this.size.height
-                                        
-                                        if (currentClipForTransform.enhanceSettings.stabilizationStrength > 0f) {
-                                            val stabScale = 1f + (currentClipForTransform.enhanceSettings.stabilizationStrength * 0.3f)
-                                            this.scaleX *= stabScale
-                                            this.scaleY *= stabScale
-                                        }
                                         
                                         if (activeTransitionType != null) {
                                             val tType = if (isBudgetMode) TransitionType.CROSSFADE else activeTransitionType
@@ -3433,96 +3066,6 @@ fun EditorScreen(
                             }
                         }
 
-                        // Mask Painting Overlay
-                        if (isPaintingMask && currentClipForTransform != null) {
-                            var currentPath by remember { mutableStateOf<List<NormalizedOffset>>(emptyList()) }
-                            var strokeWidth by remember { mutableFloatStateOf(0.05f) }
-                            var isEraseMode by remember { mutableStateOf(false) }
-
-                            Canvas(modifier = Modifier
-                                .fillMaxSize()
-                                .pointerInput(Unit) {
-                                    detectDragGestures(
-                                        onDragStart = { offset ->
-                                            currentPath = listOf(NormalizedOffset(offset.x / size.width, offset.y / size.height))
-                                        },
-                                        onDragEnd = {
-                                            if (currentPath.isNotEmpty()) {
-                                                val clipIndex = clips.indexOfFirst { it.id == currentClipForTransform.id }
-                                                if (clipIndex >= 0) {
-                                                    val newClips = clips.toMutableList()
-                                                    val clip = newClips[clipIndex]
-                                                    val newStrokes = clip.bgBlurSettings.manualStrokes.toMutableList()
-                                                    newStrokes.add(PaintedStroke(currentPath, isEraseMode, strokeWidth))
-                                                    newClips[clipIndex] = clip.copy(bgBlurSettings = clip.bgBlurSettings.copy(manualStrokes = newStrokes))
-                                                    clips = newClips
-                                                }
-                                            }
-                                            currentPath = emptyList()
-                                        },
-                                        onDragCancel = { currentPath = emptyList() },
-                                        onDrag = { change, dragAmount ->
-                                            change.consume()
-                                            currentPath = currentPath + NormalizedOffset(change.position.x / size.width, change.position.y / size.height)
-                                        }
-                                    )
-                                }
-                            ) {
-                                // Draw overlay hint
-                                drawRect(Color.Black.copy(alpha = 0.2f))
-
-                                // Draw drawing path
-                                if (currentPath.isNotEmpty()) {
-                                    val drawPath = androidx.compose.ui.graphics.Path()
-                                    drawPath.moveTo(currentPath[0].x * size.width, currentPath[0].y * size.height)
-                                    for (i in 1 until currentPath.size) {
-                                        drawPath.lineTo(currentPath[i].x * size.width, currentPath[i].y * size.height)
-                                    }
-                                    drawPath(
-                                        path = drawPath,
-                                        color = if (isEraseMode) Color.Red.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.8f),
-                                        style = androidx.compose.ui.graphics.drawscope.Stroke(
-                                            width = strokeWidth * size.width,
-                                            cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                                            join = androidx.compose.ui.graphics.StrokeJoin.Round
-                                        )
-                                    )
-                                }
-                            }
-                            
-                            // Paint tools overlay
-                            Row(
-                                modifier = Modifier
-                                    .align(Alignment.TopCenter)
-                                    .padding(8.dp)
-                                    .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(16.dp))
-                                    .padding(8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                FilterChip(selected = !isEraseMode, onClick = { isEraseMode = false }, label = { Text("Paint") })
-                                FilterChip(selected = isEraseMode, onClick = { isEraseMode = true }, label = { Text("Erase") })
-                                IconButton(onClick = {
-                                    val clipIndex = clips.indexOfFirst { it.id == currentClipForTransform.id }
-                                    if (clipIndex >= 0) {
-                                        val newClips = clips.toMutableList()
-                                        val clip = newClips[clipIndex]
-                                        val newStrokes = clip.bgBlurSettings.manualStrokes.toMutableList()
-                                        if (newStrokes.isNotEmpty()) {
-                                            newStrokes.removeLast()
-                                            newClips[clipIndex] = clip.copy(bgBlurSettings = clip.bgBlurSettings.copy(manualStrokes = newStrokes))
-                                            clips = newClips
-                                        }
-                                    }
-                                }) {
-                                    Icon(Icons.Filled.Undo, contentDescription = "Undo stroke", tint = Color.White)
-                                }
-                                IconButton(onClick = { isPaintingMask = false }) {
-                                    Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
-                                }
-                            }
-                        }
-                        
                         // Volume toggle
                         IconButton(
                             onClick = { isMuted = !isMuted },
@@ -3597,8 +3140,7 @@ fun EditorScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = {
-                        val newPos = exoPlayer.currentPosition - 15000
-                        exoPlayer.seekTo(if (newPos < 0) 0 else newPos)
+                        seekToGlobal(currentPositionMs - 15000L, exoPlayer)
                     }) {
                         Icon(Icons.Filled.Replay10, contentDescription = "Back", tint = MaterialTheme.colorScheme.onSurface)
                     }
@@ -3612,7 +3154,7 @@ fun EditorScreen(
                                 exoPlayer.pause()
                             } else {
                                 if (exoPlayer.playbackState == Player.STATE_ENDED) {
-                                    exoPlayer.seekTo(0)
+                                    seekToGlobal(0L, exoPlayer)
                                 }
                                 exoPlayer.play()
                             }
@@ -3636,8 +3178,7 @@ fun EditorScreen(
                     }
                     
                     IconButton(onClick = {
-                        val newPos = exoPlayer.currentPosition + 15000
-                        exoPlayer.seekTo(if (newPos > videoDurationMs) videoDurationMs else newPos)
+                        seekToGlobal(currentPositionMs + 15000L, exoPlayer)
                     }) {
                         Icon(Icons.Filled.Forward10, contentDescription = "Forward", tint = MaterialTheme.colorScheme.onSurface)
                     }
@@ -3686,7 +3227,7 @@ fun EditorScreen(
                                 val newScrollPx = currentScrollPx - pan.x
                                 val newTimeMs = ((newScrollPx / pixelsPerSecond) * 1000f).toLong()
                                 val coercedTime = newTimeMs.coerceIn(0L, videoDurationMs)
-                                exoPlayer.seekTo(coercedTime)
+                                seekToGlobal(coercedTime, exoPlayer)
                                 
                                 if (Math.abs(coercedTime - lastHapticTimeMs) > 200L) {
                                     com.example.utils.HapticUtil.playSubtleTick(view, context)
@@ -3700,7 +3241,7 @@ fun EditorScreen(
                                     val shiftPx = offset.x - (screenWidthPx / 2f)
                                     val newScrollPx = currentScrollPx + shiftPx
                                     val newTimeMs = ((newScrollPx / pixelsPerSecond) * 1000f).toLong()
-                                    exoPlayer.seekTo(newTimeMs.coerceIn(0L, videoDurationMs))
+                                    seekToGlobal(newTimeMs, exoPlayer)
                                 }
                             )
                         }
@@ -3803,7 +3344,7 @@ fun EditorScreen(
                                                             val newOverlays = overlays.toMutableList()
                                                             val idx = newOverlays.indexOfFirst { it.id == overlay.id }
                                                             if (idx != -1) {
-                                                                val oStart = (newOverlays[idx].startTimeOnTimelineMs + shiftMs).coerceIn(0L, videoDurationMs - newOverlays[idx].durationMs)
+                                                                val oStart = (newOverlays[idx].startTimeOnTimelineMs + shiftMs).coerceIn(0L, (videoDurationMs - newOverlays[idx].durationMs).coerceAtLeast(0L))
                                                                 newOverlays[idx] = newOverlays[idx].copy(startTimeOnTimelineMs = oStart)
                                                                 overlays = newOverlays
                                                                 accDrag = 0f
@@ -4088,7 +3629,7 @@ fun EditorScreen(
                                             }
                                         }
                                         
-                                        if (isSelected && !clip.hasDetachedAudio) {
+                                        if (isSelected && !clip.isPhoto) {
                                             AudioWaveform(
                                                 clipId = clip.id,
                                                 durationMs = clip.originalDurationMs,
@@ -4198,7 +3739,7 @@ fun EditorScreen(
                                                             },
                                                             onDragEnd = {
                                                                 val currentClip = clips.find { it.id == clip.id } ?: return@detectDragGestures
-                                                                val newStart = (initialTrimStart + dragTimeOffsetMs).coerceIn(0L, initialTrimEnd - 500L)
+                                                                val newStart = (initialTrimStart + dragTimeOffsetMs).coerceIn(0L, (initialTrimEnd - 500L).coerceAtLeast(0L))
                                                                 val newClips = clips.toMutableList()
                                                                 val idx = newClips.indexOfFirst { it.id == clip.id }
                                                                 if (idx != -1) {
@@ -4210,7 +3751,7 @@ fun EditorScreen(
                                                             onDrag = { change, dragAmount ->
                                                                 change.consume()
                                                                 dragTimeOffsetMs += ((dragAmount.x / pixelsPerSecond) * 1000f).toLong()
-                                                                val newStart = (initialTrimStart + dragTimeOffsetMs).coerceIn(0L, initialTrimEnd - 500L)
+                                                                val newStart = (initialTrimStart + dragTimeOffsetMs).coerceIn(0L, (initialTrimEnd - 500L).coerceAtLeast(0L))
                                                                 
                                                                 val tempClips = clips.toMutableList()
                                                                 val idx = tempClips.indexOfFirst { it.id == clip.id }
@@ -4251,7 +3792,7 @@ fun EditorScreen(
                                                             },
                                                             onDragEnd = {
                                                                 val currentClip = clips.find { it.id == clip.id } ?: return@detectDragGestures
-                                                                val newEnd = (initialTrimEnd + dragTimeOffsetMs).coerceIn(initialTrimStart + 500L, initialOriginalDuration)
+                                                                val newEnd = (initialTrimEnd + dragTimeOffsetMs).coerceIn((initialTrimStart + 500L).coerceAtMost(initialOriginalDuration), initialOriginalDuration.coerceAtLeast(0L))
                                                                 val newClips = clips.toMutableList()
                                                                 val idx = newClips.indexOfFirst { it.id == clip.id }
                                                                 if (idx != -1) {
@@ -4263,7 +3804,7 @@ fun EditorScreen(
                                                             onDrag = { change, dragAmount ->
                                                                 change.consume()
                                                                 dragTimeOffsetMs += ((dragAmount.x / pixelsPerSecond) * 1000f).toLong()
-                                                                val newEnd = (initialTrimEnd + dragTimeOffsetMs).coerceIn(initialTrimStart + 500L, initialOriginalDuration)
+                                                                val newEnd = (initialTrimEnd + dragTimeOffsetMs).coerceIn((initialTrimStart + 500L).coerceAtMost(initialOriginalDuration), initialOriginalDuration.coerceAtLeast(0L))
                                                                 
                                                                 val tempClips = clips.toMutableList()
                                                                 val idx = tempClips.indexOfFirst { it.id == clip.id }
@@ -4282,7 +3823,7 @@ fun EditorScreen(
                                             )
                                         }
                                         
-                                        // Transition Divider at end of clip
+                                        // Transition editing is withheld until the exporter can render it.
                                         if (clipIndex < clips.lastIndex) {
                                             Box(
                                                 modifier = Modifier
@@ -4292,8 +3833,7 @@ fun EditorScreen(
                                                     .offset(x = 12.dp)
                                                     .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(4.dp))
                                                     .border(1.dp, if (clip.transitionNext.type != TransitionType.NONE) MaterialTheme.colorScheme.primary else Color.White, RoundedCornerShape(4.dp))
-                                                    .zIndex(5f)
-                                                    .clickable { showTransitionPickerForClipId = clip.id },
+                                                    .zIndex(5f),
                                                 contentAlignment = Alignment.Center
                                             ) {
                                                 if (clip.transitionNext.type != TransitionType.NONE) {
@@ -4306,43 +3846,6 @@ fun EditorScreen(
                                     }
                                 }
                                 
-                                // AI Smart Markers Timeline Overlay
-                                if (showAISmartPanel && (detectedScenes.isNotEmpty() || detectedSilences.isNotEmpty())) {
-                                    detectedSilences.filter { it.isSelected }.forEach { silence ->
-                                        val silenceStartPx = (silence.startMs / 1000f) * pixelsPerSecond
-                                        val silenceEndPx = (silence.endMs / 1000f) * pixelsPerSecond
-                                        val silenceWidthPx = silenceEndPx - silenceStartPx
-                                        
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxHeight()
-                                                .offset { androidx.compose.ui.unit.IntOffset(silenceStartPx.toInt(), 0) }
-                                                .width(with(density) { silenceWidthPx.toDp() })
-                                                .background(Color.Red.copy(alpha = 0.5f))
-                                                .zIndex(20f)
-                                        )
-                                    }
-                                    
-                                    detectedScenes.filter { it.isSelected }.forEach { scene ->
-                                        val scenePx = (scene.timeMs / 1000f) * pixelsPerSecond
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxHeight()
-                                                .offset { androidx.compose.ui.unit.IntOffset(scenePx.toInt(), 0) }
-                                                .width(2.dp)
-                                                .background(Color.Yellow)
-                                                .zIndex(20f)
-                                        ) {
-                                            Icon(
-                                                Icons.Filled.ContentCut, 
-                                                contentDescription = "Cut", 
-                                                tint = Color.Yellow, 
-                                                modifier = Modifier.align(Alignment.TopCenter).offset(y = (-20).dp).size(24.dp)
-                                            )
-                                        }
-                                    }
-                                }
-
                                 // Render Add Media button at end of timeline
                                 val addMediaOffset = if (clips.isNotEmpty()) (targetXs.values.maxOrNull() ?: 0f) + (clipWidths[clips.last().id] ?: 0f) + with(density){16.dp.toPx()} else 0f
                                 val animatedAddMediaOffset by animateFloatAsState(targetValue = addMediaOffset, animationSpec = tween(200), label = "addMediaOffset")
@@ -4417,7 +3920,7 @@ fun EditorScreen(
                                                             val newAudios = audioClips.toMutableList()
                                                             val idx = newAudios.indexOfFirst { it.id == audioClip.id }
                                                             if (idx != -1) {
-                                                                val oStart = (newAudios[idx].startTimeOnTimelineMs + shiftMs).coerceIn(0L, videoDurationMs - newAudios[idx].durationMs)
+                                                                val oStart = (newAudios[idx].startTimeOnTimelineMs + shiftMs).coerceIn(0L, (videoDurationMs - newAudios[idx].durationMs).coerceAtLeast(0L))
                                                                 newAudios[idx] = newAudios[idx].copy(startTimeOnTimelineMs = oStart)
                                                                 audioClips = newAudios
                                                                 accDrag = 0f
@@ -4465,7 +3968,7 @@ fun EditorScreen(
                                                         val idx = newAudios.indexOfFirst { it.id == audioClip.id }
                                                         if (idx != -1) {
                                                             val c = newAudios[idx]
-                                                            val newTrimStart = (c.trimStartMs + shiftMs).coerceIn(0L, c.trimEndMs - 100)
+                                                            val newTrimStart = (c.trimStartMs + shiftMs).coerceIn(0L, (c.trimEndMs - 100L).coerceAtLeast(0L))
                                                             val startDiff = newTrimStart - c.trimStartMs
                                                             newAudios[idx] = c.copy(
                                                                 trimStartMs = newTrimStart,
@@ -4492,7 +3995,7 @@ fun EditorScreen(
                                                         val idx = newAudios.indexOfFirst { it.id == audioClip.id }
                                                         if (idx != -1) {
                                                             val c = newAudios[idx]
-                                                            val newTrimEnd = (c.trimEndMs + shiftMs).coerceIn(c.trimStartMs + 100, c.sourceDurationMs)
+                                                            val newTrimEnd = (c.trimEndMs + shiftMs).coerceIn((c.trimStartMs + 100L).coerceAtMost(c.sourceDurationMs), c.sourceDurationMs.coerceAtLeast(0L))
                                                             newAudios[idx] = c.copy(trimEndMs = newTrimEnd)
                                                             audioClips = newAudios
                                                             acc = 0f
@@ -4571,7 +4074,7 @@ fun EditorScreen(
                                                             val newTexts = texts.toMutableList()
                                                             val idx = newTexts.indexOfFirst { it.id == textOverlay.id }
                                                             if (idx != -1) {
-                                                                val tStart = (newTexts[idx].startTimeOnTimelineMs + shiftMs).coerceIn(0L, videoDurationMs - newTexts[idx].durationMs)
+                                                                val tStart = (newTexts[idx].startTimeOnTimelineMs + shiftMs).coerceIn(0L, (videoDurationMs - newTexts[idx].durationMs).coerceAtLeast(0L))
                                                                 newTexts[idx] = newTexts[idx].copy(startTimeOnTimelineMs = tStart)
                                                                 texts = newTexts
                                                                 accDrag = 0f
@@ -4714,7 +4217,7 @@ fun EditorScreen(
                                                             val newStickers = stickers.toMutableList()
                                                             val idx = newStickers.indexOfFirst { it.id == stickerOverlay.id }
                                                             if (idx != -1) {
-                                                                val tStart = (newStickers[idx].startTimeOnTimelineMs + shiftMs).coerceIn(0L, videoDurationMs - newStickers[idx].durationMs)
+                                                                val tStart = (newStickers[idx].startTimeOnTimelineMs + shiftMs).coerceIn(0L, (videoDurationMs - newStickers[idx].durationMs).coerceAtLeast(0L))
                                                                 newStickers[idx] = newStickers[idx].copy(startTimeOnTimelineMs = tStart)
                                                                 stickers = newStickers
                                                                 accDrag = 0f
@@ -4862,7 +4365,7 @@ fun EditorScreen(
                                                             val newDrawings = drawings.toMutableList()
                                                             val idx = newDrawings.indexOfFirst { it.id == drawOverlay.id }
                                                             if (idx != -1) {
-                                                                val tStart = (newDrawings[idx].startTimeOnTimelineMs + shiftMs).coerceIn(0L, videoDurationMs - newDrawings[idx].durationMs)
+                                                                val tStart = (newDrawings[idx].startTimeOnTimelineMs + shiftMs).coerceIn(0L, (videoDurationMs - newDrawings[idx].durationMs).coerceAtLeast(0L))
                                                                 newDrawings[idx] = newDrawings[idx].copy(startTimeOnTimelineMs = tStart)
                                                                 drawings = newDrawings
                                                                 accDrag = 0f
@@ -4997,7 +4500,7 @@ fun EditorScreen(
                                                             val newFrames = frames.toMutableList()
                                                             val idx = newFrames.indexOfFirst { it.id == frameOverlay.id }
                                                             if (idx != -1) {
-                                                                val tStart = (newFrames[idx].startTimeOnTimelineMs + shiftMs).coerceIn(0L, videoDurationMs - newFrames[idx].durationMs)
+                                                                val tStart = (newFrames[idx].startTimeOnTimelineMs + shiftMs).coerceIn(0L, (videoDurationMs - newFrames[idx].durationMs).coerceAtLeast(0L))
                                                                 newFrames[idx] = newFrames[idx].copy(startTimeOnTimelineMs = tStart)
                                                                 frames = newFrames
                                                                 accDrag = 0f
@@ -5138,656 +4641,6 @@ fun EditorScreen(
                 }
             }
         }
-        AnimatedVisibility(
-            visible = showAudioPanel && (selectedClipId != null || selectedAudioId != null),
-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
-        ) {
-            val clip = clips.find { it.id == selectedClipId }
-            val aClip = audioClips.find { it.id == selectedAudioId }
-            if (clip != null) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.fillMaxWidth().height(300.dp)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("Video Audio", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                            IconButton(onClick = { showAudioPanel = false }) { Icon(Icons.Filled.Close, "Close") }
-                        }
-                        
-                        Text("Volume & Keyframes", style = MaterialTheme.typography.labelMedium)
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                            Text("${(clip.volume * 100).toInt()}%", modifier = Modifier.width(40.dp))
-                            androidx.compose.material3.Slider(
-                                value = clip.volume,
-                                onValueChange = { vol -> 
-                                    val newClips = clips.toMutableList()
-                                    newClips[clips.indexOf(clip)] = clip.copy(volume = vol, isMuted = vol == 0f)
-                                    clips = newClips
-                                },
-                                onValueChangeFinished = { saveState(clips, canvasSettings, "Change video volume") },
-                                valueRange = 0f..2f,
-                                modifier = Modifier.weight(1f)
-                            )
-                            
-                            var accT = 0L
-                            for (c in clips) {
-                                if (c.id == clip.id) break
-                                accT += c.durationMs
-                            }
-                            val relTime = currentPositionMs - accT
-                            val hasKeyframe = clip.keyframes["volume"]?.any { Math.abs(it.timeMs - relTime) < 100 } == true
-                            IconButton(onClick = {
-                                val newClips = clips.toMutableList()
-                                val mkf = clip.keyframes.toMutableMap()
-                                val list = mkf["volume"]?.toMutableList() ?: mutableListOf()
-                                if (hasKeyframe) {
-                                    list.removeAll { Math.abs(it.timeMs - relTime) < 100 }
-                                } else {
-                                    list.add(Keyframe(timeMs = relTime, value = clip.volume))
-                                }
-                                mkf["volume"] = list.sortedBy { it.timeMs }
-                                newClips[clips.indexOf(clip)] = clip.copy(keyframes = mkf)
-                                saveState(newClips, canvasSettings, "Toggle volume keyframe")
-                            }) {
-                                Icon(Icons.Filled.Animation, "Keyframe Volume", tint = if (hasKeyframe) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
-                            }
-                        }
-
-                        Divider(modifier = Modifier.padding(vertical = 8.dp))
-                        Text("Audio Fades (Seconds)", style = MaterialTheme.typography.labelMedium)
-                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Fade In: ${clip.audioEffects.fadeInMs / 1000f}s")
-                                androidx.compose.material3.Slider(
-                                    value = clip.audioEffects.fadeInMs.toFloat(),
-                                    onValueChange = { ms -> 
-                                        val newClips = clips.toMutableList()
-                                        newClips[clips.indexOf(clip)] = clip.copy(audioEffects = clip.audioEffects.copy(fadeInMs = ms.toLong()))
-                                        clips = newClips
-                                    },
-                                    valueRange = 0f..5000f
-                                )
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Fade Out: ${clip.audioEffects.fadeOutMs / 1000f}s")
-                                androidx.compose.material3.Slider(
-                                    value = clip.audioEffects.fadeOutMs.toFloat(),
-                                    onValueChange = { ms -> 
-                                        val newClips = clips.toMutableList()
-                                        newClips[clips.indexOf(clip)] = clip.copy(audioEffects = clip.audioEffects.copy(fadeOutMs = ms.toLong()))
-                                        clips = newClips
-                                    },
-                                    valueRange = 0f..5000f
-                                )
-                            }
-                        }
-
-                        Divider(modifier = Modifier.padding(vertical = 8.dp))
-                        Text("Audio Effects", style = MaterialTheme.typography.labelMedium)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Pitch Shift (Semitones): ${clip.audioEffects.pitchSemitones.toInt()}", modifier = Modifier.weight(1f))
-                            androidx.compose.material3.Slider(
-                                value = clip.audioEffects.pitchSemitones,
-                                onValueChange = { pt -> 
-                                    val newClips = clips.toMutableList()
-                                    newClips[clips.indexOf(clip)] = clip.copy(audioEffects = clip.audioEffects.copy(pitchSemitones = Math.round(pt).toFloat()))
-                                    clips = newClips
-                                },
-                                valueRange = -12f..12f,
-                                steps = 24,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-
-                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("EQ Preset")
-                                var eqExpanded by remember { mutableStateOf(false) }
-                                Box {
-                                    OutlinedButton(onClick = { eqExpanded = true }) { Text(clip.audioEffects.eqPreset) }
-                                    DropdownMenu(expanded = eqExpanded, onDismissRequest = { eqExpanded = false }) {
-                                        listOf("Flat", "Bass Boost", "Treble Boost", "Vocal Enhance").forEach { p ->
-                                            DropdownMenuItem(text = { Text(p) }, onClick = {
-                                                val newClips = clips.toMutableList()
-                                                newClips[clips.indexOf(clip)] = clip.copy(audioEffects = clip.audioEffects.copy(eqPreset = p))
-                                                clips = newClips
-                                                eqExpanded = false
-                                            })
-                                        }
-                                    }
-                                }
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Reverb")
-                                var rbExpanded by remember { mutableStateOf(false) }
-                                Box {
-                                    OutlinedButton(onClick = { rbExpanded = true }) { Text(clip.audioEffects.reverbPreset) }
-                                    DropdownMenu(expanded = rbExpanded, onDismissRequest = { rbExpanded = false }) {
-                                        listOf("None", "Small Room", "Large Hall", "Cathedral").forEach { p ->
-                                            DropdownMenuItem(text = { Text(p) }, onClick = {
-                                                val newClips = clips.toMutableList()
-                                                newClips[clips.indexOf(clip)] = clip.copy(audioEffects = clip.audioEffects.copy(reverbPreset = p))
-                                                clips = newClips
-                                                rbExpanded = false
-                                            })
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        
-                        Divider(modifier = Modifier.padding(vertical = 8.dp))
-                        Text("Noise Reduction", style = MaterialTheme.typography.labelMedium)
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                            Text("${(clip.audioEffects.noiseReductionIntensity * 100).toInt()}%", modifier = Modifier.width(40.dp))
-                            androidx.compose.material3.Slider(
-                                value = clip.audioEffects.noiseReductionIntensity,
-                                onValueChange = { intensity -> 
-                                    val newClips = clips.toMutableList()
-                                    newClips[clips.indexOf(clip)] = clip.copy(audioEffects = clip.audioEffects.copy(noiseReductionIntensity = intensity))
-                                    clips = newClips
-                                },
-                                onValueChangeFinished = { saveState(clips, canvasSettings, "Change noise reduction") },
-                                valueRange = 0f..1f,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-
-                        var isComparing by remember { mutableStateOf(false) }
-                        Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilterChip(
-                                selected = clip.audioEffects.isWindNoiseReduction,
-                                onClick = {
-                                    val newClips = clips.toMutableList()
-                                    newClips[clips.indexOf(clip)] = clip.copy(audioEffects = clip.audioEffects.copy(isWindNoiseReduction = !clip.audioEffects.isWindNoiseReduction))
-                                    clips = newClips
-                                    saveState(newClips, canvasSettings, "Toggle wind noise reduction")
-                                },
-                                label = { Text("Wind Noise Mode") }
-                            )
-
-                            Button(
-                                onClick = { },
-                                modifier = Modifier.pointerInput(Unit) {
-                                    detectTapGestures(
-                                        onPress = {
-                                            isComparing = true
-                                            tryAwaitRelease()
-                                            isComparing = false
-                                        }
-                                    )
-                                }
-                            ) {
-                                Text(if (isComparing) "Original (Playing)" else "Hold to Compare")
-                            }
-                        }
-
-                        if (clip.audioEffects.noiseReductionIntensity > 0) {
-                            Box(modifier = Modifier.fillMaxWidth().height(60.dp).background(Color.DarkGray, RoundedCornerShape(8.dp)).padding(4.dp)) {
-                                val canvasColor = if (isComparing) Color(0xFFFF5252) else Color(0xFF00E676)
-                                androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-                                    val barWidth = 4.dp.toPx()
-                                    val space = 2.dp.toPx()
-                                    val barCount = (size.width / (barWidth + space)).toInt()
-                                    val intensityMod = if (isComparing) 1f else (1f - clip.audioEffects.noiseReductionIntensity * 0.7f)
-                                    for (i in 0 until barCount) {
-                                        val x = i * (barWidth + space)
-                                        val v = Math.abs(Math.sin((i * 0.2) + currentPositionMs * 0.01)).toFloat() * intensityMod
-                                        val h = v * size.height
-                                        drawRect(
-                                            color = canvasColor,
-                                            topLeft = androidx.compose.ui.geometry.Offset(x, (size.height - h) / 2),
-                                            size = androidx.compose.ui.geometry.Size(barWidth, h)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        Divider(modifier = Modifier.padding(vertical = 8.dp))
-                        VoiceChangerPanel(clip.audioEffects) { newEffects ->
-                            val newClips = clips.toMutableList()
-                            newClips[clips.indexOf(clip)] = clip.copy(audioEffects = newEffects)
-                            clips = newClips
-                            saveState(newClips, canvasSettings, "Change voice effect")
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = {
-                                val newClips = clips.toMutableList()
-                                newClips[clips.indexOf(clip)] = clip.copy(isMuted = !clip.isMuted)
-                                saveState(newClips, canvasSettings, "Toggle mute")
-                            }) {
-                                Text(if (clip.isMuted) "Unmute" else "Mute")
-                            }
-                            
-                            if (!clip.hasDetachedAudio) {
-                                Button(onClick = {
-                                    var accT = 0L
-                                    for (c in clips) {
-                                        if (c.id == clip.id) break
-                                        accT += c.durationMs
-                                    }
-                                    val newAudio = AudioClip(
-                                        sourceClipId = clip.id,
-                                        startTimeOnTimelineMs = accT,
-                                        sourceDurationMs = clip.originalDurationMs,
-                                        trimStartMs = clip.trimStartMs,
-                                        trimEndMs = clip.trimEndMs,
-                                        volume = clip.volume,
-                                        isMuted = clip.isMuted
-                                    )
-                                    val newClips = clips.toMutableList()
-                                    newClips[clips.indexOf(clip)] = clip.copy(hasDetachedAudio = true, isMuted = true)
-                                    audioClips = audioClips + newAudio
-                                    saveState(newClips, canvasSettings, "Detach Audio")
-                                    showAudioPanel = false
-                                }) {
-                                    Text("Detach Audio")
-                                }
-                                
-                                Button(onClick = {
-                                    isProcessingAudio = true
-                                    audioProcessingText = "Reducing noise with on-device ML..."
-                                    scope.launch {
-                                        kotlinx.coroutines.delay(2000)
-                                        val newClips = clips.toMutableList()
-                                        newClips[clips.indexOf(clip)] = clip.copy(audioEffects = clip.audioEffects.copy(noiseReductionIntensity = 0.5f))
-                                        clips = newClips
-                                        isProcessingAudio = false
-                                        saveState(newClips, canvasSettings, "Reduce Noise")
-                                    }
-                                }) {
-                                    Text("Reduce Noise")
-                                }
-
-                                Button(onClick = {
-                                    isProcessingAudio = true
-                                    audioProcessingText = "Saving audio to device..."
-                                    scope.launch {
-                                        kotlinx.coroutines.delay(1500)
-                                        isProcessingAudio = false
-                                        android.widget.Toast.makeText(context, "Audio extracted and saved to device (simulated).", android.widget.Toast.LENGTH_LONG).show()
-                                    }
-                                }) {
-                                    Text("Extract Audio")
-                                }
-                                
-                                Button(onClick = {
-                                    isProcessingAudio = true
-                                    audioProcessingText = "Separating vocals using on-device ML..."
-                                    scope.launch {
-                                        kotlinx.coroutines.delay(3000)
-                                        var accT = 0L
-                                        for (c in clips) {
-                                            if (c.id == clip.id) break
-                                            accT += c.durationMs
-                                        }
-                                        val vocals = AudioClip(
-                                            sourceClipId = clip.id,
-                                            displayName = "Vocals",
-                                            startTimeOnTimelineMs = accT,
-                                            sourceDurationMs = clip.originalDurationMs,
-                                            trimStartMs = clip.trimStartMs,
-                                            trimEndMs = clip.trimEndMs,
-                                            audioEffects = AudioEffects(eqPreset = "Vocal Enhance")
-                                        )
-                                        val instr = AudioClip(
-                                            sourceClipId = clip.id,
-                                            displayName = "Instrumental",
-                                            startTimeOnTimelineMs = accT,
-                                            sourceDurationMs = clip.originalDurationMs,
-                                            trimStartMs = clip.trimStartMs,
-                                            trimEndMs = clip.trimEndMs,
-                                            audioEffects = AudioEffects(eqPreset = "Bass Boost")
-                                        )
-                                        val newClips = clips.toMutableList()
-                                        newClips[clips.indexOf(clip)] = clip.copy(hasDetachedAudio = true, isMuted = true)
-                                        clips = newClips
-                                        audioClips = audioClips + listOf(vocals, instr)
-                                        isProcessingAudio = false
-                                        showAudioPanel = false
-                                        persistHistory()
-                                    }
-                                }) {
-                                    Text("Separate Vocals")
-                                }
-                            }
-                        }
-                    }
-                }
-            } else if (aClip != null) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.fillMaxWidth().height(300.dp)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("Music / Audio Clip", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                            IconButton(onClick = { showAudioPanel = false }) { Icon(Icons.Filled.Close, "Close") }
-                        }
-                        
-                        Text("Volume & Keyframes", style = MaterialTheme.typography.labelMedium)
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                            Text("${(aClip.volume * 100).toInt()}%", modifier = Modifier.width(40.dp))
-                            androidx.compose.material3.Slider(
-                                value = aClip.volume,
-                                onValueChange = { vol -> 
-                                    val newClips = audioClips.toMutableList()
-                                    newClips[audioClips.indexOf(aClip)] = aClip.copy(volume = vol, isMuted = vol == 0f)
-                                    audioClips = newClips
-                                },
-                                onValueChangeFinished = { persistHistory() },
-                                valueRange = 0f..2f,
-                                modifier = Modifier.weight(1f)
-                            )
-                            
-                            val relTime = currentPositionMs - aClip.startTimeOnTimelineMs
-                            val hasKeyframe = aClip.keyframes["volume"]?.any { Math.abs(it.timeMs - relTime) < 100 } == true
-                            IconButton(onClick = {
-                                val mkf = aClip.keyframes.toMutableMap()
-                                val list = mkf["volume"]?.toMutableList() ?: mutableListOf()
-                                if (hasKeyframe) {
-                                    list.removeAll { Math.abs(it.timeMs - relTime) < 100 }
-                                } else {
-                                    list.add(Keyframe(timeMs = relTime, value = aClip.volume))
-                                }
-                                mkf["volume"] = list.sortedBy { it.timeMs }
-                                val newClips = audioClips.toMutableList()
-                                newClips[audioClips.indexOf(aClip)] = aClip.copy(keyframes = mkf)
-                                audioClips = newClips
-                                persistHistory()
-                            }) {
-                                Icon(Icons.Filled.Animation, "Keyframe Volume", tint = if (hasKeyframe) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
-                            }
-                        }
-
-                        Divider(modifier = Modifier.padding(vertical = 8.dp))
-                        Text("Audio Fades (Seconds)", style = MaterialTheme.typography.labelMedium)
-                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Fade In: ${aClip.audioEffects.fadeInMs / 1000f}s")
-                                androidx.compose.material3.Slider(
-                                    value = aClip.audioEffects.fadeInMs.toFloat(),
-                                    onValueChange = { ms -> 
-                                        val newClips = audioClips.toMutableList()
-                                        newClips[audioClips.indexOf(aClip)] = aClip.copy(audioEffects = aClip.audioEffects.copy(fadeInMs = ms.toLong()))
-                                        audioClips = newClips
-                                    },
-                                    valueRange = 0f..5000f
-                                )
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Fade Out: ${aClip.audioEffects.fadeOutMs / 1000f}s")
-                                androidx.compose.material3.Slider(
-                                    value = aClip.audioEffects.fadeOutMs.toFloat(),
-                                    onValueChange = { ms -> 
-                                        val newClips = audioClips.toMutableList()
-                                        newClips[audioClips.indexOf(aClip)] = aClip.copy(audioEffects = aClip.audioEffects.copy(fadeOutMs = ms.toLong()))
-                                        audioClips = newClips
-                                    },
-                                    valueRange = 0f..5000f
-                                )
-                            }
-                        }
-
-                        Divider(modifier = Modifier.padding(vertical = 8.dp))
-                        Text("Audio Effects", style = MaterialTheme.typography.labelMedium)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Pitch Shift (Semitones): ${aClip.audioEffects.pitchSemitones.toInt()}", modifier = Modifier.weight(1f))
-                            androidx.compose.material3.Slider(
-                                value = aClip.audioEffects.pitchSemitones,
-                                onValueChange = { pt -> 
-                                    val newClips = audioClips.toMutableList()
-                                    newClips[audioClips.indexOf(aClip)] = aClip.copy(audioEffects = aClip.audioEffects.copy(pitchSemitones = Math.round(pt).toFloat()))
-                                    audioClips = newClips
-                                },
-                                valueRange = -12f..12f,
-                                steps = 24,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-
-                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("EQ Preset")
-                                var eqExpanded by remember { mutableStateOf(false) }
-                                Box {
-                                    OutlinedButton(onClick = { eqExpanded = true }) { Text(aClip.audioEffects.eqPreset) }
-                                    DropdownMenu(expanded = eqExpanded, onDismissRequest = { eqExpanded = false }) {
-                                        listOf("Flat", "Bass Boost", "Treble Boost", "Vocal Enhance").forEach { p ->
-                                            DropdownMenuItem(text = { Text(p) }, onClick = {
-                                                val newClips = audioClips.toMutableList()
-                                                newClips[audioClips.indexOf(aClip)] = aClip.copy(audioEffects = aClip.audioEffects.copy(eqPreset = p))
-                                                audioClips = newClips
-                                                eqExpanded = false
-                                            })
-                                        }
-                                    }
-                                }
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Reverb")
-                                var rbExpanded by remember { mutableStateOf(false) }
-                                Box {
-                                    OutlinedButton(onClick = { rbExpanded = true }) { Text(aClip.audioEffects.reverbPreset) }
-                                    DropdownMenu(expanded = rbExpanded, onDismissRequest = { rbExpanded = false }) {
-                                        listOf("None", "Small Room", "Large Hall", "Cathedral").forEach { p ->
-                                            DropdownMenuItem(text = { Text(p) }, onClick = {
-                                                val newClips = audioClips.toMutableList()
-                                                newClips[audioClips.indexOf(aClip)] = aClip.copy(audioEffects = aClip.audioEffects.copy(reverbPreset = p))
-                                                audioClips = newClips
-                                                rbExpanded = false
-                                            })
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        Divider(modifier = Modifier.padding(vertical = 8.dp))
-                        Text("Noise Reduction", style = MaterialTheme.typography.labelMedium)
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                            Text("${(aClip.audioEffects.noiseReductionIntensity * 100).toInt()}%", modifier = Modifier.width(40.dp))
-                            androidx.compose.material3.Slider(
-                                value = aClip.audioEffects.noiseReductionIntensity,
-                                onValueChange = { intensity -> 
-                                    val newClips = audioClips.toMutableList()
-                                    newClips[audioClips.indexOf(aClip)] = aClip.copy(audioEffects = aClip.audioEffects.copy(noiseReductionIntensity = intensity))
-                                    audioClips = newClips
-                                },
-                                onValueChangeFinished = { persistHistory() },
-                                valueRange = 0f..1f,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-
-                        var isComparing by remember { mutableStateOf(false) }
-                        Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilterChip(
-                                selected = aClip.audioEffects.isWindNoiseReduction,
-                                onClick = {
-                                    val newClips = audioClips.toMutableList()
-                                    newClips[audioClips.indexOf(aClip)] = aClip.copy(audioEffects = aClip.audioEffects.copy(isWindNoiseReduction = !aClip.audioEffects.isWindNoiseReduction))
-                                    audioClips = newClips
-                                    persistHistory()
-                                },
-                                label = { Text("Wind Noise Mode") }
-                            )
-
-                            Button(
-                                onClick = { },
-                                modifier = Modifier.pointerInput(Unit) {
-                                    detectTapGestures(
-                                        onPress = {
-                                            isComparing = true
-                                            tryAwaitRelease()
-                                            isComparing = false
-                                        }
-                                    )
-                                }
-                            ) {
-                                Text(if (isComparing) "Original (Playing)" else "Hold to Compare")
-                            }
-                        }
-
-                        if (aClip.audioEffects.noiseReductionIntensity > 0) {
-                            Box(modifier = Modifier.fillMaxWidth().height(60.dp).background(Color.DarkGray, RoundedCornerShape(8.dp)).padding(4.dp)) {
-                                val canvasColor = if (isComparing) Color(0xFFFF5252) else Color(0xFF00E676)
-                                androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-                                    val barWidth = 4.dp.toPx()
-                                    val space = 2.dp.toPx()
-                                    val barCount = (size.width / (barWidth + space)).toInt()
-                                    val intensityMod = if (isComparing) 1f else (1f - aClip.audioEffects.noiseReductionIntensity * 0.7f)
-                                    for (i in 0 until barCount) {
-                                        val x = i * (barWidth + space)
-                                        val v = Math.abs(Math.sin((i * 0.2) + currentPositionMs * 0.01)).toFloat() * intensityMod
-                                        val h = v * size.height
-                                        drawRect(
-                                            color = canvasColor,
-                                            topLeft = androidx.compose.ui.geometry.Offset(x, (size.height - h) / 2),
-                                            size = androidx.compose.ui.geometry.Size(barWidth, h)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                        
-                        Divider(modifier = Modifier.padding(vertical = 8.dp))
-                        VoiceChangerPanel(aClip.audioEffects) { newEffects ->
-                            val newClips = audioClips.toMutableList()
-                            newClips[audioClips.indexOf(aClip)] = aClip.copy(audioEffects = newEffects)
-                            audioClips = newClips
-                            persistHistory()
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            // Auto Ducking Feature
-                            FilterChip(
-                                selected = aClip.autoDucking,
-                                onClick = {
-                                    val newClips = audioClips.toMutableList()
-                                    newClips[audioClips.indexOf(aClip)] = aClip.copy(autoDucking = !aClip.autoDucking)
-                                    audioClips = newClips
-                                    persistHistory()
-                                },
-                                label = { Text("Auto Ducking") }
-                            )
-                            
-                            Button(onClick = {
-                                val newClips = audioClips.toMutableList()
-                                newClips[audioClips.indexOf(aClip)] = aClip.copy(isMuted = !aClip.isMuted)
-                                audioClips = newClips
-                                persistHistory()
-                            }) {
-                                Text(if (aClip.isMuted) "Unmute" else "Mute")
-                            }
-                            Button(onClick = {
-                                val newClips = audioClips.toMutableList()
-                                newClips[audioClips.indexOf(aClip)] = aClip.copy(isLooped = !aClip.isLooped)
-                                audioClips = newClips
-                                persistHistory()
-                            }) {
-                                val loopText = if (aClip.isLooped) "Disable Loop" else "Loop"
-                                Text(loopText)
-                            }
-                            
-                            Button(onClick = {
-                                isProcessingAudio = true
-                                audioProcessingText = "Reducing noise with on-device ML..."
-                                scope.launch {
-                                    kotlinx.coroutines.delay(2000) // Simulate processing time
-                                    val newClips = audioClips.toMutableList()
-                                    newClips[audioClips.indexOf(aClip)] = aClip.copy(audioEffects = aClip.audioEffects.copy(noiseReductionIntensity = 0.5f))
-                                    audioClips = newClips
-                                    isProcessingAudio = false
-                                    persistHistory()
-                                }
-                            }) {
-                                Text("Reduce Noise")
-                            }
-                            
-                            Button(onClick = {
-                                isProcessingAudio = true
-                                audioProcessingText = "Separating vocals using on-device ML..."
-                                scope.launch {
-                                    kotlinx.coroutines.delay(3000)
-                                    val vocals = AudioClip(
-                                        sourceClipId = aClip.sourceClipId,
-                                        sourceUri = aClip.sourceUri,
-                                        displayName = "Vocals",
-                                        startTimeOnTimelineMs = aClip.startTimeOnTimelineMs,
-                                        sourceDurationMs = aClip.sourceDurationMs,
-                                        trimStartMs = aClip.trimStartMs,
-                                        trimEndMs = aClip.trimEndMs,
-                                        audioEffects = AudioEffects(eqPreset = "Vocal Enhance")
-                                    )
-                                    val instr = AudioClip(
-                                        sourceClipId = aClip.sourceClipId,
-                                        sourceUri = aClip.sourceUri,
-                                        displayName = "Instrumental",
-                                        startTimeOnTimelineMs = aClip.startTimeOnTimelineMs,
-                                        sourceDurationMs = aClip.sourceDurationMs,
-                                        trimStartMs = aClip.trimStartMs,
-                                        trimEndMs = aClip.trimEndMs,
-                                        audioEffects = AudioEffects(eqPreset = "Bass Boost")
-                                    )
-                                    val newClips = audioClips.toMutableList()
-                                    newClips.remove(aClip)
-                                    audioClips = newClips + listOf(vocals, instr)
-                                    isProcessingAudio = false
-                                    showAudioPanel = false
-                                    persistHistory()
-                                }
-                            }) {
-                                Text("Separate Vocals")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        AnimatedVisibility(
-            visible = isVoiceoverMode,
-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
-        ) {
-            VoiceoverPanel(
-                onClose = { isVoiceoverMode = false },
-                currentPositionMs = currentPositionMs,
-                isPlaying = isPlaying,
-                onSetPlaying = { isPlaying = it },
-                onVoiceoverRecorded = { uri, duration ->
-                    val targetDuration = if (duration > videoDurationMs) videoDurationMs else duration
-                    // we want it to be added at current position
-                    val newAudio = AudioClip(
-                        sourceUri = uri,
-                        displayName = "Voiceover",
-                        startTimeOnTimelineMs = currentPositionMs,
-                        sourceDurationMs = duration,
-                        trimEndMs = duration
-                    )
-                    audioClips = audioClips + newAudio
-                    persistHistory()
-                }
-            )
-        }
-
         AnimatedVisibility(
             visible = showSpeedPanel && selectedClipId != null,
             enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
@@ -6280,20 +5133,6 @@ fun EditorScreen(
                             ) {
                                 Text("Add Photo/Video")
                             }
-                            Button(
-                                onClick = {
-                                    if (isBudgetMode && layerOrder.size >= 3) {
-                                        android.widget.Toast.makeText(context, "Budget Mode limit: 3 layers max", android.widget.Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        isPickingOverlay = true
-                                        showGifPicker = true
-                                    }
-                                },
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(8.dp)
-                            ) {
-                                Text("Search GIFs")
-                            }
                         }
                     } else {
                         val overlay = overlays.find { it.id == selectedOverlayId }
@@ -6545,731 +5384,29 @@ fun EditorScreen(
         }
         
         AnimatedVisibility(
-            visible = showBgBlurPanel,
+            visible = showExportPanel,
             enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
             exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
             modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
         ) {
-            val clipId = selectedClipId
-            val clipIndex = clips.indexOfFirst { it.id == clipId }
-            val clip = clips.getOrNull(clipIndex)
-            
-            if (clip != null) {
-                Surface(
-                    shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                    color = MaterialTheme.colorScheme.surfaceColorAtElevation(12.dp),
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 500.dp),
-                    shadowElevation = 16.dp
-                ) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp).padding(bottom = 32.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        Row(
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Background Blur (AI)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                            IconButton(onClick = { showBgBlurPanel = false; isPaintingMask = false }) {
-                                Icon(Icons.Filled.Close, contentDescription = "Close")
-                            }
-                        }
-                        
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                            Text("Enable", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                            Switch(
-                                checked = clip.bgBlurSettings.enabled,
-                                onCheckedChange = { v ->
-                                    val newClips = clips.toMutableList()
-                                    newClips[clipIndex] = clip.copy(bgBlurSettings = clip.bgBlurSettings.copy(enabled = v))
-                                    clips = newClips
-                                }
-                            )
-                        }
-                        if (clip.bgBlurSettings.enabled) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Intensity", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(80.dp))
-                                Slider(
-                                    value = clip.bgBlurSettings.intensity,
-                                    onValueChange = { v -> 
-                                        val newClips = clips.toMutableList()
-                                        newClips[clipIndex] = clip.copy(bgBlurSettings = clip.bgBlurSettings.copy(intensity = v))
-                                        clips = newClips
-                                    },
-                                    valueRange = 0f..1f,
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-                            
-                            Text("Blur Style", style = MaterialTheme.typography.labelMedium)
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                BlurStyle.entries.forEach { styleOpt ->
-                                    val isSelected = clip.bgBlurSettings.style == styleOpt
-                                    FilterChip(
-                                        selected = isSelected,
-                                        onClick = {
-                                            val newClips = clips.toMutableList()
-                                            newClips[clipIndex] = clip.copy(bgBlurSettings = clip.bgBlurSettings.copy(style = styleOpt))
-                                            clips = newClips
-                                        },
-                                        label = { Text(styleOpt.label) }
-                                    )
-                                }
-                            }
-
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                Text("AI Subject Tracking", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                                Switch(
-                                    checked = clip.bgBlurSettings.aiTracking,
-                                    onCheckedChange = { v ->
-                                        val newClips = clips.toMutableList()
-                                        newClips[clipIndex] = clip.copy(bgBlurSettings = clip.bgBlurSettings.copy(aiTracking = v))
-                                        clips = newClips
-                                    }
-                                )
-                            }
-                            
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                Text("Show Mask", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                                Switch(
-                                    checked = clip.bgBlurSettings.showMask,
-                                    onCheckedChange = { v ->
-                                        val newClips = clips.toMutableList()
-                                        newClips[clipIndex] = clip.copy(bgBlurSettings = clip.bgBlurSettings.copy(showMask = v))
-                                        clips = newClips
-                                    }
-                                )
-                            }
-
-                            Button(
-                                onClick = { isPaintingMask = !isPaintingMask },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(if (isPaintingMask) "Done Painting Mask" else "Manual Paint / Erase Mask")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        AnimatedVisibility(
-            visible = showAISmartPanel,
-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
-        ) {
-            AISmartPanel(
-                videoDurationMs = videoDurationMs,
-                detectedScenes = detectedScenes,
-                detectedSilences = detectedSilences,
-                onDetectedScenesChange = { detectedScenes = it },
-                onDetectedSilencesChange = { detectedSilences = it },
-                onAutoCut = { scenes ->
-                    if (billingManager?.canUseAIFeature() == false) {
-                        showPaywallScreen = true
-                        return@AISmartPanel
-                    }
-                    billingManager?.useAIFeature()
-                    
-                    showAISmartPanel = false
-                    var newClips = clips.toList()
-                    val sortedScenes = scenes.sortedByDescending { it.timeMs }
-                    sortedScenes.forEach { scene ->
-                        var globalAccum = 0L
-                        for ((idx, clip) in newClips.withIndex()) {
-                            if (scene.timeMs > globalAccum && scene.timeMs < globalAccum + clip.durationMs) {
-                                val localSplitTimeMs = scene.timeMs - globalAccum + clip.trimStartMs
-                                val clip1 = clip.copy(id = java.util.UUID.randomUUID().toString(), trimEndMs = localSplitTimeMs)
-                                val clip2 = clip.copy(id = java.util.UUID.randomUUID().toString(), trimStartMs = localSplitTimeMs)
-                                val mut = newClips.toMutableList()
-                                mut.removeAt(idx)
-                                mut.add(idx, clip1)
-                                mut.add(idx + 1, clip2)
-                                newClips = mut
-                                break
-                            }
-                            globalAccum += clip.durationMs
-                        }
-                    }
-                    clips = newClips
-                    saveState(newClips, canvasSettings, "AI Auto Cut")
-                },
-                onRemoveSilences = { silences ->
-                    if (billingManager?.canUseAIFeature() == false) {
-                        showPaywallScreen = true
-                        return@AISmartPanel
-                    }
-                    billingManager?.useAIFeature()
-                    
-                    showAISmartPanel = false
-                    var newClips = clips.toList()
-                    val sortedSilences = silences.sortedByDescending { it.startMs }
-                    sortedSilences.forEach { silence ->
-                        newClips = removeTimeRangeFromClips(newClips, silence.startMs, silence.endMs)
-                    }
-                    clips = newClips
-                    saveState(newClips, canvasSettings, "AI Remove Silences")
-                },
-                onGenerateHighlights = { durationSecs ->
-                    if (billingManager?.canUseAIFeature() == false) {
-                        showPaywallScreen = true
-                        return@AISmartPanel
-                    }
-                    billingManager?.useAIFeature()
-                    
-                    showAISmartPanel = false
-                    val targetMs = durationSecs * 1000L
-                    var currentMs = 0L
-                    var idx = 0
-                    var newClips = clips.toList()
-                    while (currentMs < targetMs && idx < newClips.size) {
-                        currentMs += newClips[idx].durationMs
-                        idx++
-                    }
-                    if (currentMs > targetMs && idx > 0) {
-                        idx--
-                        val lastClip = newClips[idx]
-                        val excess = currentMs - targetMs
-                        val newTrimEnd = lastClip.trimEndMs - excess
-                        val mut = newClips.toMutableList()
-                        mut[idx] = lastClip.copy(trimEndMs = newTrimEnd)
-                        newClips = mut.take(idx + 1)
-                    } else if (currentMs >= targetMs) {
-                        newClips = newClips.take(idx)
-                    }
-                    clips = newClips
-                    saveState(newClips, canvasSettings, "AI Highlights Reel")
-                },
-                onClose = { showAISmartPanel = false }
-            )
-        }
-
-        AnimatedVisibility(
-            visible = showSmartReframePanel,
-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
-        ) {
-            val clipId = selectedClipId ?: clips.firstOrNull()?.id
-            val clipIndex = clips.indexOfFirst { it.id == clipId }
-            val clip = clips.getOrNull(clipIndex)
-            if (clip != null) {
-                SmartReframePanel(
-                    clip = clip,
-                    onApplyParams = { cropScale, cropOffsetX, cropOffsetY ->
-                        if (billingManager?.canUseAIFeature() == false) {
-                            showPaywallScreen = true
-                            return@SmartReframePanel
-                        }
-                        billingManager?.useAIFeature()
-                        
-                        showSmartReframePanel = false
-                        // In reality, this would configure frame-by-frame values
-                        // Standard crop params just as dummy simulation logic
-                        var newClips = clips.toList()
-                        val c = newClips[clipIndex].copy(
-                            scale = cropScale,
-                            posX = cropOffsetX,
-                            posY = cropOffsetY
-                        )
-                        val mut = newClips.toMutableList()
-                        mut[clipIndex] = c
-                        newClips = mut
-                        clips = newClips
-                        saveState(newClips, canvasSettings, "Smart Reframe")
-                    },
-                    onClose = { showSmartReframePanel = false }
-                )
-            } else {
-                showSmartReframePanel = false
-            }
-        }
-
-        AnimatedVisibility(
-            visible = showPhotoAnimationPanel,
-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
-        ) {
-            val clipId = selectedClipId ?: clips.firstOrNull()?.id
-            val clipIndex = clips.indexOfFirst { it.id == clipId }
-            val clip = clips.getOrNull(clipIndex)
-            if (clip != null) {
-                PhotoAnimationPanel(
-                    clip = clip,
-                    initialSettings = clip.photoAnimationSettings,
-                    onApplyParams = { settings ->
-                        var newClips = clips.toList()
-                        val c = newClips[clipIndex].copy(photoAnimationSettings = settings)
-                        val mut = newClips.toMutableList()
-                        mut[clipIndex] = c
-                        newClips = mut
-                        clips = newClips
-                        saveState(newClips, canvasSettings, "Photo Animation")
-                    },
-                    onClose = { showPhotoAnimationPanel = false }
-                )
-            }
-        }
-
-        AnimatedVisibility(
-            visible = showAITTSPanel,
-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
-        ) {
-            AITextToSpeechPanel(
-                onAddAudio = { uri, title, duration ->
-                    if (billingManager?.canUseAIFeature() == false) {
-                        showPaywallScreen = true
-                        return@AITextToSpeechPanel
-                    }
-                    billingManager?.useAIFeature()
-                    
-                    showAITTSPanel = false
-                    val newAudio = AudioClip(
-                        sourceUri = uri,
-                        displayName = title,
-                        startTimeOnTimelineMs = currentPositionMs,
-                        sourceDurationMs = duration,
-                        trimEndMs = duration,
-                        isLooped = false
-                    )
-                    audioClips = audioClips + newAudio
-                    saveState(clips, canvasSettings, "Add AI Voice")
-                    persistHistory()
-                },
-                onClose = { showAITTSPanel = false }
-            )
-        }
-
-        AnimatedVisibility(
-            visible = showExportPanel && !showBatchExportPanel,
-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
-        ) {
-            val hasProjectProFeatures by remember(clips, audioClips) {
-                derivedStateOf {
-                    val proEffects = listOf(EffectType.DATAMOSH, EffectType.TILT_SHIFT, EffectType.KALEIDOSCOPE, EffectType.PRISM, EffectType.NEON_GLOW, EffectType.ANAMORPHIC_FLARE)
-                    var pro = false
-                    for (clip in clips) {
-                        if (clip.bgRemovalSettings.enabled) pro = true
-                        if (clip.effects.any { it.type in proEffects }) pro = true
-                        if (clip.audioEffects.reverbPreset != "None" && clip.audioEffects.reverbPreset != "") pro = true
-                        if (clip.adjustments.lutPresetId != null) pro = true
-                        if (clip.adjustments.highlights != 0f || clip.adjustments.shadows != 0f || clip.adjustments.vignette != 0f || clip.adjustments.grain != 0f) pro = true
-                    }
-                    for (a in audioClips) {
-                        if (a.audioEffects.reverbPreset != "None" && a.audioEffects.reverbPreset != "") pro = true
-                    }
-                    pro
-                }
-            }
-            
-            val subscriptionDetails by billingManager?.subscriptionDetails?.collectAsState() ?: mutableStateOf(null)
-
             ExportSettingsScreen(
-                videoDurationMs = videoDurationMs.takeIf { it > 0 } ?: 15000L,
+                clips = clips,
+                videoDurationMs = videoDurationMs,
                 thumbnailUri = clips.firstOrNull()?.sourceUri,
                 onClose = { showExportPanel = false },
                 onExportComplete = { showExportPanel = false },
-                onOpenBatchExport = { showBatchExportPanel = true },
-                isPro = currentTier != com.example.billing.SubscriptionTier.FREE,
-                hasProjectProFeatures = hasProjectProFeatures,
-                isGracePeriod = subscriptionDetails?.isGracePeriod ?: false,
-                onProFeatureTap = { showPaywallScreen = true }
-            )
-        }
-
-        AnimatedVisibility(
-            visible = showBatchExportPanel,
-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(11f)
-        ) {
-            BatchExportScreen(
-                videoDurationMs = videoDurationMs.takeIf { it > 0 } ?: 15000L,
-                thumbnailUri = clips.firstOrNull()?.sourceUri,
-                onClose = { showBatchExportPanel = false; showExportPanel = false }
+                hasUnsupportedEdits = clips.any { it.hasUnsupportedExportEdits() } ||
+                    overlays.isNotEmpty() ||
+                    texts.isNotEmpty() ||
+                    captions.isNotEmpty() ||
+                    stickers.isNotEmpty() ||
+                    drawings.isNotEmpty() ||
+                    frames.isNotEmpty() ||
+                    audioClips.isNotEmpty() ||
+                    canvasSettings != CanvasSettingsState()
             )
         }
         
-        if (showPaywallScreen && billingManager != null) {
-            PaywallScreen(billingManager = billingManager, onDismiss = { showPaywallScreen = false })
-        }
-        
-        if (showRenderPreviewDialog) {
-            AlertDialog(
-                onDismissRequest = { showRenderPreviewDialog = false },
-                title = { Text("Render Preview") },
-                text = {
-                    Column {
-                        Text("Pre-rendering a temporary high-quality preview for smooth playback. This uses your device's hardware encoder.")
-                        if (isRenderingPreview) {
-                            Spacer(Modifier.height(16.dp))
-                            LinearProgressIndicator(progress = previewRenderProgress, modifier = Modifier.fillMaxWidth())
-                            Text("${(previewRenderProgress * 100).toInt()}%", modifier = Modifier.align(Alignment.End))
-                        }
-                    }
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            isRenderingPreview = true
-                            previewRenderProgress = 0f
-                            // Simulate rendering a preview block
-                            scope.launch {
-                                for(i in 1..20) {
-                                    kotlinx.coroutines.delay(100)
-                                    previewRenderProgress = i / 20f
-                                }
-                                isRenderingPreview = false
-                                showRenderPreviewDialog = false
-                                android.widget.Toast.makeText(context, "Preview rendered! Playback will now be smooth.", android.widget.Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        enabled = !isRenderingPreview
-                    ) {
-                        Text("Render")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showRenderPreviewDialog = false }, enabled = !isRenderingPreview) {
-                        Text("Cancel")
-                    }
-                }
-            )
-        }
-
-        if (showSaveTemplateDialog) {
-            var tempName by remember { mutableStateOf("") }
-            var tempCategory by remember { mutableStateOf("My Templates") }
-            var tempDesc by remember { mutableStateOf("") }
-            
-            AlertDialog(
-                onDismissRequest = { showSaveTemplateDialog = false },
-                title = { Text("Save as Template") },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = tempName,
-                            onValueChange = { tempName = it },
-                            label = { Text("Template Name") },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        OutlinedTextField(
-                            value = tempDesc,
-                            onValueChange = { tempDesc = it },
-                            label = { Text("Description") },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        var expanded by remember { mutableStateOf(false) }
-                        Box {
-                            OutlinedTextField(
-                                value = tempCategory,
-                                onValueChange = {},
-                                readOnly = true,
-                                label = { Text("Category") },
-                                trailingIcon = {
-                                    IconButton(onClick = { expanded = true }) {
-                                        Icon(Icons.Filled.ArrowDropDown, contentDescription = "Select Category")
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth().clickable { expanded = true }
-                            )
-                            DropdownMenu(
-                                expanded = expanded,
-                                onDismissRequest = { expanded = false }
-                            ) {
-                                categories.forEach { cat ->
-                                    DropdownMenuItem(
-                                        text = { Text(cat) },
-                                        onClick = {
-                                            tempCategory = cat
-                                            expanded = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                },
-                confirmButton = {
-                    Button(onClick = {
-                        val newTemplate = VideoTemplate(
-                            id = java.util.UUID.randomUUID().toString(),
-                            title = tempName.takeIf { it.isNotBlank() } ?: "My Custom Template",
-                            category = tempCategory,
-                            imageUrl = clips.firstOrNull()?.sourceUri ?: "https://images.unsplash.com/photo-1516280440502-a035d8e75185?q=80&w=800&auto=format&fit=crop",
-                            duration = String.format("00:%02d", videoDurationMs / 1000),
-                            uses = 0,
-                            slots = clips.size,
-                            textPlaceholders = texts.map { it.text },
-                            description = tempDesc,
-                            isCustom = true,
-                            originalId = java.util.UUID.randomUUID().toString()
-                        )
-                        TemplateRepo.addTemplate(newTemplate)
-                        showSaveTemplateDialog = false
-                    }) {
-                        Text("Save")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showSaveTemplateDialog = false }) {
-                        Text("Cancel")
-                    }
-                }
-            )
-        }
-
-        AnimatedVisibility(
-            visible = showAIMusicPanel,
-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
-        ) {
-            AIMusicPanel(
-                videoDurationMs = videoDurationMs.takeIf { it > 0 } ?: 15000L,
-                onAddMusic = { uri, title, duration ->
-                    if (billingManager?.canUseAIFeature() == false) {
-                        showPaywallScreen = true
-                        return@AIMusicPanel
-                    }
-                    billingManager?.useAIFeature()
-                    
-                    showAIMusicPanel = false
-                    val targetDuration = if (duration > videoDurationMs && videoDurationMs > 0) videoDurationMs else duration
-                    val newAudio = AudioClip(
-                        sourceUri = uri,
-                        displayName = title,
-                        startTimeOnTimelineMs = currentPositionMs,
-                        sourceDurationMs = duration,
-                        trimEndMs = targetDuration,
-                        isLooped = duration < videoDurationMs
-                    )
-                    audioClips = audioClips + newAudio
-                    saveState(clips, canvasSettings, "Add AI music")
-                    persistHistory()
-                },
-                onClose = { showAIMusicPanel = false }
-            )
-        }
-
-        AnimatedVisibility(
-            visible = showAIEnhancePanel,
-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
-        ) {
-            val clipId = selectedClipId ?: clips.firstOrNull()?.id
-            val clipIndex = clips.indexOfFirst { it.id == clipId }
-            val clip = clips.getOrNull(clipIndex)
-            if (clip != null) {
-                AIEnhancePanel(
-                    clip = clip,
-                    initialSettings = clip.enhanceSettings,
-                    onApplyParams = { settings ->
-                        if (billingManager?.canUseAIFeature() == false) {
-                            showPaywallScreen = true
-                            return@AIEnhancePanel
-                        }
-                        billingManager?.useAIFeature()
-                        
-                        showAIEnhancePanel = false
-                        var newClips = clips.toList()
-                        val c = newClips[clipIndex].copy(enhanceSettings = settings)
-                        val mut = newClips.toMutableList()
-                        mut[clipIndex] = c
-                        newClips = mut
-                        clips = newClips
-                        saveState(newClips, canvasSettings, "AI Enhance")
-                    },
-                    onClose = { showAIEnhancePanel = false }
-                )
-            } else {
-                showAIEnhancePanel = false
-            }
-        }
-
-        AnimatedVisibility(
-            visible = showAIObjectRemovePanel,
-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
-        ) {
-            val clipId = selectedClipId ?: clips.firstOrNull()?.id
-            val clipIndex = clips.indexOfFirst { it.id == clipId }
-            val clip = clips.getOrNull(clipIndex)
-            if (clip != null) {
-                AIObjectRemovePanel(
-                    clip = clip,
-                    initialSettings = clip.objectRemovalSettings,
-                    onApplyParams = { settings ->
-                        if (billingManager?.canUseAIFeature() == false) {
-                            showPaywallScreen = true
-                            return@AIObjectRemovePanel
-                        }
-                        billingManager?.useAIFeature()
-                        
-                        showAIObjectRemovePanel = false
-                        var newClips = clips.toList()
-                        val c = newClips[clipIndex].copy(objectRemovalSettings = settings)
-                        val mut = newClips.toMutableList()
-                        mut[clipIndex] = c
-                        newClips = mut
-                        clips = newClips
-                        saveState(newClips, canvasSettings, "AI Object Remove")
-                    },
-                    onClose = { showAIObjectRemovePanel = false }
-                )
-            } else {
-                showAIObjectRemovePanel = false
-            }
-        }
-
-        AnimatedVisibility(
-            visible = showCaptionsPanel,
-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
-        ) {
-            CaptionsPanel(
-                captions = captions,
-                settings = captionSettings,
-                onSettingsChanged = { captionSettings = it },
-                onCaptionsChanged = { captions = it },
-                aiUsageString = billingManager?.getAIUsageString(),
-                onGenerateCaptions = {
-                    if (billingManager?.canUseAIFeature() == false) {
-                        showPaywallScreen = true
-                        return@CaptionsPanel
-                    }
-                    billingManager?.useAIFeature()
-                    
-                    persistHistory()
-                    val durationToUse = clips.sumOf { it.durationMs }.takeIf { it > 0 } ?: 10000L
-                    
-                    val taskId = java.util.UUID.randomUUID().toString()
-                    com.example.viewmodel.BackgroundTaskManager.addTask(
-                        com.example.viewmodel.BackgroundTask(
-                            id = taskId,
-                            title = "Auto-Generating Captions",
-                            type = com.example.viewmodel.TaskType.AI_PROCESSING
-                        )
-                    )
-                    
-                    showCaptionsPanel = false // Dismiss so user can continue editing
-                    android.widget.Toast.makeText(context, "Generating Captions in background. Check Task Manager.", android.widget.Toast.LENGTH_LONG).show()
-                    
-                    @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
-                    kotlinx.coroutines.GlobalScope.launch {
-                        for(i in 1..10) {
-                            kotlinx.coroutines.delay(200)
-                            val p = i / 10f
-                            com.example.viewmodel.BackgroundTaskManager.updateProgress(taskId, p, "Transcribing audio segment $i...")
-                            com.example.NotificationHelper.showProgressNotification(context, taskId.hashCode(), "AI Processing", "Transcribing...", (p*100).toInt())
-                        }
-                        
-                        val generated = mutableListOf<AutoCaptionSegment>()
-                        val dummyWords = when (captionSettings.language) {
-                            "Hindi" -> listOf("नमस्ते", "दोस्तों", "आज", "हम", "एक", "नया", "वीडियो", "बना", "रहे", "हैं")
-                            "Tamil" -> listOf("வணக்கம்", "நண்பர்களே", "இந்த", "காணொளியில்", "புதிய", "அம்சங்களை", "பார்க்கலாம்")
-                            "Telugu" -> listOf("హలో", "అందరికీ", "ఈ", "వీడియోలో", "కొత్త", "ఫీచర్లను", "చూద్దాం")
-                            "Bengali" -> listOf("নমস্কার", "বন্ধুরা", "আজকের", "ভিডিওতে", "স্বাগতম")
-                            "Hinglish (Roman)" -> listOf("Namaste", "doston", "aaj", "hum", "ek", "naya", "video", "bana", "rahe", "hain")
-                            "Auto-Detect Language" -> listOf("नमस्ते", "doston", "welcome", "to", "this", "new", "video", "आज", "का", "topic")
-                            else -> listOf("Hello", "everyone", "welcome", "to", "this", "awesome", "video", "about", "cool", "features")
-                        }
-                        var currentStart = 0L
-                        val segmentDuration = 2000L
-                        var index = 0
-                        while(currentStart < durationToUse) {
-                            val segEnd = minOf(currentStart + segmentDuration, durationToUse)
-                            val wordCount = 3
-                            val wList = mutableListOf<CaptionWord>()
-                            var wStart = currentStart
-                            val wDur = (segEnd - currentStart) / wordCount
-                            for (i in 0 until wordCount) {
-                                wList.add(CaptionWord(dummyWords[index % dummyWords.size], wStart, wStart + wDur))
-                                wStart += wDur
-                                index++
-                            }
-                            val text = wList.joinToString(" ") { it.word }
-                            generated.add(AutoCaptionSegment(
-                                text = text,
-                                words = wList,
-                                startTimeMs = currentStart,
-                                durationMs = segEnd - currentStart
-                            ))
-                            currentStart = segEnd
-                        }
-                        
-                        captions = generated
-                        com.example.NotificationHelper.cancelNotification(context, taskId.hashCode())
-                        com.example.viewmodel.BackgroundTaskManager.updateStatus(taskId, com.example.viewmodel.TaskStatus.COMPLETED)
-                        android.widget.Toast.makeText(context, "Captions generated successfully!", android.widget.Toast.LENGTH_SHORT).show()
-                    }
-                },
-                onClose = { showCaptionsPanel = false }
-            )
-        }
-
-        AnimatedVisibility(
-            visible = showBgRemovalPanel,
-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
-        ) {
-            val clipId = selectedClipId
-            val clipIndex = clips.indexOfFirst { it.id == clipId }
-            val clip = clips.getOrNull(clipIndex)
-            
-            if (clip != null) {
-                Surface(
-                    shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                    color = MaterialTheme.colorScheme.surfaceColorAtElevation(12.dp),
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 500.dp),
-                    shadowElevation = 16.dp
-                ) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp).padding(bottom = 32.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        Row(
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Background Removal", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                            IconButton(onClick = { showBgRemovalPanel = false }) {
-                                Icon(Icons.Filled.Close, contentDescription = "Close")
-                            }
-                        }
-                        
-                        BgRemovalPanel(
-                            settings = clip.bgRemovalSettings,
-                            onSettingsChanged = { newSettings ->
-                                if (newSettings.enabled && !clip.bgRemovalSettings.enabled) {
-                                    if (billingManager?.canUseAIFeature() == false) {
-                                        showPaywallScreen = true
-                                        return@BgRemovalPanel
-                                    }
-                                    billingManager?.useAIFeature()
-                                }
-                                val newClips = clips.toMutableList()
-                                newClips[clipIndex] = clip.copy(bgRemovalSettings = newSettings)
-                                clips = newClips
-                            }
-                        )
-                    }
-                }
-            }
-        }
-
         AnimatedVisibility(
             visible = showLutPanel,
             enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
@@ -7731,9 +5868,6 @@ fun EditorScreen(
                         showTextToolbar = false
                         editingTextId = null
                     },
-                    onEyedropperSelect = {
-                        // Dummy for now, we'll implement later if needed or let it be
-                    },
                     onCopy = { globalClipboardItem = cText },
                     onDuplicate = {
                         val newItem = cText.copy(id = java.util.UUID.randomUUID().toString(), startTimeOnTimelineMs = cText.startTimeOnTimelineMs + 100)
@@ -7971,113 +6105,6 @@ fun EditorScreen(
         }
         
         AnimatedVisibility(
-            visible = showCanvasPanel,
-            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
-            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
-        ) {
-            Surface(
-                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                color = MaterialTheme.colorScheme.surfaceColorAtElevation(12.dp),
-                modifier = Modifier.fillMaxWidth(),
-                shadowElevation = 16.dp
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                        .padding(bottom = 32.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Row(
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Canvas Options", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                        IconButton(onClick = { showCanvasPanel = false }) {
-                            Icon(Icons.Filled.Close, contentDescription = "Close")
-                        }
-                    }
-                    
-                    Text("Aspect Ratio", style = MaterialTheme.typography.labelMedium)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        val options = AspectRatioOption.values()
-                        items(options.size) { i ->
-                            val opt = options[i]
-                            FilterChip(
-                                selected = canvasSettings.aspectOption == opt,
-                                onClick = { saveState(clips, canvasSettings.copy(aspectOption = opt), "Change aspect ratio") },
-                                label = { Text(opt.label) },
-                                leadingIcon = { Text(opt.subtitle, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(end = 4.dp)) }
-                            )
-                        }
-                    }
-                    
-                    Divider()
-                    Text("Master Volume", style = MaterialTheme.typography.labelMedium)
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                        Text("${(canvasSettings.masterVolume * 100).toInt()}%", modifier = Modifier.width(50.dp))
-                        androidx.compose.material3.Slider(
-                            value = canvasSettings.masterVolume,
-                            onValueChange = { canvasSettings = canvasSettings.copy(masterVolume = it) },
-                            onValueChangeFinished = { saveState(clips, canvasSettings, "Change master volume") },
-                            valueRange = 0f..2f,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    
-                    Divider()
-                    Text("Fit Mode", style = MaterialTheme.typography.labelMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        val modes = FitMode.values()
-                        modes.forEach { mode ->
-                            FilterChip(
-                                selected = canvasSettings.fitMode == mode,
-                                onClick = { saveState(clips, canvasSettings.copy(fitMode = mode), "Change fit mode") },
-                                label = { Text(mode.name) }
-                            )
-                        }
-                    }
-                    
-                    AnimatedVisibility(visible = canvasSettings.fitMode == FitMode.Fit) {
-                        Column {
-                            Spacer(Modifier.height(8.dp))
-                            Text("Background", style = MaterialTheme.typography.labelMedium)
-                            Spacer(Modifier.height(8.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                val bgs = BackgroundType.values()
-                                bgs.forEach { bg ->
-                                    FilterChip(
-                                        selected = canvasSettings.backgroundType == bg,
-                                        onClick = { saveState(clips, canvasSettings.copy(backgroundType = bg), "Change background type") },
-                                        label = { Text(bg.name) }
-                                    )
-                                }
-                            }
-                            
-                            if (canvasSettings.backgroundType == BackgroundType.Color || canvasSettings.backgroundType == BackgroundType.Gradient) {
-                                Spacer(Modifier.height(8.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    val colors = listOf(Color.Black, Color.White, Color.Red, Color.Blue, Color.DarkGray)
-                                    colors.forEach { c ->
-                                        Box(modifier = Modifier
-                                            .size(32.dp)
-                                            .clip(CircleShape)
-                                            .background(c)
-                                            .border(2.dp, if (canvasSettings.backgroundColor == c) MaterialTheme.colorScheme.primary else Color.Transparent, CircleShape)
-                                            .clickable { saveState(clips, canvasSettings.copy(backgroundColorValue = c.value), "Change background color") }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        AnimatedVisibility(
             visible = showLayerPanel,
             enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
             exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
@@ -8279,9 +6306,6 @@ fun EditorScreen(
                     finalColorMatrix = androidx.compose.ui.graphics.ColorMatrix().apply {
                         timesAssign(filterColorMatrix)
                         timesAssign(adjustMatrix)
-                        if (currentClipForFullscreen?.enhanceSettings?.autoEnhanceApplied == true) {
-                            timesAssign(androidx.compose.ui.graphics.ColorMatrix().apply { setToScale(1.1f, 1.1f, 1.2f, 1f) })
-                        }
                     }
                 }
                 
@@ -8295,13 +6319,6 @@ fun EditorScreen(
                     modifier = Modifier.fillMaxSize()
                         .colorFilterOverlay(finalColorMatrix)
                         .then(if (!isComparing) Modifier.vignetteAndGrain(adjustments.vignette, adjustments.grain) else Modifier)
-                        .then(if (!isComparing && currentClipForFullscreen?.enhanceSettings?.stabilizationStrength ?: 0f > 0f) {
-                            val st = currentClipForFullscreen!!.enhanceSettings.stabilizationStrength
-                            val stabScale = 1f + (st * 0.3f)
-                            Modifier.graphicsLayer { scaleX = stabScale; scaleY = stabScale }
-                        } else Modifier)
-                        .then(if (!isComparing && currentClipForFullscreen != null) Modifier.applyBgRemoval(currentClipForFullscreen.bgRemovalSettings, isComparing, currentPositionMs) else Modifier)
-                        .then(if (!isComparing && currentClipForFullscreen != null) Modifier.applyObjectRemoval(currentClipForFullscreen.objectRemovalSettings) else Modifier)
                         .applyAllVisualEffects(if (!isComparing && !skipHeavyEffects && currentClipForFullscreen != null) currentClipForFullscreen.effects else emptyList(), currentPositionMs, currentClipForFullscreen?.durationMs ?: 0L)
                 )
             }
@@ -8329,7 +6346,7 @@ fun EditorScreen(
                                 exoPlayer.pause()
                             } else {
                                 if (exoPlayer.playbackState == Player.STATE_ENDED) {
-                                    exoPlayer.seekTo(0)
+                                    seekToGlobal(0L, exoPlayer)
                                 }
                                 exoPlayer.play()
                             }
@@ -8363,52 +6380,30 @@ fun EditorScreen(
         }
     }
 
-    if (showThumbnailGenerator) {
-        ThumbnailGeneratorScreen(
-            videoDurationMs = videoDurationMs,
-            onClose = { showThumbnailGenerator = false },
-            onThumbnailSaved = {
-                showThumbnailGenerator = false
-                android.widget.Toast.makeText(context, "Thumbnail saved!", android.widget.Toast.LENGTH_SHORT).show()
-            }
-        )
-    }
-
     if (showMediaPicker) {
         com.example.MediaPickerScreen(
             onClose = { showMediaPicker = false; isPickingOverlay = false },
             onGoToEditor = { showMediaPicker = false; isPickingOverlay = false },
+            projectViewModel = projectViewModel,
             isSelectingForExisting = true,
             onMediaSelected = { paths ->
                 showMediaPicker = false
                 if (paths.isNotEmpty()) {
+                    scope.launch {
                     if (isPickingOverlay) {
                         isPickingOverlay = false
                         val newOverlays = overlays.toMutableList()
                         for (path in paths) {
-                            val isPhoto = isImageUri(context, path)
-                            val isGif = path.substringAfterLast('.', "").lowercase() == "gif" || path.contains("giphy.com")
-                            var dur = 5000L
-                            if (!isPhoto && !isGif) {
-                                val retriever = android.media.MediaMetadataRetriever()
-                                try {
-                                    retriever.setDataSource(context, android.net.Uri.parse(path))
-                                    val timeStr = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
-                                    val extracted = timeStr?.toLongOrNull()
-                                    if (extracted != null && extracted > 0) dur = extracted
-                                } catch (e: Exception) {}
-                                finally {
-                                    try { retriever.release() } catch(e: Exception){}
-                                }
-                            } else {
-                                dur = 60000L
-                            }
+                            val metadata = MediaMetadataReader.read(context, android.net.Uri.parse(path)) ?: continue
+                            val isPhoto = metadata.mimeType.startsWith("image/")
+                            val durationMs = if (isPhoto) PHOTO_DEFAULT_DURATION_MS else metadata.durationMs
+                            if (durationMs <= 0L) continue
                             newOverlays.add(OverlayClip(
                                 sourceUri = path,
-                                originalDurationMs = dur,
-                                isPhoto = isPhoto && !isGif,
-                                isGif = isGif,
-                                trimEndMs = if (isPhoto || isGif) 5000L else dur,
+                                originalDurationMs = durationMs,
+                                isPhoto = isPhoto,
+                                isGif = false,
+                                trimEndMs = durationMs,
                                 startTimeOnTimelineMs = currentPositionMs
                             ))
                         }
@@ -8418,33 +6413,16 @@ fun EditorScreen(
                     } else {
                         val newClips = mutableListOf<MediaClip>()
                         for (path in paths) {
-                            val isPhoto = isImageUri(context, path)
-                            if (isPhoto) {
-                                newClips.add(MediaClip(
-                                    sourceUri = path,
-                                    originalDurationMs = 60000L, // 60s max
-                                    trimEndMs = 5000L,
-                                    isPhoto = true
-                                ))
-                            } else {
-                                val retriever = android.media.MediaMetadataRetriever()
-                                var dur = 5000L
-                                try {
-                                    retriever.setDataSource(context, android.net.Uri.parse(path))
-                                    val timeStr = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
-                                    val extracted = timeStr?.toLongOrNull()
-                                    if (extracted != null && extracted > 0) dur = extracted
-                                } catch (e: Exception) {}
-                                finally {
-                                    try { retriever.release() } catch(e: Exception){}
-                                }
-                                newClips.add(MediaClip(
-                                    sourceUri = path,
-                                    originalDurationMs = dur,
-                                    trimEndMs = dur,
-                                    isPhoto = false
-                                ))
-                            }
+                            val metadata = MediaMetadataReader.read(context, android.net.Uri.parse(path)) ?: continue
+                            val isPhoto = metadata.mimeType.startsWith("image/")
+                            val durationMs = if (isPhoto) PHOTO_DEFAULT_DURATION_MS else metadata.durationMs
+                            if (durationMs <= 0L) continue
+                            newClips.add(MediaClip(
+                                sourceUri = path,
+                                originalDurationMs = durationMs,
+                                trimEndMs = durationMs,
+                                isPhoto = isPhoto
+                            ))
                         }
                         if (newClips.isNotEmpty()) {
                             var accum = 0L
@@ -8461,88 +6439,10 @@ fun EditorScreen(
                             saveState(finalClips, canvasSettings, "Add media")
                         }
                     }
+                    }
                 }
             }
         )
-    }
-
-    if (showGifPicker) {
-        com.example.GifPickerScreen(
-            onClose = { showGifPicker = false; isPickingOverlay = false },
-            onGifSelected = { url ->
-                showGifPicker = false
-                isPickingOverlay = false
-                val newOverlays = overlays.toMutableList()
-                newOverlays.add(OverlayClip(
-                    sourceUri = url,
-                    originalDurationMs = 60000L,
-                    isPhoto = false,
-                    isGif = true,
-                    trimEndMs = 5000L,
-                    startTimeOnTimelineMs = currentPositionMs
-                ))
-                saveOverlayState(newOverlays, "Add GIF overlay")
-            }
-        )
-    }
-
-    if (showMusicPicker) {
-        MusicPickerScreen(
-            onClose = { showMusicPicker = false },
-            onMusicSelected = { uri, title, duration ->
-                showMusicPicker = false
-                val targetDuration = if (duration > videoDurationMs) videoDurationMs else duration
-                val newAudio = AudioClip(
-                    sourceUri = uri,
-                    displayName = title,
-                    startTimeOnTimelineMs = currentPositionMs,
-                    sourceDurationMs = duration,
-                    trimEndMs = targetDuration,
-                    isLooped = duration < videoDurationMs
-                )
-                audioClips = audioClips + newAudio
-                persistHistory()
-            }
-        )
-    }
-
-    if (showSoundEffectsPicker) {
-        SoundEffectsPickerScreen(
-            onClose = { showSoundEffectsPicker = false },
-            onEffectSelected = { uri, title, duration ->
-                showSoundEffectsPicker = false
-                val targetDuration = if (duration > videoDurationMs) videoDurationMs else duration
-                val newAudio = AudioClip(
-                    sourceUri = uri,
-                    displayName = title,
-                    startTimeOnTimelineMs = currentPositionMs,
-                    sourceDurationMs = duration,
-                    trimEndMs = targetDuration,
-                    isLooped = false
-                )
-                audioClips = audioClips + newAudio
-                persistHistory()
-            }
-        )
-    }
-
-    if (isProcessingAudio) {
-        androidx.compose.ui.window.Dialog(onDismissRequest = { }) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 8.dp
-            ) {
-                Column(
-                    modifier = Modifier.padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    CircularProgressIndicator()
-                    Text(audioProcessingText, style = MaterialTheme.typography.bodyLarge)
-                }
-            }
-        }
     }
 
 } // End of outer Box
@@ -8652,5 +6552,3 @@ fun TransitionThumbnail(type: TransitionType, selected: Boolean, onClick: () -> 
         Text(type.label, style = MaterialTheme.typography.labelSmall, color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
     }
 }
-
-

@@ -21,19 +21,6 @@ fun Modifier.colorFilterOverlay(matrix: ColorMatrix): Modifier = this.drawWithCo
     }
 }
 
-fun Modifier.applyObjectRemoval(settings: ObjectRemovalSettings): Modifier = this.drawWithContent {
-    drawContent()
-    if (settings.hasRemovedObjects) {
-        settings.paths.forEach { path ->
-            drawPath(
-                path = path,
-                color = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.3f), // Simulate patched area
-                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 40f, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
-            )
-        }
-    }
-}
-
 enum class FilterType(val category: String, val label: String) {
     NONE("Basic", "None/Original"),
     

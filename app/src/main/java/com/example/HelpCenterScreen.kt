@@ -21,15 +21,14 @@ import androidx.compose.ui.unit.dp
 data class FAQItem(val question: String, val answer: String, val category: String)
 
 val FAQs = listOf(
-    FAQItem("How do I export a video?", "Tap the export button in the top right corner of the editor. Choose your resolution and frame rate, then tap 'Export'.", "Exporting"),
-    FAQItem("How do I remove the watermark?", "Pro users can remove the watermark in the export settings before exporting their video.", "Exporting"),
-    FAQItem("How do I add music?", "Tap the 'Audio' tool in the bottom menu, then select 'Sound FX' or 'AI Music' to add an audio track.", "Editing"),
-    FAQItem("Can I use my own music?", "Yes! Tap 'Audio', select 'Local Files', and pick a track from your device.", "Editing"),
-    FAQItem("How does Auto Caption work?", "Auto Caption uses AI to analyze your video's audio and automatically generates text captions. Tap 'Captions' -> 'Auto Caption'.", "AI Features"),
-    FAQItem("Is AI Enhancer free to use?", "AI Enhancer is available to all users, but free users have a daily limit. Pro users get unlimited access.", "AI Features"),
+    FAQItem("How do I export a video?", "Open Export in the editor and tap Export MP4. The current renderer supports source clips, trims, still-image durations, and source mute. Unsupported effects, overlays, and separate audio layers are blocked until their export renderer is ready.", "Exporting"),
+    FAQItem("Does Clipp add a watermark?", "The current basic renderer does not add a watermark. Subscriptions and paid tiers are not active in this build.", "Exporting"),
+    FAQItem("Can I add music?", "The current export-safe build preserves embedded source audio and supports muting it. Separate music tracks and voiceover are not available yet.", "Editing"),
+    FAQItem("How do I add captions?", "Captions are not available in this build yet. Clipp does not generate or display a fabricated transcript.", "Editing"),
+    FAQItem("Are AI editing tools available?", "AI enhancement, object removal, background removal, smart reframe, and related processing are disabled until they can be implemented and validated locally.", "Editing"),
     FAQItem("How do I split a clip?", "Move the playhead to the desired position on the timeline and tap the 'Split' tool.", "Editing"),
-    FAQItem("Why did my export fail?", "Export failures can happen due to lack of storage space or memory. Try clearing cache in Settings or lowering export resolution.", "Troubleshooting"),
-    FAQItem("How do I cancel my subscription?", "Go to Profile -> Subscription -> Manage Subscription. It will redirect you to Google Play.", "Account"),
+    FAQItem("Why did my export fail?", "Check that each source URI is still readable, that there is enough free storage, and that the project contains no unsupported effect, overlay, caption, speed, crop, or separate-audio edit. The export screen reports the current limitation.", "Troubleshooting"),
+    FAQItem("Can I cancel a subscription?", "There is no active subscription catalog or billing flow in this build.", "Account"),
     FAQItem("Where are my projects saved?", "Projects are saved locally on your device. Ensure you have enough storage space.", "Account")
 )
 
@@ -85,19 +84,6 @@ fun HelpCenterScreen(onClose: () -> Unit, onOpenContact: () -> Unit, onOpenRepor
                 }
                 
                 item {
-                    Spacer(Modifier.height(16.dp))
-                    Text("Tutorials", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(8.dp))
-                    
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TutorialCard(modifier = Modifier.weight(1f), title = "Getting Started", icon = Icons.Filled.PlayCircle)
-                        TutorialCard(modifier = Modifier.weight(1f), title = "Advanced Editing", icon = Icons.Filled.PlayCircle)
-                        TutorialCard(modifier = Modifier.weight(1f), title = "AI Features", icon = Icons.Filled.AutoAwesome)
-                    }
-                    Spacer(Modifier.height(16.dp))
-                }
-                
-                item {
                     ScrollableTabRow(
                         selectedTabIndex = categories.indexOf(selectedCategory),
                         edgePadding = 0.dp,
@@ -127,25 +113,6 @@ fun HelpCenterScreen(onClose: () -> Unit, onOpenContact: () -> Unit, onOpenRepor
                 
                 item { Spacer(Modifier.height(32.dp)) }
             }
-        }
-    }
-}
-
-@Composable
-fun TutorialCard(modifier: Modifier = Modifier, title: String, icon: androidx.compose.ui.graphics.vector.ImageVector) {
-    Surface(
-        modifier = modifier.height(100.dp).clickable { },
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant
-    ) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(12.dp),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
-            Spacer(Modifier.height(8.dp))
-            Text(title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
         }
     }
 }

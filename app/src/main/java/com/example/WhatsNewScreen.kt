@@ -18,9 +18,15 @@ import androidx.compose.ui.unit.dp
 data class ChangelogEntry(val version: String, val date: String, val changes: List<String>)
 
 val changelog = listOf(
-    ChangelogEntry("v1.0.0", "Today", listOf("Initial release!", "Core video editing features", "AI Auto Captions & Enhancer", "Pro subscriptions unlocked")),
-    ChangelogEntry("Beta 0.9", "Last Week", listOf("Performance improvements", "Fixed export crash on budget devices", "Added new audio effects")),
-    ChangelogEntry("Beta 0.8", "2 Weeks Ago", listOf("Added community transitions", "UI improvements for Editor", "Background removal beta"))
+    ChangelogEntry(
+        "Current build",
+        "September 2026",
+        listOf(
+            "Projects and media references stay local to the device.",
+            "Basic MP4 export is available for supported source clips and trims.",
+            "Unsupported AI, template, batch-export, and subscription flows are clearly disabled."
+        )
+    )
 )
 
 @OptIn(ExperimentalMaterial3Api::class)

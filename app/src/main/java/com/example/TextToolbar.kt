@@ -91,8 +91,7 @@ val textStylePresets = listOf(
 @Composable
 fun ColorWheelPicker(
     color: Color,
-    onColorChanged: (Color) -> Unit,
-    onEyedropperClick: () -> Unit
+    onColorChanged: (Color) -> Unit
 ) {
     var hsv by remember { mutableStateOf(floatArrayOf(0f, 1f, 1f)) }
     
@@ -155,9 +154,6 @@ fun ColorWheelPicker(
                 )
             }
             
-            IconButton(onClick = onEyedropperClick) {
-                Icon(Icons.Filled.Colorize, contentDescription = "Eyedropper")
-            }
         }
         Spacer(Modifier.height(8.dp))
         // Saturation/Value block
@@ -317,7 +313,6 @@ fun TextToolbar(
     isEditing: Boolean,
     onCloseEditing: () -> Unit,
     onCloseToolbar: () -> Unit,
-    onEyedropperSelect: () -> Unit,
     onCopy: () -> Unit,
     onDuplicate: () -> Unit,
     onPasteStyle: () -> Unit,
@@ -526,8 +521,7 @@ fun TextToolbar(
             Text("Text Color", style = MaterialTheme.typography.labelMedium)
             ColorWheelPicker(
                 color = textOverlay.textColor,
-                onColorChanged = { onUpdate(textOverlay.copy(textColor = it)) },
-                onEyedropperClick = onEyedropperSelect
+                onColorChanged = { onUpdate(textOverlay.copy(textColor = it)) }
             )
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(presetColors.size) { i ->

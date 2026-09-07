@@ -17,40 +17,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.text.googlefonts.Font
-import androidx.compose.ui.text.googlefonts.GoogleFont
 
-val fontProvider = GoogleFont.Provider(
-    providerAuthority = "com.google.android.gms.fonts",
-    providerPackage = "com.google.android.gms",
-    certificates = R.array.com_google_android_gms_fonts_certs
-)
-
-@Composable
-fun getFontForLanguage(language: String): FontFamily {
-    val fontName = when (language) {
-        "Hindi", "Marathi" -> "Mukta"
-        "Tamil" -> "Mukta Malar"
-        "Telugu" -> "Ramabhadra"
-        "Bengali" -> "Hind Siliguri"
-        "Kannada" -> "Baloo Tamma 2"
-        "Gujarati" -> "Mukta Vaani"
-        "Malayalam" -> "Manjari"
-        "Punjabi" -> "Mukta Mahee"
-        "Urdu" -> "Lateef"
-        else -> "Montserrat"
-    }
-
-    return remember(fontName) {
-        FontFamily(
-            Font(
-                googleFont = GoogleFont(fontName),
-                fontProvider = fontProvider,
-                weight = FontWeight.Bold
-            )
-        )
-    }
-}
+/** Uses Android's local fallback chain so caption rendering is offline-safe. */
+fun getFontForLanguage(language: String): FontFamily = FontFamily.SansSerif
 
 @Composable
 fun CaptionRenderer(

@@ -31,9 +31,9 @@ fun PrivacyConsentDialog(onDismiss: () -> Unit) {
                     Spacer(Modifier.height(8.dp))
                     Text("• Zero Content Tracking: We NEVER analyze or upload your video content. Everything stays on your device.", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(4.dp))
-                    Text("• Anonymous Analytics: We collect basic usage stats (e.g. which features are used) to improve the app.", style = MaterialTheme.typography.bodySmall)
+                    Text("• Local Usage Statistics: Optional editing counts and feature usage stay in the app's private storage.", style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(4.dp))
-                    Text("• Crash Reports: We collect error logs to fix bugs quickly.", style = MaterialTheme.typography.bodySmall)
+                    Text("• Local Crash Recovery: Optional crash messages stay on this device and are not sent automatically.", style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(8.dp))
                     Text("You can change these preferences at any time in Settings.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -44,7 +44,6 @@ fun PrivacyConsentDialog(onDismiss: () -> Unit) {
                         .putBoolean("has_seen_consent", true)
                         .putBoolean("analytics_enabled", true)
                         .putBoolean("crash_reporting_enabled", true)
-                        .putBoolean("personalized_recommendations", true)
                         .apply()
                     showDialog = false
                     onDismiss()
@@ -58,7 +57,6 @@ fun PrivacyConsentDialog(onDismiss: () -> Unit) {
                         .putBoolean("has_seen_consent", true)
                         .putBoolean("analytics_enabled", false)
                         .putBoolean("crash_reporting_enabled", false)
-                        .putBoolean("personalized_recommendations", false)
                         .apply()
                     showDialog = false
                     onDismiss()

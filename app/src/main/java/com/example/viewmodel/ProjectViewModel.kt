@@ -4,23 +4,22 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppDatabase
+import com.example.data.FolderEntity
 import com.example.data.ProjectEntity
 import com.example.data.ProjectRepository
-import com.example.data.FolderEntity
+import com.example.data.ProjectStorage
+import com.example.widget.WidgetUpdater
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import com.example.widget.WidgetUpdater
-import java.util.UUID
-import com.example.viewmodel.BackgroundTaskManager
-import com.example.viewmodel.BackgroundTask
-import com.example.viewmodel.TaskStatus
-import com.example.viewmodel.TaskType
 
 class ProjectViewModel(application: Application) : AndroidViewModel(application) {
     private val repository: ProjectRepository
+    private var autoSaveJob: Job? = null
 
     val uiState: StateFlow<List<ProjectEntity>>
     val foldersState: StateFlow<List<FolderEntity>>
@@ -35,15 +34,16 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
                 started = SharingStarted.WhileSubscribed(5000),
                 initialValue = emptyList()
             )
-            
+
         foldersState = repository.allFolders
             .stateIn(
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(5000),
                 initialValue = emptyList()
             )
-            
-        dirtyProject = repository.allProjects.map { list -> list.find { it.isDirty } }
+
+        dirtyProject = repository.allProjects
+            .map { list -> list.find { it.isDirty } }
             .stateIn(
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(5000),
@@ -51,29 +51,30 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
             )
     }
 
-    suspend fun getProject(id: String): ProjectEntity? {
-        return repository.getProjectById(id)
-    }
+    suspend fun getProject(id: String): ProjectEntity? = repository.getProjectById(id)
 
     fun addProject(project: ProjectEntity) {
         viewModelScope.launch {
-            repository.insert(project)
-            WidgetUpdater.updateWidgets(getApplication<Application>().applicationContext)
+            val context = getApplication<Application>().applicationContext
+            repository.insert(ProjectStorage.normalize(context, project))
+            com.example.utils.AnalyticsManager.trackVideoCreated()
+            WidgetUpdater.updateWidgets(context)
         }
     }
 
     fun updateProject(project: ProjectEntity) {
         viewModelScope.launch {
-            repository.update(project)
+            repository.update(ProjectStorage.normalize(getApplication(), project))
             WidgetUpdater.updateWidgets(getApplication<Application>().applicationContext)
         }
     }
 
     fun autoSaveProject(project: ProjectEntity) {
-        viewModelScope.launch {
-            repository.update(project)
+        autoSaveJob?.cancel()
+        autoSaveJob = viewModelScope.launch {
+            delay(500)
             val context = getApplication<Application>().applicationContext
-            com.example.NotificationHelper.showAutoSaveNotification(context, project.name)
+            repository.update(ProjectStorage.normalize(context, project))
             WidgetUpdater.updateWidgets(context)
         }
     }
@@ -81,41 +82,31 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
     fun deleteProject(project: ProjectEntity) {
         viewModelScope.launch {
             repository.delete(project)
+            ProjectStorage.deleteOwnedFiles(getApplication(), project)
             WidgetUpdater.updateWidgets(getApplication<Application>().applicationContext)
         }
     }
-    
-    fun syncProjectToCloud(project: ProjectEntity) {
-        val taskId = UUID.randomUUID().toString()
-        BackgroundTaskManager.addTask(
-            BackgroundTask(
-                id = taskId,
-                title = "Syncing ${project.name}",
-                type = TaskType.CLOUD_SYNC,
-                status = TaskStatus.RUNNING
-            )
-        )
-        
+
+    fun deleteAllLocalData(onComplete: () -> Unit = {}) {
         viewModelScope.launch {
             val context = getApplication<Application>().applicationContext
-            com.example.NotificationHelper.showCloudSyncNotification(context, project.name, false)
-            repository.update(project.copy(syncStatus = "syncing", progress = 0.1f))
-            BackgroundTaskManager.updateProgress(taskId, 0.1f, "Connecting to cloud...")
-            kotlinx.coroutines.delay(1000)
-            
-            repository.update(project.copy(syncStatus = "syncing", progress = 0.5f))
-            BackgroundTaskManager.updateProgress(taskId, 0.5f, "Uploading media assets...")
-            kotlinx.coroutines.delay(1500)
-            
-            repository.update(project.copy(syncStatus = "syncing", progress = 0.9f))
-            BackgroundTaskManager.updateProgress(taskId, 0.9f, "Finalizing project state...")
-            kotlinx.coroutines.delay(1000)
-            
-            val size = (50000..500000).random().toLong()
-            repository.update(project.copy(syncStatus = "synced", lastBackupTime = System.currentTimeMillis(), backupSize = size, progress = null))
-            com.example.NotificationHelper.showCloudSyncNotification(context, project.name, true)
-            BackgroundTaskManager.updateStatus(taskId, TaskStatus.COMPLETED)
+            val projects = repository.getAllProjectsOnce()
+            repository.deleteAllProjects()
+            repository.deleteAllFolders()
+            projects.forEach { ProjectStorage.deleteOwnedFiles(context, it) }
+            context.cacheDir.listFiles()?.forEach { it.deleteRecursively() }
+            context.externalCacheDir?.listFiles()?.forEach { it.deleteRecursively() }
+            WidgetUpdater.updateWidgets(context)
+            onComplete()
         }
+    }
+
+    fun syncProjectToCloud(project: ProjectEntity) {
+        android.widget.Toast.makeText(
+            getApplication<Application>(),
+            "Cloud backup is not available. This project is stored on this device.",
+            android.widget.Toast.LENGTH_LONG
+        ).show()
     }
 
     fun createFolder(name: String) {
@@ -126,10 +117,10 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
 
     fun deleteFolder(folder: FolderEntity) {
         viewModelScope.launch {
-            // Un-folder projects when a folder is deleted
-            uiState.value.filter { it.folderId == folder.id }.forEach {
-                repository.update(it.copy(folderId = null))
-            }
+            // Un-folder projects when a folder is deleted.
+            uiState.value
+                .filter { it.folderId == folder.id }
+                .forEach { repository.update(it.copy(folderId = null)) }
             repository.deleteFolder(folder)
         }
     }

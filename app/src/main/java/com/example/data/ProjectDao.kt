@@ -16,6 +16,9 @@ interface ProjectDao {
     @Query("SELECT * FROM projects WHERE id = :id LIMIT 1")
     suspend fun getProjectById(id: String): ProjectEntity?
 
+    @Query("SELECT * FROM projects")
+    suspend fun getAllProjectsOnce(): List<ProjectEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertProject(project: ProjectEntity)
 
@@ -28,6 +31,9 @@ interface ProjectDao {
     @Query("DELETE FROM projects WHERE id = :id")
     suspend fun deleteProjectById(id: String)
 
+    @Query("DELETE FROM projects")
+    suspend fun deleteAllProjects()
+
     @Query("SELECT * FROM folders ORDER BY name ASC")
     fun getAllFolders(): Flow<List<FolderEntity>>
 
@@ -36,4 +42,7 @@ interface ProjectDao {
 
     @Delete
     suspend fun deleteFolder(folder: FolderEntity)
+
+    @Query("DELETE FROM folders")
+    suspend fun deleteAllFolders()
 }

@@ -176,7 +176,6 @@ fun BadgeItem(badgeName: String) {
         "100 Videos" -> Icons.Filled.EmojiEvents
         "Night Owl Editor" -> Icons.Filled.DarkMode
         "Speed Editor" -> Icons.Filled.Speed
-        "AI Master" -> Icons.Filled.AutoAwesome
         else -> Icons.Filled.WorkspacePremium
     }
     

@@ -1,44 +1,43 @@
 package com.example
 
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import coil.compose.rememberAsyncImagePainter
+import androidx.compose.ui.platform.LocalContext
+import coil.compose.AsyncImage
 import com.example.data.ProjectEntity
-import java.text.SimpleDateFormat
+import com.example.data.ProjectStorage
+import java.text.DateFormat
 import java.util.Date
-import java.util.Locale
-
-data class ExportRecord(
-    val id: String,
-    val date: Long,
-    val resolution: String,
-    val size: String,
-    val format: String,
-    val isQueued: Boolean = false
-)
-
-val mockExports = listOf(
-    ExportRecord("1", System.currentTimeMillis() - 86400000, "1080p", "45 MB", "MP4"),
-    ExportRecord("2", System.currentTimeMillis() - 172800000, "720p", "25 MB", "MP4"),
-    ExportRecord("3", System.currentTimeMillis() - 259200000, "1080p", "12 MB", "GIF")
-)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,180 +45,91 @@ fun ProjectsScreen(
     projects: List<ProjectEntity>,
     onProjectClick: (String) -> Unit
 ) {
-    var showQueueScreen by remember { mutableStateOf(false) }
-    var storageUsed by remember { mutableStateOf("4.2 GB") }
-    
-    if (showQueueScreen) {
-        ExportQueueScreen(onClose = { showQueueScreen = false })
-        return
-    }
+    val context = LocalContext.current
+    val totalSize = projects.sumOf { ProjectStorage.calculateOwnedSizeBytes(context, it) }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Projects & Exports") },
-                actions = {
-                    IconButton(onClick = { showQueueScreen = true }) {
-                        Icon(Icons.Filled.QueuePlayNext, contentDescription = "Export Queue")
-                    }
-                }
-            )
-        }
+        topBar = { TopAppBar(title = { Text("Projects") }) }
     ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding),
             contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column {
-                            Text("Total Storage Used", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                            Text(storageUsed, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                        }
-                        Button(
-                            onClick = { storageUsed = "1.1 GB" },
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                        ) {
-                            Text("Clean Up")
-                        }
-                    }
-                }
+                Text(
+                    "${projects.size} local project(s) · ${formatProjectSize(totalSize)}",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
             }
-            
             if (projects.isEmpty()) {
                 item {
-                    Text("No projects yet.", modifier = Modifier.padding(16.dp))
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                        Text(
+                            "No projects yet. Choose New Project to import media with Android's system picker.",
+                            modifier = Modifier.padding(20.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            } else {
+                items(projects, key = { it.id }) { project ->
+                    ProjectCard(
+                        project = project,
+                        sizeBytes = ProjectStorage.calculateOwnedSizeBytes(context, project),
+                        onClick = { onProjectClick(project.id) }
+                    )
                 }
             }
-            
-            items(projects) { project ->
-                ProjectExportCard(
-                    project = project,
-                    exports = mockExports.take(project.name.length % 3 + 1), // random-ish exports
-                    onClick = { onProjectClick(project.id) }
+        }
+    }
+}
+
+@Composable
+private fun ProjectCard(project: ProjectEntity, sizeBytes: Long, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier.size(64.dp).clip(RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (project.thumbnailUri != null) {
+                    AsyncImage(
+                        model = project.thumbnailUri,
+                        contentDescription = "${project.name} thumbnail",
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Icon(Icons.Filled.Movie, contentDescription = null)
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(project.name, fontWeight = FontWeight.Bold, maxLines = 1)
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "${project.sourceMediaPaths.size} source item(s) · ${project.duration}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    "Edited ${DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(project.lastEdited))} · ${formatProjectSize(sizeBytes)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
     }
 }
 
-@Composable
-fun ProjectExportCard(project: ProjectEntity, exports: List<ExportRecord>, onClick: () -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(modifier = Modifier.size(60.dp).background(Color.DarkGray, RoundedCornerShape(8.dp))) {
-                    if (project.thumbnailUri != null) {
-                        Image(
-                            painter = rememberAsyncImagePainter(project.thumbnailUri),
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)),
-                            contentScale = ContentScale.Crop
-                        )
-                    } else {
-                        Icon(Icons.Filled.VideoFile, contentDescription = null, modifier = Modifier.align(Alignment.Center))
-                    }
-                }
-                Spacer(modifier = Modifier.width(16.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(project.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text("Last edited ${SimpleDateFormat("MMM dd", Locale.getDefault()).format(Date(project.lastEdited))}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Icon(if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, contentDescription = null)
-            }
-            
-            if (expanded) {
-                HorizontalDivider(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f))
-                Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-                    Text("Export History", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    
-                    exports.forEach { export ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Filled.Movie, contentDescription = null, modifier = Modifier.size(24.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(SimpleDateFormat("MMM dd, yyyy • HH:mm", Locale.getDefault()).format(Date(export.date)), style = MaterialTheme.typography.bodyMedium)
-                                Text("${export.resolution} • ${export.size} • ${export.format}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            FilledTonalButton(
-                                onClick = { /* Re-export logic, mock only */ },
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                                modifier = Modifier.height(32.dp)
-                            ) {
-                                Text("Re-Export", style = MaterialTheme.typography.labelSmall)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun ExportQueueScreen(onClose: () -> Unit) {
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Export Queue") },
-                navigationIcon = {
-                    IconButton(onClick = onClose) { Icon(Icons.Filled.ArrowBack, contentDescription = "Back") }
-                }
-            )
-        }
-    ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
-            Text("Pending Exports", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-                Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Vlog Day 1", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                        Text("Processing... 45%", style = MaterialTheme.typography.bodySmall)
-                    }
-                    IconButton(onClick = { }) { Icon(Icons.Filled.Close, contentDescription = "Cancel") }
-                }
-            }
-            
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha=0.5f))) {
-                Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.Schedule, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Summer Trip", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text("Queued", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    IconButton(onClick = { }) { Icon(Icons.Filled.Close, contentDescription = "Cancel") }
-                }
-            }
-        }
-    }
+private fun formatProjectSize(bytes: Long): String = when {
+    bytes < 1024L -> "$bytes B"
+    bytes < 1024L * 1024L -> "${bytes / 1024L} KB"
+    bytes < 1024L * 1024L * 1024L -> "${bytes / (1024L * 1024L)} MB"
+    else -> "${bytes / (1024L * 1024L * 1024L)} GB"
 }

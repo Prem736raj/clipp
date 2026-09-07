@@ -140,7 +140,6 @@ object AnalyticsManager {
     private fun checkBadges() {
         var totalExported = 0
         var totalCreated = 0
-        val allFeatures = mutableSetOf<String>()
         val daily = _fullJson.optJSONObject("daily") ?: JSONObject()
         val keys = daily.keys()
         while(keys.hasNext()) {
@@ -148,23 +147,12 @@ object AnalyticsManager {
             val day = daily.getJSONObject(key)
             totalCreated += day.optInt("created", 0)
             totalExported += day.optInt("exported", 0)
-            val features = day.optJSONObject("features") ?: JSONObject()
-            val fKeys = features.keys()
-            while(fKeys.hasNext()) {
-                allFeatures.add(fKeys.next())
-            }
         }
         
         if (totalExported >= 1 || totalCreated >= 1) awardBadge("First Video")
         if (totalExported >= 10) awardBadge("10 Videos")
         if (totalExported >= 100) awardBadge("100 Videos")
         
-        val aiFeatures = listOf("Auto Caption", "AI Enhance", "AI Object Remove", "AI Music", "AI Voice", "Smart Reframe")
-        var hasAllAI = true
-        for (f in aiFeatures) {
-            if (!allFeatures.contains(f)) hasAllAI = false
-        }
-        if (hasAllAI) awardBadge("AI Master")
     }
 
     private fun checkStreak() {
