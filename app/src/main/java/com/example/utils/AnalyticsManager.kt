@@ -134,7 +134,7 @@ object AnalyticsManager {
 
         sessionStartMs = 0L
     }
-    
+
     fun trackFeature(featureName: String) {
         if (!analyticsEnabled()) return
         val today = getTodayDate()
