@@ -26,6 +26,7 @@
 - `./gradlew.bat connectedDebugAndroidTest` on the `small_phone` API 36 AVD — passed.
 - Debug APK installed and `com.example.MainActivity` launched on `small_phone`; process stayed alive with no fatal startup exception in the sampled logcat.
 - Added a Robolectric storage regression test proving app-owned thumbnails can be deleted without deleting referenced source media.
+- Shortcut and deep-link actions now wait for the Home route, execute once, load the latest project from Room, and reject missing project IDs safely.
 - Project recovery no longer treats opening an editor as an edit, and recovery prompts are limited to Home/Projects launch surfaces.
 - `MediaClip` trim windows are clamped to the source duration before timeline mapping, playlist setup, and export.
 - Device media import and real MP4 export remain unverified until a test media fixture is exercised on the emulator.

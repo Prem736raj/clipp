@@ -75,7 +75,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import com.example.ui.theme.MyApplicationTheme
-import kotlinx.coroutines.delay
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.viewmodel.ProjectViewModel
 import androidx.compose.runtime.collectAsState
@@ -209,6 +208,7 @@ fun ClippApp(sharedVideoUri: String? = null, shortcutAction: String? = null) {
   val projectViewModel: ProjectViewModel = viewModel()
   
   var showShareIntentDialog by remember { mutableStateOf(sharedVideoUri != null) }
+  var handledShortcutAction by remember { mutableStateOf<String?>(null) }
 
   MyApplicationTheme(darkTheme = darkTheme) {
     Scaffold(
@@ -422,24 +422,40 @@ fun ClippApp(sharedVideoUri: String? = null, shortcutAction: String? = null) {
   }
 
   // Shortcut handling
-  LaunchedEffect(shortcutAction) {
-      if (shortcutAction != null) {
-          delay(100) // Wait for navigation to settle
-          when (shortcutAction) {
-              "new_project" -> navController.navigate(Screen.Create.route)
-              "quick_trim" -> navController.navigate("quick_edit?uri=") // Starts empty Quick Edit
-              "continue_last" -> {
-                  // Wait for projects to load (could be improved in real app)
-                  val latestProject = projectViewModel.uiState.value.maxByOrNull { it.lastEdited }
-                  if (latestProject != null) {
-                      navController.navigate("editor/${latestProject.id}")
-                  }
+  LaunchedEffect(shortcutAction, currentDestination) {
+      val action = shortcutAction ?: return@LaunchedEffect
+      // Splash/onboarding/permission navigation must finish first. Otherwise a
+      // shortcut can race the launch flow and be replaced by its destination.
+      if (currentDestination != Screen.Home.route || handledShortcutAction == action) {
+          return@LaunchedEffect
+      }
+
+      handledShortcutAction = action
+      when {
+          action == "new_project" -> navController.navigate(Screen.Create.route)
+          action == "quick_trim" -> navController.navigate("quick_edit?uri=")
+          action == "continue_last" -> {
+              val latestProject = projectViewModel.getLatestProject()
+              if (latestProject != null) {
+                  navController.navigate("editor/${latestProject.id}")
+              } else {
+                  android.widget.Toast.makeText(
+                      context,
+                      "There is no saved project to continue",
+                      android.widget.Toast.LENGTH_SHORT
+                  ).show()
               }
-              else -> {
-                  if (shortcutAction!!.startsWith("open_")) {
-                      val projectId = shortcutAction!!.removePrefix("open_")
-                      navController.navigate("editor/$projectId")
-                  }
+          }
+          action.startsWith("open_") -> {
+              val projectId = action.removePrefix("open_")
+              if (projectId.isBlank() || projectViewModel.getProject(projectId) == null) {
+                  android.widget.Toast.makeText(
+                      context,
+                      "That project is no longer available",
+                      android.widget.Toast.LENGTH_SHORT
+                  ).show()
+              } else {
+                  navController.navigate("editor/$projectId")
               }
           }
       }

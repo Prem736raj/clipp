@@ -53,6 +53,9 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
 
     suspend fun getProject(id: String): ProjectEntity? = repository.getProjectById(id)
 
+    suspend fun getLatestProject(): ProjectEntity? =
+        repository.getAllProjectsOnce().maxByOrNull { it.lastEdited }
+
     fun addProject(project: ProjectEntity) {
         viewModelScope.launch {
             val context = getApplication<Application>().applicationContext
