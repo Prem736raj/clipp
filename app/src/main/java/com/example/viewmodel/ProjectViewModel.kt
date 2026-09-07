@@ -99,6 +99,7 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
             projects.forEach { ProjectStorage.deleteOwnedFiles(context, it) }
             context.cacheDir.listFiles()?.forEach { it.deleteRecursively() }
             context.externalCacheDir?.listFiles()?.forEach { it.deleteRecursively() }
+            com.example.utils.AnalyticsManager.clearLocalData()
             WidgetUpdater.updateWidgets(context)
             onComplete()
         }

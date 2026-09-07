@@ -22,7 +22,7 @@ fun PrivacySettingsScreen(onClose: () -> Unit) {
     val context = LocalContext.current
     val prefs = context.getSharedPreferences("clipp_privacy", Context.MODE_PRIVATE)
     
-    var analyticsEnabled by remember { mutableStateOf(prefs.getBoolean("analytics_enabled", true)) }
+    var analyticsEnabled by remember { mutableStateOf(prefs.getBoolean("analytics_enabled", false)) }
     var crashReportingEnabled by remember { mutableStateOf(prefs.getBoolean("crash_reporting_enabled", true)) }
     
     var showPrivacyPolicy by remember { mutableStateOf(false) }
@@ -66,7 +66,7 @@ fun PrivacySettingsScreen(onClose: () -> Unit) {
                     checked = analyticsEnabled,
                     onCheckedChange = { 
                         analyticsEnabled = it
-                        prefs.edit().putBoolean("analytics_enabled", it).apply()
+                        com.example.utils.AnalyticsManager.setAnalyticsEnabled(it)
                     }
                 )
                 

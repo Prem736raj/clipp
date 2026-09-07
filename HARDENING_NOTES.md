@@ -31,4 +31,5 @@
 - Project recovery no longer treats opening an editor as an edit, and recovery prompts are limited to Home/Projects launch surfaces.
 - `MediaClip` trim windows are clamped to the source duration before timeline mapping, playlist setup, and export.
 - Export now renders basic constant speed (with pitch preservation option), rotation, horizontal/vertical flip, per-clip volume, mute, trims, and still-image durations through Media3 effects/audio processors. Crop, filters, overlays, captions, transitions, and separate audio remain blocked until they have matching renderers.
+- Local usage analytics are now opt-in and disabling them clears the stored dashboard data; Delete All Local Data also clears the in-memory analytics snapshot. Cloud/device-transfer backup rules explicitly exclude local Clipp project state.
 - Device media import and real MP4 export remain unverified until a test media fixture is exercised on the emulator.
