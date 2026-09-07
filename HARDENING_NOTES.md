@@ -25,8 +25,10 @@
 - `./gradlew.bat testDebugUnitTest assembleDebug` after trim/recovery changes — passed.
 - `./gradlew.bat connectedDebugAndroidTest` on the `small_phone` API 36 AVD — passed.
 - Debug APK installed and `com.example.MainActivity` launched on `small_phone`; process stayed alive with no fatal startup exception in the sampled logcat.
+- After the export capability update, `./gradlew.bat --no-daemon --max-workers=2 testDebugUnitTest assembleDebug` — passed; `connectedDebugAndroidTest` — passed; the rebuilt APK installed and `MainActivity` remained alive on the API 36 emulator with no sampled fatal startup exception.
 - Added a Robolectric storage regression test proving app-owned thumbnails can be deleted without deleting referenced source media.
 - Shortcut and deep-link actions now wait for the Home route, execute once, load the latest project from Room, and reject missing project IDs safely.
 - Project recovery no longer treats opening an editor as an edit, and recovery prompts are limited to Home/Projects launch surfaces.
 - `MediaClip` trim windows are clamped to the source duration before timeline mapping, playlist setup, and export.
+- Export now renders basic constant speed (with pitch preservation option), rotation, horizontal/vertical flip, per-clip volume, mute, trims, and still-image durations through Media3 effects/audio processors. Crop, filters, overlays, captions, transitions, and separate audio remain blocked until they have matching renderers.
 - Device media import and real MP4 export remain unverified until a test media fixture is exercised on the emulator.

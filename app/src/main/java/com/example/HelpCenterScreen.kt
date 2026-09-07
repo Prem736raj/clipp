@@ -21,13 +21,13 @@ import androidx.compose.ui.unit.dp
 data class FAQItem(val question: String, val answer: String, val category: String)
 
 val FAQs = listOf(
-    FAQItem("How do I export a video?", "Open Export in the editor and tap Export MP4. The current renderer supports source clips, trims, still-image durations, and source mute. Unsupported effects, overlays, and separate audio layers are blocked until their export renderer is ready.", "Exporting"),
+    FAQItem("How do I export a video?", "Open Export in the editor and tap Export MP4. The current renderer supports source clips, trims, still-image durations, basic speed, rotation/flip, volume, and source mute. Unsupported effects, overlays, and separate audio layers are blocked until their export renderer is ready.", "Exporting"),
     FAQItem("Does Clipp add a watermark?", "The current basic renderer does not add a watermark. Subscriptions and paid tiers are not active in this build.", "Exporting"),
     FAQItem("Can I add music?", "The current export-safe build preserves embedded source audio and supports muting it. Separate music tracks and voiceover are not available yet.", "Editing"),
     FAQItem("How do I add captions?", "Captions are not available in this build yet. Clipp does not generate or display a fabricated transcript.", "Editing"),
     FAQItem("Are AI editing tools available?", "AI enhancement, object removal, background removal, smart reframe, and related processing are disabled until they can be implemented and validated locally.", "Editing"),
     FAQItem("How do I split a clip?", "Move the playhead to the desired position on the timeline and tap the 'Split' tool.", "Editing"),
-    FAQItem("Why did my export fail?", "Check that each source URI is still readable, that there is enough free storage, and that the project contains no unsupported effect, overlay, caption, speed, crop, or separate-audio edit. The export screen reports the current limitation.", "Troubleshooting"),
+    FAQItem("Why did my export fail?", "Check that each source URI is still readable, that there is enough free storage, and that the project contains no unsupported effect, overlay, caption, crop, or separate-audio edit. The export screen reports the current limitation.", "Troubleshooting"),
     FAQItem("Can I cancel a subscription?", "There is no active subscription catalog or billing flow in this build.", "Account"),
     FAQItem("Where are my projects saved?", "Projects are saved locally on your device. Ensure you have enough storage space.", "Account")
 )

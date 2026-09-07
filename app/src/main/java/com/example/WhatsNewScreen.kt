@@ -23,7 +23,7 @@ val changelog = listOf(
         "September 2026",
         listOf(
             "Projects and media references stay local to the device.",
-            "Basic MP4 export is available for supported source clips and trims.",
+            "MP4 export supports source clips, trims, basic speed, rotation/flip, volume, and mute.",
             "Unsupported AI, template, batch-export, and subscription flows are clearly disabled."
         )
     )

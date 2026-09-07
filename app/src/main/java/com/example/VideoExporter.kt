@@ -7,11 +7,18 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import androidx.core.content.FileProvider
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.audio.BaseAudioProcessor
+import androidx.media3.common.audio.SonicAudioProcessor
+import androidx.media3.effect.ScaleAndRotateTransformation
+import androidx.media3.effect.SpeedChangeEffect
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
+import androidx.media3.transformer.Effects
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
@@ -25,8 +32,11 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.roundToInt
 
 data class ExportMetadata(
     val durationMs: Long,
@@ -156,14 +166,16 @@ class VideoExporter(context: Context) {
     }
 
     private fun MediaClip.toEditedMediaItem(): EditedMediaItem? {
-        if (sourceUri.isBlank()) return null
-        val sourceDurationMs = safeOriginalDurationMs.takeIf { it > 0L } ?: return null
-        val startMs = effectiveTrimStartMs
-        val endMs = effectiveTrimEndMs
+        val normalized = normalized()
+        if (normalized.sourceUri.isBlank()) return null
+        normalized.safeOriginalDurationMs.takeIf { it > 0L } ?: return null
+        val startMs = normalized.effectiveTrimStartMs
+        val endMs = normalized.effectiveTrimEndMs
         if (endMs <= startMs) return null
-        val builder = MediaItem.Builder().setUri(Uri.parse(sourceUri))
-        if (isPhoto) {
-            builder.setImageDurationMs((endMs - startMs).coerceAtLeast(1L))
+        val safeSpeed = normalized.playbackSpeed
+        val builder = MediaItem.Builder().setUri(Uri.parse(normalized.sourceUri))
+        if (normalized.isPhoto) {
+            builder.setImageDurationMs(((endMs - startMs) / safeSpeed).toLong().coerceAtLeast(1L))
         } else {
             builder.setClippingConfiguration(
                 MediaItem.ClippingConfiguration.Builder()
@@ -172,9 +184,38 @@ class VideoExporter(context: Context) {
                     .build()
             )
         }
-        return EditedMediaItem.Builder(builder.build())
-            .setRemoveAudio(isPhoto || isMuted)
-            .build()
+
+        val videoEffects = mutableListOf<androidx.media3.common.Effect>()
+        if (!normalized.isPhoto && safeSpeed != 1f) {
+            videoEffects += SpeedChangeEffect(safeSpeed)
+        }
+        if (normalized.rotation != 0f || normalized.flipHorizontal || normalized.flipVertical) {
+            videoEffects += ScaleAndRotateTransformation.Builder()
+                .setScale(
+                    if (normalized.flipHorizontal) -1f else 1f,
+                    if (normalized.flipVertical) -1f else 1f
+                )
+                .setRotationDegrees(normalized.rotation)
+                .build()
+        }
+
+        val audioProcessors = mutableListOf<AudioProcessor>()
+        if (!normalized.isPhoto && !normalized.isMuted && safeSpeed != 1f) {
+            audioProcessors += SonicAudioProcessor().apply {
+                setSpeed(safeSpeed)
+                setPitch(if (normalized.maintainPitch) 1f else safeSpeed)
+            }
+        }
+        if (!normalized.isPhoto && !normalized.isMuted && normalized.volume != 1f) {
+            audioProcessors += VolumeAudioProcessor(normalized.volume)
+        }
+
+        val editedItem = EditedMediaItem.Builder(builder.build())
+            .setRemoveAudio(normalized.isPhoto || normalized.isMuted)
+        if (videoEffects.isNotEmpty() || audioProcessors.isNotEmpty()) {
+            editedItem.setEffects(Effects(audioProcessors, videoEffects))
+        }
+        return editedItem.build()
     }
 
     private fun publishAndValidate(
@@ -279,11 +320,8 @@ class VideoExporter(context: Context) {
 
 fun MediaClip.hasUnsupportedExportEdits(): Boolean {
     val defaultCrop = androidx.compose.ui.geometry.Rect(0f, 0f, 1f, 1f)
-    return playbackSpeed != 1f ||
-        !maintainPitch ||
-        rotation != 0f ||
-        flipHorizontal ||
-        flipVertical ||
+    return !playbackSpeed.isFinite() || playbackSpeed !in 0.1f..10f ||
+        !volume.isFinite() || volume !in 0f..1f ||
         cropRect != defaultCrop ||
         scale != 1f ||
         posX != 0.5f ||
@@ -295,6 +333,40 @@ fun MediaClip.hasUnsupportedExportEdits(): Boolean {
         photoAnimationSettings.type != PhotoAnimationType.NONE ||
         keyframes.isNotEmpty() ||
         speedCurve != null ||
-        volume != 1f ||
         audioEffects != AudioEffects()
+}
+
+/** Applies a clip's simple linear volume change to decoded PCM audio. */
+internal class VolumeAudioProcessor(volume: Float) : BaseAudioProcessor() {
+    private val gain = volume.coerceIn(0f, 1f)
+
+    override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
+        if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT &&
+            inputAudioFormat.encoding != C.ENCODING_PCM_FLOAT
+        ) {
+            throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
+        }
+        return inputAudioFormat
+    }
+
+    override fun isActive(): Boolean = gain != 1f
+
+    override fun queueInput(inputBuffer: ByteBuffer) {
+        val input = inputBuffer.order(ByteOrder.LITTLE_ENDIAN)
+        val output = replaceOutputBuffer(input.remaining()).order(ByteOrder.LITTLE_ENDIAN)
+        when (inputAudioFormat.encoding) {
+            C.ENCODING_PCM_16BIT -> {
+                while (input.remaining() >= 2) {
+                    val sample = input.short.toInt()
+                    output.putShort((sample * gain).roundToInt().coerceIn(-32768, 32767).toShort())
+                }
+            }
+            C.ENCODING_PCM_FLOAT -> {
+                while (input.remaining() >= 4) {
+                    output.putFloat((input.float * gain).coerceIn(-1f, 1f))
+                }
+            }
+        }
+        output.flip()
+    }
 }

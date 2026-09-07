@@ -99,9 +99,9 @@ fun ExportSettingsScreen(
             ) {
                 item {
                     Spacer(Modifier.height(8.dp))
-                    Text("Basic MP4 export", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text("MP4 export", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     Text(
-                        "Clipp will render the selected source clips, their trims, still-image durations, and muted source audio into a real MP4.",
+                        "Clipp will render the selected source clips, trims, basic speed, rotation/flip, volume, and mute settings into a real MP4.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -116,9 +116,9 @@ fun ExportSettingsScreen(
                             Spacer(Modifier.width(8.dp))
                             Text(
                                 if (hasUnsupportedEdits) {
-                                    "This project contains effects, overlays, captions, speed changes, or audio layers that the current base renderer cannot safely include yet. Remove those edits before exporting."
+                                    "This project contains an edit that the current renderer cannot safely include yet, such as crop, filters, overlays, captions, transitions, or separate audio. Remove that edit before exporting."
                                 } else {
-                                    "The current renderer does not claim to include advanced effects, text, captions, overlays, or separate audio layers."
+                                    "Advanced effects, text, captions, overlays, transitions, and separate audio layers are not included in this export yet."
                                 },
                                 style = MaterialTheme.typography.bodySmall
                             )

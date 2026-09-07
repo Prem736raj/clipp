@@ -84,6 +84,7 @@ dependencies {
   implementation(libs.androidx.compose.material.icons.extended)
   implementation(libs.androidx.media3.exoplayer)
   implementation(libs.androidx.media3.ui)
+  implementation("androidx.media3:media3-effect:1.5.1")
   implementation("androidx.media3:media3-transformer:1.5.1")
   implementation(libs.androidx.compose.material3)
   implementation(libs.androidx.compose.ui)
