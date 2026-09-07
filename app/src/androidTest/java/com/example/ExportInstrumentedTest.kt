@@ -138,6 +138,45 @@ class ExportInstrumentedTest {
     }
 
     @Test
+    fun transformClipKeyframesAreRenderedAndPublished() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val source = File.createTempFile("clipp-export-keyframes-", ".png", context.cacheDir)
+        val bitmap = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(android.graphics.Color.rgb(60, 180, 110))
+        }
+        source.outputStream().use { output ->
+            assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
+        }
+        bitmap.recycle()
+
+        val clip = MediaClip(
+            sourceUri = Uri.fromFile(source).toString(),
+            originalDurationMs = 1_000L,
+            trimEndMs = 1_000L,
+            isPhoto = true,
+            posX = 0.4f,
+            keyframes = mapOf(
+                "posX" to listOf(Keyframe(timeMs = 0L, value = 0.4f), Keyframe(timeMs = 1_000L, value = 0.6f)),
+                "posY" to listOf(Keyframe(timeMs = 0L, value = 0.45f), Keyframe(timeMs = 1_000L, value = 0.55f)),
+                "scale" to listOf(Keyframe(timeMs = 0L, value = 0.9f), Keyframe(timeMs = 1_000L, value = 1.05f)),
+                "rotation" to listOf(Keyframe(timeMs = 0L, value = -10f), Keyframe(timeMs = 1_000L, value = 10f))
+            )
+        )
+        val exporter = VideoExporter(context)
+        var result: Outcome? = null
+        try {
+            result = awaitExport(exporter, listOf(clip), "Clipp_instrumented_keyframes.mp4")
+            assertSuccessful(result!!)
+            assertPublishedMp4(context, result!!)
+            assertFramesDiffer(context, result!!, 100_000L, 800_000L)
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            source.delete()
+        }
+    }
+
+    @Test
     fun separateAudioTrackIsMixedIntoPublishedMp4() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val source = File.createTempFile("clipp-export-audio-base-", ".png", context.cacheDir)
@@ -239,6 +278,34 @@ class ExportInstrumentedTest {
             assertTrue(duration > 0L)
             if (requireAudio) {
                 assertTrue(retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO) == "yes")
+            }
+        } finally {
+            retriever.release()
+        }
+    }
+
+    private fun assertFramesDiffer(
+        context: android.content.Context,
+        result: Outcome,
+        firstFrameUs: Long,
+        secondFrameUs: Long
+    ) {
+        val retriever = android.media.MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(context, result.uri!!)
+            val first = retriever.getFrameAtTime(
+                firstFrameUs,
+                android.media.MediaMetadataRetriever.OPTION_CLOSEST
+            ) ?: error("Missing first keyframe output frame")
+            val second = retriever.getFrameAtTime(
+                secondFrameUs,
+                android.media.MediaMetadataRetriever.OPTION_CLOSEST
+            ) ?: error("Missing second keyframe output frame")
+            try {
+                assertTrue("Keyframed transform did not change exported pixels", !first.sameAs(second))
+            } finally {
+                first.recycle()
+                second.recycle()
             }
         } finally {
             retriever.release()

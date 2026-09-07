@@ -41,8 +41,31 @@ class ExampleUnitTest {
     assertFalse(supported.hasUnsupportedExportEdits())
     assertFalse(cropped.hasUnsupportedExportEdits())
 
-    val unsupported = EditorState(clips = listOf(basic.copy(posX = 0.2f)))
-    assertTrue(unsupported.hasUnsupportedExportEdits())
+    val positioned = EditorState(clips = listOf(basic.copy(posX = 0.2f)))
+    assertFalse(positioned.hasUnsupportedExportEdits())
+  }
+
+  @Test
+  fun transformClipKeyframesCanBeExportedButCropKeyframesAreBlocked() {
+    val basic = MediaClip(
+      sourceUri = "content://media/video/1",
+      originalDurationMs = 1_000L,
+      trimEndMs = 1_000L
+    )
+    val animatedTransform = basic.copy(
+      posX = 0.35f,
+      keyframes = mapOf(
+        "posX" to listOf(Keyframe(timeMs = 0L, value = 0.35f), Keyframe(timeMs = 1_000L, value = 0.65f)),
+        "scale" to listOf(Keyframe(timeMs = 0L, value = 0.9f), Keyframe(timeMs = 1_000L, value = 1.1f)),
+        "rotation" to listOf(Keyframe(timeMs = 0L, value = 0f), Keyframe(timeMs = 1_000L, value = 15f))
+      )
+    )
+    val animatedCrop = basic.copy(
+      keyframes = mapOf("cropLeft" to listOf(Keyframe(timeMs = 0L, value = 0f), Keyframe(timeMs = 1_000L, value = 0.1f)))
+    )
+
+    assertFalse(EditorState(clips = listOf(animatedTransform)).hasUnsupportedExportEdits())
+    assertTrue(EditorState(clips = listOf(animatedCrop)).hasUnsupportedExportEdits())
   }
 
   @Test

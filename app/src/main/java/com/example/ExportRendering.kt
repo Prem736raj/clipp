@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
@@ -19,6 +20,7 @@ import androidx.media3.common.Effect
 import androidx.media3.effect.BitmapOverlay
 import androidx.media3.effect.Crop
 import androidx.media3.effect.GaussianBlur
+import androidx.media3.effect.MatrixTransformation
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.OverlaySettings
 import androidx.media3.effect.RgbMatrix
@@ -28,6 +30,7 @@ import kotlin.math.max
 import kotlin.math.min
 
 private val EXPORT_DEFAULT_CROP = androidx.compose.ui.geometry.Rect(0f, 0f, 1f, 1f)
+private val EXPORT_SUPPORTED_CLIP_KEYFRAMES = setOf("posX", "posY", "scale", "rotation")
 
 /** A small, deterministic overlay implementation used by the Media3 renderer. */
 private class TimedBitmapOverlay(
@@ -53,6 +56,37 @@ private data class BitmapWindow(
 
 private class ExportRgbMatrix(private val matrix: FloatArray) : RgbMatrix {
     override fun getMatrix(presentationTimeUs: Long, useHdr: Boolean): FloatArray = matrix.copyOf()
+}
+
+/**
+ * Applies the same position, scale, rotation and flip interpolation used by
+ * the editor preview to every exported frame. MatrixTransformation operates
+ * in Media3's normalized device coordinates, so a project position of 0.5 is
+ * the centre and values outside the frame are deliberately clipped.
+ */
+private class KeyframedClipTransformation(
+    private val clip: MediaClip
+) : MatrixTransformation {
+    override fun getMatrix(presentationTimeUs: Long): Matrix {
+        val relativeTimeMs = presentationTimeUs / 1_000L
+        val scale = clip.keyframes
+            .getValueAtTime("scale", relativeTimeMs, clip.scale)
+            .coerceIn(0.05f, 10f)
+        val rotation = clip.keyframes
+            .getValueAtTime("rotation", relativeTimeMs, clip.rotation)
+        val posX = clip.keyframes
+            .getValueAtTime("posX", relativeTimeMs, clip.posX)
+        val posY = clip.keyframes
+            .getValueAtTime("posY", relativeTimeMs, clip.posY)
+        return Matrix().apply {
+            postScale(
+                (if (clip.flipHorizontal) -1f else 1f) * scale,
+                (if (clip.flipVertical) -1f else 1f) * scale
+            )
+            postRotate(rotation)
+            postTranslate((posX - 0.5f) * 2f, (0.5f - posY) * 2f)
+        }
+    }
 }
 
 private fun overlaySettings(
@@ -464,7 +498,10 @@ internal fun buildExportVideoEffects(
             1f - crop.top * 2f
         )
     }
-    if (clip.rotation != 0f || clip.flipHorizontal || clip.flipVertical || clip.scale != 1f) {
+    val hasTransformKeyframes = clip.keyframes.keys.any { it in EXPORT_SUPPORTED_CLIP_KEYFRAMES }
+    if (clip.posX != 0.5f || clip.posY != 0.5f || hasTransformKeyframes) {
+        effects += KeyframedClipTransformation(clip)
+    } else if (clip.rotation != 0f || clip.flipHorizontal || clip.flipVertical || clip.scale != 1f) {
         effects += ScaleAndRotateTransformation.Builder()
             .setScale(
                 (if (clip.flipHorizontal) -1f else 1f) * clip.scale,
@@ -508,8 +545,9 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
     val reasons = mutableListOf<String>()
     clips.forEach { clip ->
         if (clip.hasUnsupportedExportEdits()) reasons += "an unsupported clip edit"
-        if (clip.posX != 0.5f || clip.posY != 0.5f) reasons += "clip positioning"
-        if (clip.keyframes.isNotEmpty()) reasons += "clip keyframes"
+        if (clip.keyframes.keys.any { it !in EXPORT_SUPPORTED_CLIP_KEYFRAMES }) {
+            reasons += "unsupported clip keyframes"
+        }
         if (clip.audioEffects != AudioEffects()) reasons += "advanced clip audio effects"
         if (clip.transitionNext.type !in setOf(TransitionType.NONE, TransitionType.FADE_TO_BLACK, TransitionType.FADE_TO_WHITE)) {
             reasons += "this transition type"

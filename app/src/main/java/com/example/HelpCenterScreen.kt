@@ -21,7 +21,7 @@ import androidx.compose.ui.unit.dp
 data class FAQItem(val question: String, val answer: String, val category: String)
 
 val FAQs = listOf(
-    FAQItem("How do I export a video?", "Open Export in the editor and tap Export MP4. The renderer supports source clips, trims, still-image durations, speed, crop, filters, basic blur, rotation/flip, volume, static text, captions, stickers, drawings, frames, image overlays, supported fades, and separate audio tracks. Advanced animated effects and video overlays are still blocked.", "Exporting"),
+    FAQItem("How do I export a video?", "Open Export in the editor and tap Export MP4. The renderer supports source clips, trims, still-image durations, speed, crop, filters, basic blur, rotation/flip, clip positioning and transform keyframes, volume, static text, captions, stickers, drawings, frames, image overlays, supported fades, and separate audio tracks. Advanced animated effects and video overlays are still blocked.", "Exporting"),
     FAQItem("Does Clipp add a watermark?", "The current basic renderer does not add a watermark. Subscriptions and paid tiers are not active in this build.", "Exporting"),
     FAQItem("Can I add music?", "Yes. Use Music to select an audio file, or Voiceover to record from the microphone. The selected track is saved in the local project and mixed into MP4 export.", "Editing"),
     FAQItem("How do I add captions?", "Static caption segments are rendered into export. Automatic speech transcription is not active in this build, so captions must come from an existing project state.", "Editing"),
