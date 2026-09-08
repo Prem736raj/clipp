@@ -177,6 +177,78 @@ class ExportInstrumentedTest {
     }
 
     @Test
+    fun simpleLayerAnimationsAreRenderedAndPublished() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val source = File.createTempFile("clipp-export-animated-layers-", ".png", context.cacheDir)
+        val bitmap = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(android.graphics.Color.rgb(170, 80, 210))
+        }
+        source.outputStream().use { output ->
+            assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
+        }
+        bitmap.recycle()
+
+        val clip = MediaClip(
+            sourceUri = Uri.fromFile(source).toString(),
+            originalDurationMs = 1_000L,
+            trimEndMs = 1_000L,
+            isPhoto = true
+        )
+        val state = EditorState(
+            clips = listOf(clip),
+            texts = listOf(
+                TextOverlay(
+                    text = "Animated",
+                    durationMs = 1_000L,
+                    posY = 0.35f,
+                    animIn = TextAnimIn.FADE_IN,
+                    animLoop = TextAnimLoop.PULSE,
+                    animOut = TextAnimOut.SCALE_OUT
+                )
+            ),
+            stickers = listOf(
+                StickerOverlay(
+                    modelId = "star",
+                    content = "★",
+                    category = StickerCategory.SHAPE,
+                    durationMs = 1_000L,
+                    posX = 0.2f,
+                    posY = 0.75f,
+                    animIn = TextAnimIn.ROTATE_IN,
+                    animLoop = TextAnimLoop.SWING,
+                    animOut = TextAnimOut.FADE_OUT
+                )
+            ),
+            overlays = listOf(
+                OverlayClip(
+                    sourceUri = Uri.fromFile(source).toString(),
+                    originalDurationMs = 1_000L,
+                    isPhoto = true,
+                    trimEndMs = 1_000L,
+                    posX = 0.8f,
+                    posY = 0.75f,
+                    scaleX = 0.2f,
+                    scaleY = 0.2f,
+                    entranceAnim = OverlayAnim.FADE,
+                    exitAnim = OverlayAnim.SCALE
+                )
+            )
+        )
+        val exporter = VideoExporter(context)
+        var result: Outcome? = null
+        try {
+            result = awaitExport(exporter, listOf(clip), "Clipp_instrumented_animated_layers.mp4", state)
+            assertSuccessful(result!!)
+            assertPublishedMp4(context, result!!)
+            assertFramesDiffer(context, result!!, 100_000L, 800_000L)
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            source.delete()
+        }
+    }
+
+    @Test
     fun separateAudioTrackIsMixedIntoPublishedMp4() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val source = File.createTempFile("clipp-export-audio-base-", ".png", context.cacheDir)

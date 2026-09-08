@@ -26,11 +26,30 @@ import androidx.media3.effect.OverlaySettings
 import androidx.media3.effect.RgbMatrix
 import androidx.media3.effect.ScaleAndRotateTransformation
 import androidx.media3.effect.TextureOverlay
+import kotlin.math.PI
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sin
 
 private val EXPORT_DEFAULT_CROP = androidx.compose.ui.geometry.Rect(0f, 0f, 1f, 1f)
 private val EXPORT_SUPPORTED_CLIP_KEYFRAMES = setOf("posX", "posY", "scale", "rotation")
+private val EXPORT_SUPPORTED_TEXT_ANIM_IN = setOf(
+    TextAnimIn.NONE,
+    TextAnimIn.FADE_IN,
+    TextAnimIn.SCALE_IN,
+    TextAnimIn.ROTATE_IN
+)
+private val EXPORT_SUPPORTED_TEXT_ANIM_LOOP = setOf(
+    TextAnimLoop.NONE,
+    TextAnimLoop.PULSE,
+    TextAnimLoop.WAVE,
+    TextAnimLoop.SWING
+)
+private val EXPORT_SUPPORTED_TEXT_ANIM_OUT = setOf(
+    TextAnimOut.NONE,
+    TextAnimOut.FADE_OUT,
+    TextAnimOut.SCALE_OUT
+)
 
 /** A small, deterministic overlay implementation used by the Media3 renderer. */
 private class TimedBitmapOverlay(
@@ -87,6 +106,90 @@ private class KeyframedClipTransformation(
             postTranslate((posX - 0.5f) * 2f, (0.5f - posY) * 2f)
         }
     }
+}
+
+private data class LayerMotion(
+    val alpha: Float = 1f,
+    val scale: Float = 1f,
+    val rotationDegrees: Float = 0f
+)
+
+private fun easedProgress(value: Float): Float = sin(value.coerceIn(0f, 1f) * PI.toFloat() / 2f)
+
+private fun textLayerMotion(
+    relativeTimeMs: Long,
+    durationMs: Long,
+    animIn: TextAnimIn,
+    animInDurationMs: Long,
+    animInDelayMs: Long,
+    animLoop: TextAnimLoop,
+    animLoopDurationMs: Long,
+    animLoopDelayMs: Long,
+    animOut: TextAnimOut,
+    animOutDurationMs: Long,
+    animOutDelayMs: Long
+): LayerMotion {
+    var alpha = 1f
+    var scale = 1f
+    var rotation = 0f
+    val inDelay = animInDelayMs.coerceAtLeast(0L)
+    val inDuration = animInDurationMs.coerceAtLeast(1L)
+
+    if (animIn != TextAnimIn.NONE) {
+        if (relativeTimeMs < inDelay) return LayerMotion(alpha = 0f)
+        if (relativeTimeMs < inDelay + inDuration) {
+            val progress = (relativeTimeMs - inDelay).toFloat() / inDuration
+            val ease = easedProgress(progress)
+            when (animIn) {
+                TextAnimIn.FADE_IN -> alpha = ease
+                TextAnimIn.SCALE_IN -> {
+                    alpha = ease
+                    scale *= ease.coerceAtLeast(0.001f)
+                }
+                TextAnimIn.ROTATE_IN -> {
+                    alpha = ease
+                    scale *= ease.coerceAtLeast(0.001f)
+                    rotation -= (1f - ease) * 180f
+                }
+                else -> Unit
+            }
+        }
+    }
+
+    val exitStart = (durationMs - animOutDurationMs.coerceAtLeast(0L) - animOutDelayMs.coerceAtLeast(0L)).coerceAtLeast(0L)
+    val loopStartsAt = inDelay + inDuration + animLoopDelayMs.coerceAtLeast(0L)
+    if (relativeTimeMs >= loopStartsAt &&
+        (animOut == TextAnimOut.NONE || relativeTimeMs < exitStart) &&
+        animLoopDurationMs > 0L
+    ) {
+        val loopProgress = ((relativeTimeMs - loopStartsAt) % animLoopDurationMs).toFloat() / animLoopDurationMs
+        when (animLoop) {
+            TextAnimLoop.PULSE -> scale *= 1f + 0.1f * sin(loopProgress * PI.toFloat() * 2f)
+            TextAnimLoop.WAVE -> rotation += 5f * sin(loopProgress * PI.toFloat() * 2f)
+            TextAnimLoop.SWING -> rotation += 15f * sin(loopProgress * PI.toFloat() * 2f)
+            else -> Unit
+        }
+    }
+
+    if (animOut != TextAnimOut.NONE && relativeTimeMs >= exitStart) {
+        val outDelay = animOutDelayMs.coerceAtLeast(0L)
+        if (relativeTimeMs < exitStart + outDelay) {
+            return LayerMotion(alpha = alpha.coerceIn(0f, 1f), scale = scale, rotationDegrees = rotation)
+        }
+        val outDuration = animOutDurationMs.coerceAtLeast(1L)
+        val progress = ((relativeTimeMs - exitStart - outDelay).toFloat() / outDuration).coerceIn(0f, 1f)
+        val inverseEase = 1f - easedProgress(progress)
+        when (animOut) {
+            TextAnimOut.FADE_OUT -> alpha *= inverseEase
+            TextAnimOut.SCALE_OUT -> {
+                alpha *= inverseEase
+                scale *= inverseEase.coerceAtLeast(0.001f)
+            }
+            else -> Unit
+        }
+    }
+
+    return LayerMotion(alpha = alpha.coerceIn(0f, 1f), scale = scale, rotationDegrees = rotation)
 }
 
 private fun overlaySettings(
@@ -314,34 +417,90 @@ private fun renderOverlayClipBitmap(context: Context, overlay: OverlayClip): Bit
 
 private fun buildTextSettings(text: TextOverlay, globalTimeMs: Long): OverlaySettings {
     val relative = (globalTimeMs - text.startTimeOnTimelineMs).coerceAtLeast(0L)
+    val motion = textLayerMotion(
+        relativeTimeMs = relative,
+        durationMs = text.durationMs,
+        animIn = text.animIn,
+        animInDurationMs = text.animInDurationMs,
+        animInDelayMs = text.animInDelayMs,
+        animLoop = text.animLoop,
+        animLoopDurationMs = text.animLoopDurationMs,
+        animLoopDelayMs = text.animLoopDelayMs,
+        animOut = text.animOut,
+        animOutDurationMs = text.animOutDurationMs,
+        animOutDelayMs = text.animOutDelayMs
+    )
     return overlaySettings(
         posX = text.keyframes.getValueAtTime("posX", relative, text.posX),
         posY = text.keyframes.getValueAtTime("posY", relative, text.posY),
-        scaleX = 0.55f * text.keyframes.getValueAtTime("scale", relative, text.scale),
-        scaleY = 0.55f * text.keyframes.getValueAtTime("scale", relative, text.scale),
-        rotation = text.keyframes.getValueAtTime("rotation", relative, text.rotation),
-        alpha = text.keyframes.getValueAtTime("opacity", relative, text.opacity)
+        scaleX = 0.55f * text.keyframes.getValueAtTime("scale", relative, text.scale) * motion.scale,
+        scaleY = 0.55f * text.keyframes.getValueAtTime("scale", relative, text.scale) * motion.scale,
+        rotation = text.keyframes.getValueAtTime("rotation", relative, text.rotation) + motion.rotationDegrees,
+        alpha = text.keyframes.getValueAtTime("opacity", relative, text.opacity) * motion.alpha
     )
 }
 
-private fun buildStickerSettings(sticker: StickerOverlay): OverlaySettings = overlaySettings(
-    sticker.posX,
-    sticker.posY,
-    0.28f * sticker.scale,
-    0.28f * sticker.scale,
-    sticker.rotation,
-    sticker.opacity
-)
+private fun buildStickerSettings(sticker: StickerOverlay, globalTimeMs: Long): OverlaySettings {
+    val motion = textLayerMotion(
+        relativeTimeMs = (globalTimeMs - sticker.startTimeOnTimelineMs).coerceAtLeast(0L),
+        durationMs = sticker.durationMs,
+        animIn = sticker.animIn,
+        animInDurationMs = sticker.animInDurationMs,
+        animInDelayMs = sticker.animInDelayMs,
+        animLoop = sticker.animLoop,
+        animLoopDurationMs = sticker.animLoopDurationMs,
+        animLoopDelayMs = sticker.animLoopDelayMs,
+        animOut = sticker.animOut,
+        animOutDurationMs = sticker.animOutDurationMs,
+        animOutDelayMs = sticker.animOutDelayMs
+    )
+    return overlaySettings(
+        sticker.posX,
+        sticker.posY,
+        0.28f * sticker.scale * motion.scale,
+        0.28f * sticker.scale * motion.scale,
+        sticker.rotation + motion.rotationDegrees,
+        sticker.opacity * motion.alpha
+    )
+}
 
 private fun buildOverlaySettings(overlay: OverlayClip, globalTimeMs: Long): OverlaySettings {
     val relative = (globalTimeMs - overlay.startTimeOnTimelineMs).coerceAtLeast(0L)
+    val entranceDurationMs = 500L
+    val exitDurationMs = 500L
+    var alpha = 1f
+    var scale = 1f
+    if (overlay.entranceAnim != OverlayAnim.NONE && relative < entranceDurationMs) {
+        val progress = easedProgress(relative.toFloat() / entranceDurationMs)
+        when (overlay.entranceAnim) {
+            OverlayAnim.FADE -> alpha *= progress
+            OverlayAnim.SCALE -> {
+                alpha *= progress
+                scale *= progress.coerceAtLeast(0.001f)
+            }
+            else -> Unit
+        }
+    }
+    val exitStartMs = (overlay.durationMs - exitDurationMs).coerceAtLeast(0L)
+    if (overlay.exitAnim != OverlayAnim.NONE && relative >= exitStartMs) {
+        val progress = ((relative - exitStartMs).toFloat() / exitDurationMs).coerceIn(0f, 1f)
+        val inverseEase = 1f - easedProgress(progress)
+        when (overlay.exitAnim) {
+            OverlayAnim.FADE -> alpha *= inverseEase
+            OverlayAnim.SCALE -> {
+                alpha *= inverseEase
+                scale *= inverseEase.coerceAtLeast(0.001f)
+            }
+            else -> Unit
+        }
+    }
     return overlaySettings(
         posX = overlay.keyframes.getValueAtTime("posX", relative, overlay.posX),
         posY = overlay.keyframes.getValueAtTime("posY", relative, overlay.posY),
-        scaleX = overlay.keyframes.getValueAtTime("scaleX", relative, overlay.scaleX),
-        scaleY = overlay.keyframes.getValueAtTime("scaleY", relative, overlay.scaleY),
+        scaleX = overlay.keyframes.getValueAtTime("scaleX", relative, overlay.scaleX) * scale,
+        scaleY = overlay.keyframes.getValueAtTime("scaleY", relative, overlay.scaleY) * scale,
         rotation = overlay.keyframes.getValueAtTime("rotation", relative, overlay.rotation),
-        alpha = overlay.keyframes.getValueAtTime("opacity", relative, overlay.opacity)
+        alpha = overlay.keyframes.getValueAtTime("opacity", relative, overlay.opacity) * alpha
     )
 }
 
@@ -427,7 +586,7 @@ internal fun buildExportOverlays(
             renderStickerBitmap(context, sticker),
             sticker.startTimeOnTimelineMs,
             sticker.startTimeOnTimelineMs + sticker.durationMs
-        ) { _ -> buildStickerSettings(sticker) }
+        ) { localTime -> buildStickerSettings(sticker, clipStartMs + localTime) }
     }
 
     state.captions.forEach { caption ->
@@ -556,14 +715,14 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
             reasons += "this visual effect"
         }
     }
-    if (overlays.any { !it.isPhoto || it.isGif || it.blendMode != OverlayBlendModeType.NORMAL || it.maskShape != MaskShape.NONE || it.entranceAnim != OverlayAnim.NONE || it.exitAnim != OverlayAnim.NONE }) {
-        reasons += "video or animated overlays"
+    if (overlays.any { !it.isPhoto || it.isGif || it.blendMode != OverlayBlendModeType.NORMAL || it.maskShape != MaskShape.NONE || it.entranceAnim == OverlayAnim.SLIDE || it.exitAnim == OverlayAnim.SLIDE }) {
+        reasons += "video or unsupported overlay animation"
     }
-    if (texts.any { it.animIn != TextAnimIn.NONE || it.animLoop != TextAnimLoop.NONE || it.animOut != TextAnimOut.NONE }) {
-        reasons += "animated text"
+    if (texts.any { it.animIn !in EXPORT_SUPPORTED_TEXT_ANIM_IN || it.animLoop !in EXPORT_SUPPORTED_TEXT_ANIM_LOOP || it.animOut !in EXPORT_SUPPORTED_TEXT_ANIM_OUT }) {
+        reasons += "an unsupported text animation"
     }
-    if (stickers.any { it.animIn != TextAnimIn.NONE || it.animLoop != TextAnimLoop.NONE || it.animOut != TextAnimOut.NONE }) {
-        reasons += "animated stickers"
+    if (stickers.any { it.animIn !in EXPORT_SUPPORTED_TEXT_ANIM_IN || it.animLoop !in EXPORT_SUPPORTED_TEXT_ANIM_LOOP || it.animOut !in EXPORT_SUPPORTED_TEXT_ANIM_OUT }) {
+        reasons += "an unsupported sticker animation"
     }
     if (audioClips.any { it.sourceUri.isNullOrBlank() && it.sourceClipId.isNullOrBlank() }) reasons += "an audio source"
     if (audioClips.any { it.isLooped || it.keyframes.isNotEmpty() || it.autoDucking || it.audioEffects != AudioEffects() }) {

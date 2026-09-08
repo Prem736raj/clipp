@@ -69,6 +69,43 @@ class ExampleUnitTest {
   }
 
   @Test
+  fun simpleLayerAnimationsCanBeExportedButUnsupportedAnimationsAreBlocked() {
+    val clip = MediaClip(
+      sourceUri = "content://media/video/1",
+      originalDurationMs = 1_000L,
+      trimEndMs = 1_000L
+    )
+    val text = TextOverlay(
+      text = "Animated",
+      durationMs = 1_000L,
+      animIn = TextAnimIn.FADE_IN,
+      animLoop = TextAnimLoop.PULSE,
+      animOut = TextAnimOut.SCALE_OUT
+    )
+    val sticker = StickerOverlay(
+      modelId = "star",
+      content = "★",
+      category = StickerCategory.SHAPE,
+      durationMs = 1_000L,
+      animIn = TextAnimIn.ROTATE_IN,
+      animLoop = TextAnimLoop.SWING,
+      animOut = TextAnimOut.FADE_OUT
+    )
+    val imageOverlay = OverlayClip(
+      sourceUri = "content://media/image/1",
+      originalDurationMs = 1_000L,
+      isPhoto = true,
+      trimEndMs = 1_000L,
+      entranceAnim = OverlayAnim.FADE,
+      exitAnim = OverlayAnim.SCALE
+    )
+
+    assertFalse(EditorState(clips = listOf(clip), texts = listOf(text), stickers = listOf(sticker), overlays = listOf(imageOverlay)).hasUnsupportedExportEdits())
+    assertTrue(EditorState(clips = listOf(clip), texts = listOf(text.copy(animIn = TextAnimIn.TYPEWRITER))).hasUnsupportedExportEdits())
+    assertTrue(EditorState(clips = listOf(clip), overlays = listOf(imageOverlay.copy(entranceAnim = OverlayAnim.SLIDE))).hasUnsupportedExportEdits())
+  }
+
+  @Test
   fun invalidExportSpeedAndVolumeAreBlocked() {
     val clip = MediaClip(
       sourceUri = "content://media/video/1",

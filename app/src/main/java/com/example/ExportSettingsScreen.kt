@@ -119,7 +119,7 @@ fun ExportSettingsScreen(
                                 if (unsupportedReasons.isNotEmpty()) {
                                     "This project still contains export-blocked items: ${unsupportedReasons.distinct().joinToString(", ")}. Remove them before exporting."
                                 } else {
-                                    "The current renderer includes clip positioning and transform keyframes, static text, captions, stickers, drawings, frames, image overlays, crop, filters, blur, supported fades, and separate audio tracks."
+                                    "The current renderer includes clip positioning and transform keyframes, static text, captions, supported text/sticker/image-overlay animations, drawings, frames, image overlays, crop, filters, blur, supported fades, and separate audio tracks."
                                 },
                                 style = MaterialTheme.typography.bodySmall
                             )
