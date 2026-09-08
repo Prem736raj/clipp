@@ -32,7 +32,8 @@ import kotlin.math.min
 import kotlin.math.sin
 
 private val EXPORT_DEFAULT_CROP = androidx.compose.ui.geometry.Rect(0f, 0f, 1f, 1f)
-private val EXPORT_SUPPORTED_CLIP_KEYFRAMES = setOf("posX", "posY", "scale", "rotation")
+private val EXPORT_CROP_KEYFRAMES = setOf("cropLeft", "cropTop", "cropRight", "cropBottom")
+private val EXPORT_SUPPORTED_CLIP_KEYFRAMES = setOf("posX", "posY", "scale", "rotation") + EXPORT_CROP_KEYFRAMES
 internal val EXPORT_SUPPORTED_AUDIO_KEYFRAMES = setOf("volume")
 private val EXPORT_SUPPORTED_EFFECTS = setOf(
     EffectType.GAUSSIAN_BLUR,
@@ -94,10 +95,27 @@ private class ExportRgbMatrix(private val matrix: FloatArray) : RgbMatrix {
  * the centre and values outside the frame are deliberately clipped.
  */
 private class KeyframedClipTransformation(
-    private val clip: MediaClip
+    private val clip: MediaClip,
+    private val animateCrop: Boolean
 ) : MatrixTransformation {
     override fun getMatrix(presentationTimeUs: Long): Matrix {
         val relativeTimeMs = presentationTimeUs / 1_000L
+        val cropLeft = clip.keyframes
+            .getValueAtTime("cropLeft", relativeTimeMs, clip.cropRect.left)
+            .coerceIn(0f, 1f)
+        val cropTop = clip.keyframes
+            .getValueAtTime("cropTop", relativeTimeMs, clip.cropRect.top)
+            .coerceIn(0f, 1f)
+        val cropRight = clip.keyframes
+            .getValueAtTime("cropRight", relativeTimeMs, clip.cropRect.right)
+            .coerceIn(0f, 1f)
+        val cropBottom = clip.keyframes
+            .getValueAtTime("cropBottom", relativeTimeMs, clip.cropRect.bottom)
+            .coerceIn(0f, 1f)
+        val cropWidth = (cropRight - cropLeft).coerceAtLeast(0.01f)
+        val cropHeight = (cropBottom - cropTop).coerceAtLeast(0.01f)
+        val cropCenterX = (cropLeft + cropRight) / 2f
+        val cropCenterY = (cropTop + cropBottom) / 2f
         val scale = clip.keyframes
             .getValueAtTime("scale", relativeTimeMs, clip.scale)
             .coerceIn(0.05f, 10f)
@@ -108,6 +126,16 @@ private class KeyframedClipTransformation(
         val posY = clip.keyframes
             .getValueAtTime("posY", relativeTimeMs, clip.posY)
         return Matrix().apply {
+            if (animateCrop) {
+                // Expand the selected normalized source rectangle to the full
+                // output frame. The translation is divided by the crop scale
+                // because it is appended after postScale().
+                postScale(1f / cropWidth, 1f / cropHeight)
+                postTranslate(
+                    ((0.5f - cropCenterX) * 2f) / cropWidth,
+                    ((cropCenterY - 0.5f) * 2f) / cropHeight
+                )
+            }
             postScale(
                 (if (clip.flipHorizontal) -1f else 1f) * scale,
                 (if (clip.flipVertical) -1f else 1f) * scale
@@ -700,7 +728,8 @@ internal fun buildExportVideoEffects(
 ): List<Effect> {
     val effects = mutableListOf<Effect>()
     val crop = clip.cropRect
-    if (crop != EXPORT_DEFAULT_CROP) {
+    val hasCropKeyframes = clip.keyframes.keys.any { it in EXPORT_CROP_KEYFRAMES }
+    if (crop != EXPORT_DEFAULT_CROP && !hasCropKeyframes) {
         effects += Crop(
             crop.left * 2f - 1f,
             crop.right * 2f - 1f,
@@ -710,7 +739,7 @@ internal fun buildExportVideoEffects(
     }
     val hasTransformKeyframes = clip.keyframes.keys.any { it in EXPORT_SUPPORTED_CLIP_KEYFRAMES }
     if (clip.posX != 0.5f || clip.posY != 0.5f || hasTransformKeyframes) {
-        effects += KeyframedClipTransformation(clip)
+        effects += KeyframedClipTransformation(clip, animateCrop = hasCropKeyframes)
     } else if (clip.rotation != 0f || clip.flipHorizontal || clip.flipVertical || clip.scale != 1f) {
         effects += ScaleAndRotateTransformation.Builder()
             .setScale(
@@ -774,6 +803,7 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
         if (clip.keyframes.keys.any { it !in EXPORT_SUPPORTED_CLIP_KEYFRAMES && it !in EXPORT_SUPPORTED_AUDIO_KEYFRAMES }) {
             reasons += "unsupported clip keyframes"
         }
+        if (clip.hasInvalidCropKeyframes()) reasons += "invalid crop keyframes"
         if (clip.keyframes["volume"].orEmpty().any { it.timeMs < 0L || !it.value.isFinite() || it.value !in 0f..1f }) {
             reasons += "invalid clip audio automation"
         }
@@ -830,6 +860,28 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
         canvasSettings.backgroundType != BackgroundType.Blur
     ) reasons += "custom canvas output"
     return reasons.distinct()
+}
+
+private fun MediaClip.hasInvalidCropKeyframes(): Boolean {
+    val cropKeyframes = keyframes.filterKeys { it in EXPORT_CROP_KEYFRAMES }
+    if (cropKeyframes.isEmpty()) return false
+    val duration = durationMs.coerceAtLeast(0L)
+    if (cropKeyframes.values.flatten().any {
+            it.timeMs !in 0L..duration ||
+                !it.value.isFinite() ||
+                it.value !in 0f..1f
+        }
+    ) return true
+
+    val sampleTimes = (listOf(0L, duration) + cropKeyframes.values.flatten().map { it.timeMs }).distinct()
+    return sampleTimes.any { timeMs ->
+        val left = keyframes.getValueAtTime("cropLeft", timeMs, cropRect.left)
+        val top = keyframes.getValueAtTime("cropTop", timeMs, cropRect.top)
+        val right = keyframes.getValueAtTime("cropRight", timeMs, cropRect.right)
+        val bottom = keyframes.getValueAtTime("cropBottom", timeMs, cropRect.bottom)
+        left !in 0f..1f || top !in 0f..1f || right !in 0f..1f || bottom !in 0f..1f ||
+            right <= left || bottom <= top
+    }
 }
 
 internal fun EditorState.hasUnsupportedExportEdits(): Boolean = exportUnsupportedReasons().isNotEmpty()

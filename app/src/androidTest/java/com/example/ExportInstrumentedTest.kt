@@ -324,6 +324,38 @@ class ExportInstrumentedTest {
     }
 
     @Test
+    fun cropKeyframesAreRenderedAndPublished() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val source = File.createTempFile("clipp-export-crop-keyframes-", ".png", context.cacheDir)
+        writeVerticalSplitPng(source, android.graphics.Color.RED, android.graphics.Color.BLUE)
+        val clip = MediaClip(
+            sourceUri = Uri.fromFile(source).toString(),
+            originalDurationMs = 1_000L,
+            trimEndMs = 1_000L,
+            isPhoto = true,
+            keyframes = mapOf(
+                "cropLeft" to listOf(Keyframe(timeMs = 0L, value = 0f), Keyframe(timeMs = 1_000L, value = 0.5f)),
+                "cropTop" to listOf(Keyframe(timeMs = 0L, value = 0f), Keyframe(timeMs = 1_000L, value = 0f)),
+                "cropRight" to listOf(Keyframe(timeMs = 0L, value = 0.5f), Keyframe(timeMs = 1_000L, value = 1f)),
+                "cropBottom" to listOf(Keyframe(timeMs = 0L, value = 1f), Keyframe(timeMs = 1_000L, value = 1f))
+            )
+        )
+        val exporter = VideoExporter(context)
+        var result: Outcome? = null
+        try {
+            result = awaitExport(exporter, listOf(clip), "Clipp_instrumented_crop_keyframes.mp4")
+            assertSuccessful(result!!)
+            assertPublishedMp4(context, result!!)
+            assertFrameHasDominantColor(context, result!!, 100_000L, expected = "red")
+            assertFrameHasDominantColor(context, result!!, 800_000L, expected = "blue")
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            source.delete()
+        }
+    }
+
+    @Test
     fun simpleLayerAnimationsAreRenderedAndPublished() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val source = File.createTempFile("clipp-export-animated-layers-", ".png", context.cacheDir)
@@ -545,6 +577,19 @@ class ExportInstrumentedTest {
     private fun writeSolidPng(file: File, color: Int) {
         val bitmap = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888).apply {
             eraseColor(color)
+        }
+        file.outputStream().use { output ->
+            assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
+        }
+        bitmap.recycle()
+    }
+
+    private fun writeVerticalSplitPng(file: File, leftColor: Int, rightColor: Int) {
+        val bitmap = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888)
+        for (x in 0 until bitmap.width) {
+            for (y in 0 until bitmap.height) {
+                bitmap.setPixel(x, y, if (x < bitmap.width / 2) leftColor else rightColor)
+            }
         }
         file.outputStream().use { output ->
             assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
