@@ -6,6 +6,7 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
 
 data class MediaMetadata(
     val durationMs: Long,
@@ -25,8 +26,10 @@ object MediaMetadataReader {
     suspend fun read(context: Context, uri: Uri): MediaMetadata? = withContext(Dispatchers.IO) {
         runCatching {
             val resolver = context.contentResolver
-            resolver.openAssetFileDescriptor(uri, "r")?.use { descriptor ->
-                if (descriptor.length == 0L) return@withContext null
+            if (uri.scheme != "file") {
+                resolver.openAssetFileDescriptor(uri, "r")?.use { descriptor ->
+                    if (descriptor.length == 0L) return@withContext null
+                }
             }
 
             val mimeType = resolver.getType(uri) ?: inferMimeType(uri)
@@ -40,13 +43,15 @@ object MediaMetadataReader {
 
     suspend fun readAudioDuration(context: Context, uri: Uri): Long? = withContext(Dispatchers.IO) {
         runCatching {
-            context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { descriptor ->
-                if (descriptor.length == 0L) return@withContext null
+            if (uri.scheme != "file") {
+                context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { descriptor ->
+                    if (descriptor.length == 0L) return@withContext null
+                }
             }
 
             val retriever = MediaMetadataRetriever()
             try {
-                retriever.setDataSource(context, uri)
+                retriever.setDataSourceCompat(context, uri)
                 retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                     ?.toLongOrNull()
                     ?.takeIf { it > 0L }
@@ -59,7 +64,7 @@ object MediaMetadataReader {
     private fun readVideo(context: Context, uri: Uri, mimeType: String): MediaMetadata? {
         val retriever = MediaMetadataRetriever()
         return try {
-            retriever.setDataSource(context, uri)
+            retriever.setDataSourceCompat(context, uri)
             val duration = retriever.extractMetadata(
                 MediaMetadataRetriever.METADATA_KEY_DURATION
             )?.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
@@ -94,9 +99,20 @@ object MediaMetadataReader {
 
     private fun readImage(context: Context, uri: Uri, mimeType: String): MediaMetadata? {
         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        context.contentResolver.openInputStream(uri)?.use { stream ->
-            BitmapFactory.decodeStream(stream, null, options)
-        } ?: return null
+        var opened = false
+        if (uri.scheme == "file") {
+            val file = uri.path?.let(::File) ?: return null
+            file.inputStream().use { stream ->
+                opened = true
+                BitmapFactory.decodeStream(stream, null, options)
+            }
+        } else {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                opened = true
+                BitmapFactory.decodeStream(stream, null, options)
+            }
+        }
+        if (!opened) return null
 
         return if (options.outWidth > 0 && options.outHeight > 0) {
             MediaMetadata(
@@ -123,6 +139,14 @@ object MediaMetadataReader {
             "webp" -> "image/webp"
             "heic" -> "image/heic"
             else -> "application/octet-stream"
+        }
+    }
+
+    private fun MediaMetadataRetriever.setDataSourceCompat(context: Context, uri: Uri) {
+        if (uri.scheme == "file" && !uri.path.isNullOrBlank()) {
+            setDataSource(uri.path)
+        } else {
+            setDataSource(context, uri)
         }
     }
 }

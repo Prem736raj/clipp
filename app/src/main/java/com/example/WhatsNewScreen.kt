@@ -25,7 +25,7 @@ val changelog = listOf(
             "Projects and media references stay local to the device.",
             "MP4 export now renders clip positioning/transform keyframes, crop, filters, blur, mirror, shake, comic-book/pencil-sketch/pop-art style effects, static text, captions, stickers, drawings, frames, supported text/sticker/image-overlay animations, photo-overlay chroma key, image overlays, supported fades, separate audio tracks, and volume keyframes/fade envelopes.",
             "Music import and microphone voiceover recording are available in the editor.",
-            "Unsupported AI, cloud, template, batch-export, and subscription flows remain clearly disabled."
+            "Three built-in local templates can now replace selected media and create restorable projects; remote templates, AI, cloud, batch-export, and subscription flows remain clearly disabled."
         )
     )
 )

@@ -13,6 +13,7 @@ import kotlin.math.sin
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -105,6 +106,54 @@ class ExportInstrumentedTest {
             assertTrue("Unexpected multi-clip duration: $durationMs", durationMs in 1_400L..1_800L)
             assertFrameHasDominantColor(context, result!!, 200_000L, expected = "red")
             assertFrameHasDominantColor(context, result!!, 1_000_000L, expected = "blue")
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            firstSource.delete()
+            secondSource.delete()
+        }
+    }
+
+    @Test
+    fun localTemplateCreatesRestorableStateAndExports() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val firstSource = File.createTempFile("clipp-template-first-", ".png", context.cacheDir)
+        val secondSource = File.createTempFile("clipp-template-second-", ".png", context.cacheDir)
+        writeSolidPng(firstSource, android.graphics.Color.rgb(220, 70, 50))
+        writeSolidPng(secondSource, android.graphics.Color.rgb(40, 120, 220))
+        val mediaUris = listOf(Uri.fromFile(firstSource).toString(), Uri.fromFile(secondSource).toString())
+        val template = TemplateRepo.find("local_cinematic_story")!!
+        val project = runBlocking {
+            TemplateProjectFactory.build(
+                context = context,
+                template = template,
+                mediaUris = mediaUris,
+                textValues = listOf("Travel day", "A local template")
+            )
+        }
+        assertNotNull(project)
+        assertTrue(project!!.historyState.isNotBlank())
+        assertTrue(project.sourceMediaPaths == mediaUris)
+        val restoredState = editorHistoryMoshi
+            .adapter(EditorHistoryModel::class.java)
+            .fromJson(project.historyState)
+            ?.currentState
+        assertNotNull(restoredState)
+        assertTrue(restoredState!!.clips.size == 2)
+        assertTrue(restoredState.texts.size == 2)
+        assertTrue(restoredState.clips.all { it.transitionNext.type == TransitionType.FADE_TO_WHITE || it == restoredState.clips.last() })
+
+        val exporter = VideoExporter(context)
+        var result: Outcome? = null
+        try {
+            result = awaitExport(
+                exporter,
+                restoredState.clips,
+                "Clipp_instrumented_template.mp4",
+                restoredState
+            )
+            assertSuccessful(result!!)
+            assertPublishedMp4(context, result!!)
         } finally {
             result?.uri?.let { context.contentResolver.delete(it, null, null) }
             exporter.close()

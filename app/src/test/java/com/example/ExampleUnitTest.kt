@@ -22,6 +22,25 @@ class ExampleUnitTest {
   }
 
   @Test
+  fun editorHistoryRoundTripsCanvasColor() {
+    val state = EditorState(
+      canvasSettings = CanvasSettingsState(
+        backgroundColorValue = androidx.compose.ui.graphics.Color(0xff11223344u).value.toLong()
+      )
+    )
+
+    val json = editorHistoryMoshi
+      .adapter(EditorHistoryModel::class.java)
+      .toJson(EditorHistoryModel(currentState = state))
+    val restored = editorHistoryMoshi
+      .adapter(EditorHistoryModel::class.java)
+      .fromJson(json)
+      ?.currentState
+
+    assertEquals(state.canvasSettings.backgroundColorValue, restored?.canvasSettings?.backgroundColorValue)
+  }
+
+  @Test
   fun basicTimelineAndSupportedVisualEditsCanBeExported() {
     val basic = MediaClip(
       sourceUri = "content://media/video/1",

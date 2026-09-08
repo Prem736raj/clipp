@@ -485,10 +485,13 @@ data class CanvasSettingsState(
     val aspectOption: AspectRatioOption = AspectRatioOption.R_16_9,
     val fitMode: FitMode = FitMode.Fit,
     val backgroundType: BackgroundType = BackgroundType.Blur,
-    val backgroundColorValue: ULong = androidx.compose.ui.graphics.Color.Black.value,
+    // Keep the serialized representation JVM-friendly. Compose exposes Color.value
+    // as ULong, but Moshi's reflective adapter deliberately rejects Kotlin unsigned
+    // platform types. The bit pattern is preserved when converting back to Color.
+    val backgroundColorValue: Long = androidx.compose.ui.graphics.Color.Black.value.toLong(),
     val masterVolume: Float = 1.0f
 ) {
-    val backgroundColor: androidx.compose.ui.graphics.Color get() = androidx.compose.ui.graphics.Color(backgroundColorValue)
+    val backgroundColor: androidx.compose.ui.graphics.Color get() = androidx.compose.ui.graphics.Color(backgroundColorValue.toULong())
 }
 
 enum class MaskShape {
@@ -769,7 +772,30 @@ class ComposeDataAdapter {
     fun colorFromJson(value: Long): androidx.compose.ui.graphics.Color = androidx.compose.ui.graphics.Color(value.toULong())
 }
 
+/** Moshi does not discover @ToJson methods for Compose's inline Color class. */
+private class ComposeColorJsonAdapter : com.squareup.moshi.JsonAdapter<androidx.compose.ui.graphics.Color>() {
+    override fun toJson(
+        writer: com.squareup.moshi.JsonWriter,
+        value: androidx.compose.ui.graphics.Color?
+    ) {
+        if (value == null) {
+            writer.nullValue()
+        } else {
+            writer.value(value.value.toLong())
+        }
+    }
+
+    override fun fromJson(reader: com.squareup.moshi.JsonReader): androidx.compose.ui.graphics.Color? {
+        if (reader.peek() == com.squareup.moshi.JsonReader.Token.NULL) {
+            reader.nextNull<Unit>()
+            return null
+        }
+        return androidx.compose.ui.graphics.Color(reader.nextLong().toULong())
+    }
+}
+
 val editorHistoryMoshi: com.squareup.moshi.Moshi = com.squareup.moshi.Moshi.Builder()
+    .add(androidx.compose.ui.graphics.Color::class.java, ComposeColorJsonAdapter())
     .add(ComposeDataAdapter())
     .addLast(com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory())
     .build()

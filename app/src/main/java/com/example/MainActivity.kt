@@ -388,21 +388,12 @@ fun ClippApp(sharedVideoUri: String? = null, shortcutAction: String? = null) {
             templateId = templateId,
             onBack = { navController.popBackStack() },
             projectViewModel = projectViewModel,
-            onCustomize = { template, medias, texts ->
-                val projectId = java.util.UUID.randomUUID().toString()
-                val newProject = com.example.data.ProjectEntity(
-                    id = projectId,
-                    name = "${template.title} Project",
-                    duration = template.duration,
-                    lastEdited = System.currentTimeMillis()
-                )
-                projectViewModel.addProject(newProject)
-                navController.navigate("editor/$projectId") {
+            onCustomize = { newProject ->
+                projectViewModel.addProject(newProject) {
+                    navController.navigate("editor/${newProject.id}") {
                     popUpTo(Screen.Templates.route)
+                    }
                 }
-            },
-            onQuickExport = { template, medias, texts ->
-                // Quick export logic handled inside TemplateReplacementScreen
             }
         ) 
       }

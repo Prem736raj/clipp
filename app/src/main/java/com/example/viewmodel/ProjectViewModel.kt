@@ -56,12 +56,13 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
     suspend fun getLatestProject(): ProjectEntity? =
         repository.getAllProjectsOnce().maxByOrNull { it.lastEdited }
 
-    fun addProject(project: ProjectEntity) {
+    fun addProject(project: ProjectEntity, onComplete: () -> Unit = {}) {
         viewModelScope.launch {
             val context = getApplication<Application>().applicationContext
             repository.insert(ProjectStorage.normalize(context, project))
             com.example.utils.AnalyticsManager.trackVideoCreated()
             WidgetUpdater.updateWidgets(context)
+            onComplete()
         }
     }
 
