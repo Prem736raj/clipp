@@ -159,6 +159,33 @@ class ExampleUnitTest {
   }
 
   @Test
+  fun videoOverlayKeyframesAreAllowedButInvalidOverlayKeyframesAreBlocked() {
+    val overlay = OverlayClip(
+      sourceUri = "content://media/video/1",
+      originalDurationMs = 1_000L,
+      trimEndMs = 1_000L,
+      keyframes = mapOf(
+        "posX" to listOf(Keyframe(timeMs = 0L, value = 0.35f), Keyframe(timeMs = 1_000L, value = 0.65f)),
+        "scaleX" to listOf(Keyframe(timeMs = 0L, value = 0.25f), Keyframe(timeMs = 1_000L, value = 0.5f)),
+        "scaleY" to listOf(Keyframe(timeMs = 0L, value = 0.25f), Keyframe(timeMs = 1_000L, value = 0.5f)),
+        "opacity" to listOf(Keyframe(timeMs = 0L, value = 0.2f), Keyframe(timeMs = 1_000L, value = 1f))
+      )
+    )
+
+    assertFalse(EditorState(overlays = listOf(overlay)).hasUnsupportedExportEdits())
+    assertTrue(
+      EditorState(
+        overlays = listOf(overlay.copy(keyframes = mapOf("scaleX" to listOf(Keyframe(timeMs = 1_001L, value = 0.5f)))) )
+      ).hasUnsupportedExportEdits()
+    )
+    assertTrue(
+      EditorState(
+        overlays = listOf(overlay.copy(keyframes = mapOf("opacity" to listOf(Keyframe(timeMs = 0L, value = 1.2f)))) )
+      ).hasUnsupportedExportEdits()
+    )
+  }
+
+  @Test
   fun invalidExportSpeedAndVolumeAreBlocked() {
     val clip = MediaClip(
       sourceUri = "content://media/video/1",

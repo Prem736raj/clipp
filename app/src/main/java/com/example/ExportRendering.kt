@@ -34,6 +34,7 @@ import kotlin.math.sin
 private val EXPORT_DEFAULT_CROP = androidx.compose.ui.geometry.Rect(0f, 0f, 1f, 1f)
 private val EXPORT_CROP_KEYFRAMES = setOf("cropLeft", "cropTop", "cropRight", "cropBottom")
 private val EXPORT_SUPPORTED_CLIP_KEYFRAMES = setOf("posX", "posY", "scale", "rotation") + EXPORT_CROP_KEYFRAMES
+private val EXPORT_SUPPORTED_OVERLAY_KEYFRAMES = setOf("posX", "posY", "scaleX", "scaleY", "rotation", "opacity")
 internal val EXPORT_SUPPORTED_AUDIO_KEYFRAMES = setOf("volume")
 private val EXPORT_SUPPORTED_EFFECTS = setOf(
     EffectType.GAUSSIAN_BLUR,
@@ -83,6 +84,99 @@ private data class BitmapWindow(
     val endMs: Long,
     val bitmap: Bitmap
 )
+
+/**
+ * Samples a secondary video on the export timeline and exposes the decoded
+ * frame as a Media3 texture overlay. The small time bucket keeps repeated
+ * texture-size and bitmap requests from decoding the same frame twice.
+ */
+private class VideoFrameBitmapOverlay(
+    context: Context,
+    private val sourceUri: String,
+    private val sourceTrimStartMs: Long,
+    private val sourceTrimEndMs: Long,
+    private val windowStartMs: Long,
+    private val windowEndMs: Long,
+    private val blankBitmap: Bitmap,
+    private val chromaKey: ChromaKeySettings,
+    private val settingsAt: (Long) -> OverlaySettings
+) : BitmapOverlay() {
+    private companion object {
+        const val SAMPLE_INTERVAL_MS = 33L
+        const val MAX_FRAME_DIMENSION = 1600
+    }
+
+    private val retriever = MediaMetadataRetriever().also {
+        it.setDataSource(context, Uri.parse(sourceUri))
+    }
+    private var cachedSampleTimeMs = Long.MIN_VALUE
+    private var cachedFrame: Bitmap? = null
+    private var released = false
+
+    override fun getBitmap(presentationTimeUs: Long): Bitmap {
+        val localTimeMs = presentationTimeUs / 1_000L
+        if (localTimeMs < windowStartMs || localTimeMs >= windowEndMs) return blankBitmap
+
+        val overlayRelativeMs = (localTimeMs - windowStartMs).coerceAtLeast(0L)
+        val sourceDurationMs = (sourceTrimEndMs - sourceTrimStartMs).coerceAtLeast(1L)
+        val sourceTimeMs = (sourceTrimStartMs + overlayRelativeMs).coerceIn(
+            sourceTrimStartMs,
+            sourceTrimStartMs + sourceDurationMs - 1L
+        )
+        val sampleTimeMs = (sourceTimeMs / SAMPLE_INTERVAL_MS) * SAMPLE_INTERVAL_MS
+
+        synchronized(this) {
+            if (released) return blankBitmap
+            if (sampleTimeMs == cachedSampleTimeMs) return cachedFrame ?: blankBitmap
+
+            val decoded = runCatching {
+                retriever.getFrameAtTime(
+                    sampleTimeMs * 1_000L,
+                    MediaMetadataRetriever.OPTION_CLOSEST
+                )
+            }.getOrNull()
+            val prepared = decoded?.let(::prepareFrame)
+            if (prepared != null) {
+                cachedFrame?.takeIf { it !== prepared }?.recycle()
+                cachedFrame = prepared
+                cachedSampleTimeMs = sampleTimeMs
+            }
+            return cachedFrame ?: blankBitmap
+        }
+    }
+
+    override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings {
+        return settingsAt(presentationTimeUs / 1_000L)
+    }
+
+    override fun release() {
+        synchronized(this) {
+            if (released) return
+            released = true
+            cachedFrame?.recycle()
+            cachedFrame = null
+            runCatching { retriever.release() }
+        }
+        super.release()
+    }
+
+    private fun prepareFrame(decoded: Bitmap): Bitmap {
+        val scale = min(
+            1f,
+            MAX_FRAME_DIMENSION.toFloat() / max(decoded.width, decoded.height).toFloat()
+        )
+        val scaled = if (scale >= 1f) decoded else Bitmap.createScaledBitmap(
+            decoded,
+            (decoded.width * scale).toInt().coerceAtLeast(1),
+            (decoded.height * scale).toInt().coerceAtLeast(1),
+            true
+        ).also { decoded.recycle() }
+        if (!chromaKey.enabled) return scaled
+        return applyChromaKey(scaled, chromaKey).also { keyed ->
+            if (keyed !== scaled) scaled.recycle()
+        }
+    }
+}
 
 private class ExportRgbMatrix(private val matrix: FloatArray) : RgbMatrix {
     override fun getMatrix(presentationTimeUs: Long, useHdr: Boolean): FloatArray = matrix.copyOf()
@@ -609,15 +703,33 @@ internal fun buildExportOverlays(
         )
     }
 
-    // Image/video overlays are rendered as a still frame until a full secondary
-    // video-compositor track is available. Video overlays remain export-blocked.
-    state.overlays.filter { it.isVisible && it.isPhoto && it.durationMs > 0L }.forEach { overlay ->
-        val bitmap = renderOverlayClipBitmap(context, overlay) ?: return@forEach
-        addWindowed(
-            bitmap,
-            overlay.startTimeOnTimelineMs,
-            overlay.startTimeOnTimelineMs + overlay.durationMs
-        ) { localTime -> buildOverlaySettings(overlay, clipStartMs + localTime) }
+    state.overlays.filter { it.isVisible && !it.isGif && it.durationMs > 0L }.forEach { overlay ->
+        val start = max(0L, overlay.startTimeOnTimelineMs - clipStartMs)
+        val end = min(clipDurationMs, overlay.startTimeOnTimelineMs + overlay.durationMs - clipStartMs)
+        if (end <= start) return@forEach
+
+        if (overlay.isPhoto) {
+            val bitmap = renderOverlayClipBitmap(context, overlay) ?: return@forEach
+            addWindowed(
+                bitmap,
+                overlay.startTimeOnTimelineMs,
+                overlay.startTimeOnTimelineMs + overlay.durationMs
+            ) { localTime -> buildOverlaySettings(overlay, clipStartMs + localTime) }
+        } else {
+            runCatching {
+                VideoFrameBitmapOverlay(
+                    context = context,
+                    sourceUri = overlay.sourceUri,
+                    sourceTrimStartMs = overlay.trimStartMs,
+                    sourceTrimEndMs = overlay.trimEndMs,
+                    windowStartMs = start,
+                    windowEndMs = end,
+                    blankBitmap = blank,
+                    chromaKey = ChromaKeySettings(),
+                    settingsAt = { localTime -> buildOverlaySettings(overlay, clipStartMs + localTime) }
+                )
+            }.onSuccess { overlays += it }
+        }
     }
 
     state.drawings.filter { it.isVisible && it.strokes.isNotEmpty() }.forEach { drawing ->
@@ -825,8 +937,14 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
             reasons += "partial-duration or invalid visual effect settings"
         }
     }
-    if (overlays.any { !it.isPhoto || it.isGif || it.blendMode != OverlayBlendModeType.NORMAL || it.maskShape != MaskShape.NONE || it.entranceAnim == OverlayAnim.SLIDE || it.exitAnim == OverlayAnim.SLIDE }) {
-        reasons += "video or unsupported overlay animation"
+    if (overlays.any { it.isGif || it.blendMode != OverlayBlendModeType.NORMAL || it.maskShape != MaskShape.NONE || it.entranceAnim == OverlayAnim.SLIDE || it.exitAnim == OverlayAnim.SLIDE }) {
+        reasons += "GIF or unsupported overlay animation"
+    }
+    if (overlays.any { it.keyframes.keys.any { key -> key !in EXPORT_SUPPORTED_OVERLAY_KEYFRAMES } }) {
+        reasons += "unsupported overlay keyframes"
+    }
+    if (overlays.any { it.hasInvalidExportKeyframes() }) {
+        reasons += "invalid overlay keyframes"
     }
     if (overlays.any {
             it.chromaKey.enabled &&
@@ -882,6 +1000,20 @@ private fun MediaClip.hasInvalidCropKeyframes(): Boolean {
         left !in 0f..1f || top !in 0f..1f || right !in 0f..1f || bottom !in 0f..1f ||
             right <= left || bottom <= top
     }
+}
+
+private fun OverlayClip.hasInvalidExportKeyframes(): Boolean {
+    if (keyframes.isEmpty()) return false
+    val duration = durationMs.coerceAtLeast(0L)
+    if (duration <= 0L) return true
+    if (keyframes.values.flatten().any { it.timeMs !in 0L..duration || !it.value.isFinite() }) return true
+    if (keyframes["scaleX"].orEmpty().any { it.value <= 0f } ||
+        keyframes["scaleY"].orEmpty().any { it.value <= 0f } ||
+        keyframes["opacity"].orEmpty().any { it.value !in 0f..1f } ||
+        keyframes["posX"].orEmpty().any { it.value !in 0f..1f } ||
+        keyframes["posY"].orEmpty().any { it.value !in 0f..1f }
+    ) return true
+    return false
 }
 
 internal fun EditorState.hasUnsupportedExportEdits(): Boolean = exportUnsupportedReasons().isNotEmpty()

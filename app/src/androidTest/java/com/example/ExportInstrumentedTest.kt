@@ -429,6 +429,88 @@ class ExportInstrumentedTest {
     }
 
     @Test
+    fun animatedVideoOverlayIsRenderedAndPublished() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val baseSource = File.createTempFile("clipp-export-video-overlay-base-", ".png", context.cacheDir)
+        val redSource = File.createTempFile("clipp-export-video-overlay-red-", ".png", context.cacheDir)
+        val greenSource = File.createTempFile("clipp-export-video-overlay-green-", ".png", context.cacheDir)
+        writeSolidPng(baseSource, android.graphics.Color.BLUE)
+        writeSolidPng(redSource, android.graphics.Color.RED)
+        writeSolidPng(greenSource, android.graphics.Color.GREEN)
+
+        val overlayExporter = VideoExporter(context)
+        val exporter = VideoExporter(context)
+        var overlayResult: Outcome? = null
+        var result: Outcome? = null
+        try {
+            overlayResult = awaitExport(
+                overlayExporter,
+                listOf(
+                    MediaClip(
+                        sourceUri = Uri.fromFile(redSource).toString(),
+                        originalDurationMs = 1_000L,
+                        trimEndMs = 1_000L,
+                        isPhoto = true
+                    ),
+                    MediaClip(
+                        sourceUri = Uri.fromFile(greenSource).toString(),
+                        originalDurationMs = 1_000L,
+                        trimEndMs = 1_000L,
+                        isPhoto = true
+                    )
+                ),
+                "Clipp_instrumented_video_overlay_source.mp4"
+            )
+            assertSuccessful(overlayResult!!)
+
+            val overlayDurationMs = overlayResult!!.metadata!!.durationMs
+            val baseClip = MediaClip(
+                sourceUri = Uri.fromFile(baseSource).toString(),
+                originalDurationMs = overlayDurationMs,
+                trimEndMs = overlayDurationMs,
+                isPhoto = true
+            )
+            val state = EditorState(
+                clips = listOf(baseClip),
+                overlays = listOf(
+                    OverlayClip(
+                        sourceUri = overlayResult!!.uri!!.toString(),
+                        originalDurationMs = overlayDurationMs,
+                        isPhoto = false,
+                        trimEndMs = overlayDurationMs,
+                        scaleX = 0.5f,
+                        scaleY = 0.5f,
+                        keyframes = mapOf(
+                            "opacity" to listOf(
+                                Keyframe(timeMs = 0L, value = 1f),
+                                Keyframe(timeMs = overlayDurationMs, value = 1f)
+                            )
+                        )
+                    )
+                )
+            )
+            result = awaitExport(
+                exporter,
+                listOf(baseClip),
+                "Clipp_instrumented_video_overlay.mp4",
+                state
+            )
+            assertSuccessful(result!!)
+            assertPublishedMp4(context, result!!)
+            assertFrameHasDominantColor(context, result!!, 200_000L, expected = "red")
+            assertFrameHasDominantColor(context, result!!, 1_200_000L, expected = "green")
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            overlayResult?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            overlayExporter.close()
+            baseSource.delete()
+            redSource.delete()
+            greenSource.delete()
+        }
+    }
+
+    @Test
     fun separateAudioTrackIsMixedIntoPublishedMp4() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val source = File.createTempFile("clipp-export-audio-base-", ".png", context.cacheDir)
@@ -564,6 +646,7 @@ class ExportInstrumentedTest {
                 when (expected) {
                     "red" -> assertTrue("Expected red frame, got $red/$green/$blue", red > green + 40 && red > blue + 40)
                     "blue" -> assertTrue("Expected blue frame, got $red/$green/$blue", blue > red + 40 && blue > green + 40)
+                    "green" -> assertTrue("Expected green frame, got $red/$green/$blue", green > red + 40 && green > blue + 40)
                     else -> error("Unknown expected color: $expected")
                 }
             } finally {
