@@ -412,8 +412,12 @@ private fun loadVideoFrame(context: Context, uri: String, timeMs: Long): Bitmap?
 }
 
 private fun renderOverlayClipBitmap(context: Context, overlay: OverlayClip): Bitmap? {
-    return if (overlay.isPhoto) loadBitmap(context, overlay.sourceUri)
+    val bitmap = if (overlay.isPhoto) loadBitmap(context, overlay.sourceUri)
     else loadVideoFrame(context, overlay.sourceUri, overlay.trimStartMs)
+    if (bitmap == null || !overlay.chromaKey.enabled) return bitmap
+    return applyChromaKey(bitmap, overlay.chromaKey).also { keyed ->
+        if (keyed !== bitmap) bitmap.recycle()
+    }
 }
 
 private fun buildTextSettings(text: TextOverlay, globalTimeMs: Long): OverlaySettings {
@@ -721,6 +725,15 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
     }
     if (overlays.any { !it.isPhoto || it.isGif || it.blendMode != OverlayBlendModeType.NORMAL || it.maskShape != MaskShape.NONE || it.entranceAnim == OverlayAnim.SLIDE || it.exitAnim == OverlayAnim.SLIDE }) {
         reasons += "video or unsupported overlay animation"
+    }
+    if (overlays.any {
+            it.chromaKey.enabled &&
+                (!it.isPhoto ||
+                    !it.chromaKey.similarity.isFinite() ||
+                    !it.chromaKey.smoothness.isFinite() ||
+                    !it.chromaKey.spillSuppression.isFinite())
+        }) {
+        reasons += "unsupported chroma key"
     }
     if (texts.any { it.animIn !in EXPORT_SUPPORTED_TEXT_ANIM_IN || it.animLoop !in EXPORT_SUPPORTED_TEXT_ANIM_LOOP || it.animOut !in EXPORT_SUPPORTED_TEXT_ANIM_OUT }) {
         reasons += "an unsupported text animation"

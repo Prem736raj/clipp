@@ -230,7 +230,8 @@ class ExportInstrumentedTest {
                     scaleX = 0.2f,
                     scaleY = 0.2f,
                     entranceAnim = OverlayAnim.FADE,
-                    exitAnim = OverlayAnim.SCALE
+                    exitAnim = OverlayAnim.SCALE,
+                    chromaKey = ChromaKeySettings(enabled = true)
                 )
             )
         )

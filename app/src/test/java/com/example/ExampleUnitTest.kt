@@ -190,6 +190,34 @@ class ExampleUnitTest {
   }
 
   @Test
+  fun chromaKeyRemovesKeyColorAndPreservesForeground() {
+    val settings = ChromaKeySettings(
+      enabled = true,
+      keyColorArgb = 0xff00ff00L,
+      similarity = 0.05f,
+      smoothness = 0.01f
+    )
+
+    assertEquals(0, chromaKeyPixelArgb(0xff00ff00.toInt(), settings) ushr 24 and 0xff)
+    assertEquals(255, chromaKeyPixelArgb(0xffff0000.toInt(), settings) ushr 24 and 0xff)
+  }
+
+  @Test
+  fun photoChromaKeyIsAllowedButVideoChromaKeyIsBlocked() {
+    val photo = OverlayClip(
+      sourceUri = "content://media/image/1",
+      originalDurationMs = 1_000L,
+      isPhoto = true,
+      trimEndMs = 1_000L,
+      chromaKey = ChromaKeySettings(enabled = true)
+    )
+    val video = photo.copy(isPhoto = false)
+
+    assertFalse(EditorState(overlays = listOf(photo)).hasUnsupportedExportEdits())
+    assertTrue(EditorState(overlays = listOf(video)).hasUnsupportedExportEdits())
+  }
+
+  @Test
   fun timelineMapperMapsAcrossTrimmedClips() {
     val first = MediaClip(
       sourceUri = "content://media/video/1",

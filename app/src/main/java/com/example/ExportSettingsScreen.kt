@@ -102,7 +102,7 @@ fun ExportSettingsScreen(
                     Spacer(Modifier.height(8.dp))
                     Text("MP4 export", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     Text(
-                        "Clipp will render the source timeline, trims, speed, crop, filters, basic visual layers, supported layer animations, fades, audio volume envelopes, and audio tracks into a real MP4.",
+                        "Clipp will render the source timeline, trims, speed, crop, filters, basic visual layers, supported layer animations, photo-overlay chroma key, fades, audio volume envelopes, and audio tracks into a real MP4.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -119,7 +119,7 @@ fun ExportSettingsScreen(
                                 if (unsupportedReasons.isNotEmpty()) {
                                     "This project still contains export-blocked items: ${unsupportedReasons.distinct().joinToString(", ")}. Remove them before exporting."
                                 } else {
-                                    "The current renderer includes clip positioning and transform keyframes, static text, captions, supported text/sticker/image-overlay animations, drawings, frames, image overlays, crop, filters, blur, supported fades, audio volume keyframes/fade envelopes, and separate audio tracks."
+                                    "The current renderer includes clip positioning and transform keyframes, static text, captions, supported text/sticker/image-overlay animations, drawings, frames, image overlays, photo-overlay chroma key, crop, filters, blur, supported fades, audio volume keyframes/fade envelopes, and separate audio tracks. Video overlays and video-overlay chroma key are not enabled."
                                 },
                                 style = MaterialTheme.typography.bodySmall
                             )

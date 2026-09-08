@@ -648,6 +648,7 @@ data class OverlayClip(
     val maskShape: MaskShape = MaskShape.NONE,
     val entranceAnim: OverlayAnim = OverlayAnim.NONE,
     val exitAnim: OverlayAnim = OverlayAnim.NONE,
+    val chromaKey: ChromaKeySettings = ChromaKeySettings(),
     val keyframes: Map<String, List<Keyframe>> = emptyMap()
 ) {
     val durationMs: Long get() = trimEndMs - trimStartMs
@@ -2519,17 +2520,20 @@ fun EditorScreen(
                                     contentAlignment = Alignment.Center
                                 ) {
                                     if (overlay.isPhoto || overlay.isGif) {
+                                        val overlayRequest = coil.request.ImageRequest.Builder(context)
+                                            .data(overlay.sourceUri)
+                                            .decoderFactory(
+                                                if (android.os.Build.VERSION.SDK_INT >= 28) {
+                                                    coil.decode.ImageDecoderDecoder.Factory()
+                                                } else {
+                                                    coil.decode.GifDecoder.Factory()
+                                                }
+                                            )
+                                        if (overlay.isPhoto && overlay.chromaKey.enabled) {
+                                            overlayRequest.transformations(ChromaKeyTransformation(overlay.chromaKey))
+                                        }
                                         AsyncImage(
-                                            model = coil.request.ImageRequest.Builder(context)
-                                                .data(overlay.sourceUri)
-                                                .decoderFactory(
-                                                    if (android.os.Build.VERSION.SDK_INT >= 28) {
-                                                        coil.decode.ImageDecoderDecoder.Factory()
-                                                    } else {
-                                                        coil.decode.GifDecoder.Factory()
-                                                    }
-                                                )
-                                                .build(),
+                                            model = overlayRequest.build(),
                                             contentDescription = "Overlay Image",
                                             modifier = Modifier.fillMaxSize(),
                                             contentScale = ContentScale.Fit
@@ -5539,6 +5543,68 @@ fun EditorScreen(
                                             label = { Text(mask.name.lowercase().capitalize()) }
                                         )
                                     }
+                                }
+                            }
+
+                            if (overlay.isPhoto) {
+                                Divider()
+                                val chroma = overlay.chromaKey
+                                fun updateChromaSettings(update: (ChromaKeySettings) -> ChromaKeySettings, save: Boolean = true) {
+                                    val newOverlays = overlays.toMutableList()
+                                    val idx = newOverlays.indexOfFirst { it.id == overlay.id }
+                                    if (idx >= 0) {
+                                        newOverlays[idx] = overlay.copy(chromaKey = update(chroma))
+                                        if (save) saveOverlayState(newOverlays, "Change chroma key") else overlays = newOverlays
+                                    }
+                                }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text("Chroma key", style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+                                    FilterChip(
+                                        selected = chroma.enabled,
+                                        onClick = { updateChromaSettings(update = { it.copy(enabled = !it.enabled) }) },
+                                        label = { Text(if (chroma.enabled) "On" else "Off") }
+                                    )
+                                }
+                                if (chroma.enabled) {
+                                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        val keyColors = listOf(
+                                            "Green" to android.graphics.Color.GREEN.toLong(),
+                                            "Blue" to android.graphics.Color.BLUE.toLong(),
+                                            "Magenta" to android.graphics.Color.MAGENTA.toLong()
+                                        )
+                                        items(keyColors.size) { index ->
+                                            val (name, argb) = keyColors[index]
+                                            FilterChip(
+                                                selected = chroma.keyColorArgb == argb,
+                                                onClick = { updateChromaSettings(update = { it.copy(keyColorArgb = argb) }) },
+                                                label = { Text(name) }
+                                            )
+                                        }
+                                    }
+                                    Text("Similarity: ${(chroma.similarity * 100).toInt()}%", style = MaterialTheme.typography.labelSmall)
+                                    Slider(
+                                        value = chroma.similarity.coerceIn(0f, 0.8f),
+                                        onValueChange = { value -> updateChromaSettings({ it.copy(similarity = value) }, save = false) },
+                                        valueRange = 0f..0.8f,
+                                        onValueChangeFinished = { saveOverlayState(overlays, "Change chroma similarity") }
+                                    )
+                                    Text("Edge softness: ${(chroma.smoothness * 100).toInt()}%", style = MaterialTheme.typography.labelSmall)
+                                    Slider(
+                                        value = chroma.smoothness.coerceIn(0f, 0.8f),
+                                        onValueChange = { value -> updateChromaSettings({ it.copy(smoothness = value) }, save = false) },
+                                        valueRange = 0f..0.8f,
+                                        onValueChangeFinished = { saveOverlayState(overlays, "Change chroma edge softness") }
+                                    )
+                                    Text("Spill suppression: ${(chroma.spillSuppression * 100).toInt()}%", style = MaterialTheme.typography.labelSmall)
+                                    Slider(
+                                        value = chroma.spillSuppression.coerceIn(0f, 1f),
+                                        onValueChange = { value -> updateChromaSettings({ it.copy(spillSuppression = value) }, save = false) },
+                                        valueRange = 0f..1f,
+                                        onValueChangeFinished = { saveOverlayState(overlays, "Change chroma spill suppression") }
+                                    )
                                 }
                             }
                         }
