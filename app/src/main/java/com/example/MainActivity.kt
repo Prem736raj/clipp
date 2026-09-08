@@ -366,8 +366,16 @@ fun ClippApp(sharedVideoUri: String? = null, shortcutAction: String? = null) {
         val projects by projectViewModel.uiState.collectAsState(initial = emptyList())
         ProjectsScreen(
             projects = projects,
-            onProjectClick = { id -> navController.navigate("editor/$id") }
+            onProjectClick = { id -> navController.navigate("editor/$id") },
+            onBatchExport = { navController.navigate("batch_export") }
         ) 
+      }
+      composable("batch_export") {
+        val projects by projectViewModel.uiState.collectAsState(initial = emptyList())
+        BatchExportScreen(
+            projects = projects,
+            onClose = { navController.popBackStack() }
+        )
       }
       composable(Screen.Profile.route) {
         ProfileScreen(

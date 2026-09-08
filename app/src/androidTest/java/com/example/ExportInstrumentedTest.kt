@@ -163,6 +163,55 @@ class ExportInstrumentedTest {
     }
 
     @Test
+    fun batchRunnerExportsMultipleSavedProjectsSequentially() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val firstSource = File.createTempFile("clipp-batch-first-", ".png", context.cacheDir)
+        val secondSource = File.createTempFile("clipp-batch-second-", ".png", context.cacheDir)
+        writeSolidPng(firstSource, android.graphics.Color.rgb(210, 70, 40))
+        writeSolidPng(secondSource, android.graphics.Color.rgb(40, 120, 220))
+        val firstUri = Uri.fromFile(firstSource).toString()
+        val secondUri = Uri.fromFile(secondSource).toString()
+        val projects = listOf(
+            com.example.data.ProjectEntity(
+                name = "Batch First",
+                duration = "00:01",
+                sourceMediaPaths = listOf(firstUri)
+            ),
+            com.example.data.ProjectEntity(
+                name = "Batch Second",
+                duration = "00:01",
+                sourceMediaPaths = listOf(secondUri)
+            )
+        )
+
+        val results = try {
+            runBlocking {
+                BatchExportRunner(context).export(projects)
+            }
+        } finally {
+            firstSource.delete()
+            secondSource.delete()
+        }
+
+        try {
+            assertTrue(results.size == 2)
+            assertTrue(
+                results.joinToString { result ->
+                    "${result.projectName}: succeeded=${result.succeeded}, error=${result.errorMessage}, duration=${result.metadata?.durationMs}"
+                },
+                results.all { it.succeeded && (it.metadata?.durationMs ?: 0L) > 0L }
+            )
+            results.mapNotNull { it.outputUri }.forEach { outputUri ->
+                assertPublishedMp4(context, Outcome(outputUri, null, null))
+            }
+        } finally {
+            results.mapNotNull { it.outputUri }.forEach { outputUri ->
+                context.contentResolver.delete(outputUri, null, null)
+            }
+        }
+    }
+
+    @Test
     fun staticLayersAndColorEditsAreRenderedAndPublished() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val source = File.createTempFile("clipp-export-layers-", ".png", context.cacheDir)

@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -43,13 +44,25 @@ import java.util.Date
 @Composable
 fun ProjectsScreen(
     projects: List<ProjectEntity>,
-    onProjectClick: (String) -> Unit
+    onProjectClick: (String) -> Unit,
+    onBatchExport: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val totalSize = projects.sumOf { ProjectStorage.calculateOwnedSizeBytes(context, it) }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Projects") }) }
+        topBar = {
+            TopAppBar(
+                title = { Text("Projects") },
+                actions = {
+                    if (projects.isNotEmpty()) {
+                        androidx.compose.material3.IconButton(onClick = onBatchExport) {
+                            Icon(Icons.Filled.Download, contentDescription = "Batch export")
+                        }
+                    }
+                }
+            )
+        }
     ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding),
