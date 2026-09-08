@@ -23,7 +23,7 @@ val changelog = listOf(
         "September 2026",
         listOf(
             "Projects and media references stay local to the device.",
-            "MP4 export now renders clip positioning/transform keyframes, crop, filters, blur, static text, captions, stickers, drawings, frames, supported text/sticker/image-overlay animations, image overlays, supported fades, and separate audio tracks.",
+            "MP4 export now renders clip positioning/transform keyframes, crop, filters, blur, static text, captions, stickers, drawings, frames, supported text/sticker/image-overlay animations, image overlays, supported fades, separate audio tracks, and volume keyframes/fade envelopes.",
             "Music import and microphone voiceover recording are available in the editor.",
             "Unsupported AI, cloud, template, batch-export, and subscription flows remain clearly disabled."
         )

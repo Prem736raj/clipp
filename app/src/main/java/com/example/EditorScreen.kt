@@ -1378,6 +1378,7 @@ fun EditorScreen(
         var showAdjustPanel by remember { mutableStateOf(false) }
         var showLutPanel by remember { mutableStateOf(false) }
         var showEffectsPanel by remember { mutableStateOf(false) }
+        var showAudioPanel by remember { mutableStateOf(false) }
         var showMediaPicker by remember { mutableStateOf(false) }
         var isPickingOverlay by remember { mutableStateOf(false) }
         var showTransitionPickerForClipId by remember { mutableStateOf<String?>(null) }
@@ -1869,6 +1870,7 @@ fun EditorScreen(
                         "Mute" to Icons.Filled.VolumeOff,
                         "Music" to Icons.Filled.LibraryMusic,
                         "Voiceover" to Icons.Filled.RecordVoiceOver,
+                        "Audio" to Icons.Filled.Audiotrack,
                     )
                     items(tools.size) { index ->
                         val toolName = tools[index].first
@@ -1924,6 +1926,11 @@ fun EditorScreen(
                                         startVoiceoverRecording()
                                     } else {
                                         recordAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
+                                    }
+                                    "Audio" -> if (selectedAudioId != null) {
+                                        showAudioPanel = true
+                                    } else {
+                                        android.widget.Toast.makeText(context, "Select an audio track first.", android.widget.Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             }
@@ -5043,6 +5050,153 @@ fun EditorScreen(
             }
         }
         
+        AnimatedVisibility(
+            visible = showAudioPanel && selectedAudioId != null,
+            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }),
+            modifier = Modifier.align(Alignment.BottomCenter).zIndex(10f)
+        ) {
+            val selectedAudio = audioClips.find { it.id == selectedAudioId }
+            if (selectedAudio != null) {
+                val cursorOffsetMs = (currentPositionMs - selectedAudio.startTimeOnTimelineMs)
+                    .coerceIn(0L, selectedAudio.durationMs)
+                val sourceCursorMs = (selectedAudio.trimStartMs + cursorOffsetMs)
+                    .coerceIn(selectedAudio.trimStartMs, selectedAudio.trimEndMs)
+                val volumeKeyframes = selectedAudio.keyframes["volume"].orEmpty()
+                val volumeAtCursor = selectedAudio.keyframes.getValueAtTime(
+                    "volume",
+                    sourceCursorMs,
+                    selectedAudio.volume
+                ).coerceIn(0f, 1f)
+                val maxFadeMs = minOf(5_000L, selectedAudio.durationMs.coerceAtLeast(1L))
+
+                fun updateSelectedAudio(updated: AudioClip) {
+                    val index = audioClips.indexOfFirst { it.id == selectedAudio.id }
+                    if (index >= 0) {
+                        val updatedTracks = audioClips.toMutableList()
+                        updatedTracks[index] = updated
+                        audioClips = updatedTracks
+                    }
+                }
+
+                fun updateVolumeKeyframe(value: Float) {
+                    val updatedKeyframes = selectedAudio.keyframes.toMutableMap()
+                    val current = volumeKeyframes.toMutableList()
+                    val existingIndex = current.indexOfFirst { Math.abs(it.timeMs - sourceCursorMs) < 50L }
+                    if (existingIndex >= 0) {
+                        current[existingIndex] = current[existingIndex].copy(value = value)
+                    } else {
+                        current += Keyframe(timeMs = sourceCursorMs, value = value)
+                    }
+                    updatedKeyframes["volume"] = current.sortedBy { it.timeMs }
+                    updateSelectedAudio(selectedAudio.copy(keyframes = updatedKeyframes))
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                    color = MaterialTheme.colorScheme.surfaceColorAtElevation(12.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 430.dp),
+                    shadowElevation = 16.dp
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                            .padding(16.dp)
+                            .padding(bottom = 32.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column {
+                                Text("Audio automation", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                Text(
+                                    selectedAudio.displayName ?: "Audio track",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            IconButton(onClick = { showAudioPanel = false }) {
+                                Icon(Icons.Filled.Close, contentDescription = "Close")
+                            }
+                        }
+
+                        Text("Base volume: ${(selectedAudio.volume * 100).toInt()}%", style = MaterialTheme.typography.labelMedium)
+                        Slider(
+                            value = selectedAudio.volume,
+                            onValueChange = { updateSelectedAudio(selectedAudio.copy(volume = it)) },
+                            onValueChangeFinished = { persistHistory() },
+                            valueRange = 0f..1f
+                        )
+
+                        Text("Volume at playhead: ${(volumeAtCursor * 100).toInt()}%", style = MaterialTheme.typography.labelMedium)
+                        Slider(
+                            value = volumeAtCursor,
+                            onValueChange = ::updateVolumeKeyframe,
+                            onValueChangeFinished = { persistHistory() },
+                            valueRange = 0f..1f
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text("${volumeKeyframes.size} volume keyframe(s)", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                            OutlinedButton(onClick = {
+                                updateVolumeKeyframe(volumeAtCursor)
+                                persistHistory()
+                            }) {
+                                Text("Add at playhead")
+                            }
+                            if (volumeKeyframes.any { Math.abs(it.timeMs - sourceCursorMs) < 50L }) {
+                                IconButton(onClick = {
+                                    val updatedKeyframes = selectedAudio.keyframes.toMutableMap()
+                                    val remaining = volumeKeyframes.filter { Math.abs(it.timeMs - sourceCursorMs) >= 50L }
+                                    if (remaining.isEmpty()) updatedKeyframes.remove("volume") else updatedKeyframes["volume"] = remaining
+                                    updateSelectedAudio(selectedAudio.copy(keyframes = updatedKeyframes))
+                                    persistHistory()
+                                }) {
+                                    Icon(Icons.Filled.Delete, contentDescription = "Remove keyframe", tint = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                        }
+
+                        Text("Fade in: ${selectedAudio.audioEffects.fadeInMs} ms", style = MaterialTheme.typography.labelMedium)
+                        Slider(
+                            value = selectedAudio.audioEffects.fadeInMs.coerceIn(0L, maxFadeMs).toFloat(),
+                            onValueChange = { value ->
+                                updateSelectedAudio(
+                                    selectedAudio.copy(audioEffects = selectedAudio.audioEffects.copy(fadeInMs = value.toLong()))
+                                )
+                            },
+                            onValueChangeFinished = { persistHistory() },
+                            valueRange = 0f..maxFadeMs.toFloat()
+                        )
+
+                        Text("Fade out: ${selectedAudio.audioEffects.fadeOutMs} ms", style = MaterialTheme.typography.labelMedium)
+                        Slider(
+                            value = selectedAudio.audioEffects.fadeOutMs.coerceIn(0L, maxFadeMs).toFloat(),
+                            onValueChange = { value ->
+                                updateSelectedAudio(
+                                    selectedAudio.copy(audioEffects = selectedAudio.audioEffects.copy(fadeOutMs = value.toLong()))
+                                )
+                            },
+                            onValueChangeFinished = { persistHistory() },
+                            valueRange = 0f..maxFadeMs.toFloat()
+                        )
+
+                        Text(
+                            "Export supports volume keyframes and fades. EQ, reverb, ducking, crossfade, and other advanced processors are not enabled yet.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
         AnimatedVisibility(
             visible = showTransformPanel && selectedClipId != null,
             enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }),

@@ -47,6 +47,23 @@ class ExportHandle internal constructor(private val cancelAction: () -> Unit) {
     fun cancel() = cancelAction()
 }
 
+internal fun AudioEffects.hasUnsupportedExportAutomation(): Boolean {
+    return fadeInMs < 0L || fadeOutMs < 0L ||
+        crossfadeMs != 0L ||
+        eqPreset != "Flat" ||
+        reverbPreset != "None" ||
+        delayTimeMs != 0L ||
+        delayFeedback != 0f ||
+        pitchSemitones != 0f ||
+        noiseReductionIntensity != 0f ||
+        isWindNoiseReduction ||
+        voicePreset != "None" ||
+        voiceEffectIntensity != 1f ||
+        distortion != 0f ||
+        speed != 1f ||
+        reverbAmount != 0f
+}
+
 /**
  * Renders the base timeline into a real MP4. Trims, still-image durations, and
  * muted source audio are represented in the composition. Higher-level editor
@@ -229,7 +246,21 @@ class VideoExporter(context: Context) {
             }
         }
         val effectiveVolume = (normalized.volume * state.canvasSettings.masterVolume).coerceIn(0f, 1f)
-        if (!normalized.isPhoto && !normalized.isMuted && effectiveVolume != 1f) {
+        val clipVolumeKeyframes = normalized.keyframes["volume"].orEmpty().map { keyframe ->
+            keyframe.copy(value = keyframe.value.coerceIn(0f, 1f) * state.canvasSettings.masterVolume)
+        }
+        val clipEffects = normalized.audioEffects
+        val hasClipAudioAutomation = clipVolumeKeyframes.isNotEmpty() ||
+            clipEffects.fadeInMs > 0L || clipEffects.fadeOutMs > 0L
+        if (!normalized.isPhoto && !normalized.isMuted && hasClipAudioAutomation) {
+            audioProcessors += KeyframedVolumeAudioProcessor(
+                baseGain = effectiveVolume,
+                durationMs = normalized.durationMs,
+                fadeInMs = clipEffects.fadeInMs,
+                fadeOutMs = clipEffects.fadeOutMs,
+                volumeKeyframes = clipVolumeKeyframes
+            )
+        } else if (!normalized.isPhoto && !normalized.isMuted && effectiveVolume != 1f) {
             audioProcessors += VolumeAudioProcessor(effectiveVolume)
         }
 
@@ -259,9 +290,12 @@ class VideoExporter(context: Context) {
             val sourceStart = audioClip.trimStartMs.coerceAtLeast(0L)
             val timelineStartMs = audioClip.startTimeOnTimelineMs.coerceIn(0L, (videoDurationMs - 1L).coerceAtLeast(0L))
             val availableTimelineMs = (videoDurationMs - timelineStartMs).coerceAtLeast(1L)
+            val safeSourceDurationMs = audioClip.sourceDurationMs.coerceAtLeast(sourceStart + 1L)
             val sourceEnd = audioClip.trimEndMs
                 .coerceAtLeast(sourceStart + 1L)
+                .coerceAtMost(safeSourceDurationMs)
                 .coerceAtMost(sourceStart + availableTimelineMs)
+            val durationMs = (sourceEnd - sourceStart).coerceAtLeast(1L)
             val mediaItem = MediaItem.Builder()
                 .setUri(Uri.parse(sourceUri))
                 .setClippingConfiguration(
@@ -273,7 +307,24 @@ class VideoExporter(context: Context) {
                 .build()
             val processors = mutableListOf<AudioProcessor>()
             val effectiveVolume = (audioClip.volume * state.canvasSettings.masterVolume).coerceIn(0f, 1f)
-            if (!audioClip.isMuted && effectiveVolume != 1f) {
+            val audioEffects = audioClip.audioEffects
+            val volumeKeyframes = audioClip.keyframes["volume"].orEmpty().map { keyframe ->
+                keyframe.copy(
+                    timeMs = (keyframe.timeMs - sourceStart).coerceAtLeast(0L),
+                    value = keyframe.value.coerceIn(0f, 1f) * state.canvasSettings.masterVolume
+                )
+            }
+            val hasAudioAutomation = volumeKeyframes.isNotEmpty() ||
+                audioEffects.fadeInMs > 0L || audioEffects.fadeOutMs > 0L
+            if (!audioClip.isMuted && hasAudioAutomation) {
+                processors += KeyframedVolumeAudioProcessor(
+                    baseGain = effectiveVolume,
+                    durationMs = durationMs,
+                    fadeInMs = audioEffects.fadeInMs,
+                    fadeOutMs = audioEffects.fadeOutMs,
+                    volumeKeyframes = volumeKeyframes
+                )
+            } else if (!audioClip.isMuted && effectiveVolume != 1f) {
                 processors += VolumeAudioProcessor(effectiveVolume)
             }
             val item = EditedMediaItem.Builder(mediaItem)
@@ -431,5 +482,99 @@ internal class VolumeAudioProcessor(volume: Float) : BaseAudioProcessor() {
             }
         }
         output.flip()
+    }
+}
+
+/** Applies absolute volume keyframes and optional fade envelopes to decoded PCM audio. */
+internal class KeyframedVolumeAudioProcessor(
+    private val baseGain: Float,
+    private val durationMs: Long,
+    fadeInMs: Long,
+    fadeOutMs: Long,
+    volumeKeyframes: List<Keyframe>
+) : BaseAudioProcessor() {
+    private val fadeInDurationMs = fadeInMs.coerceAtLeast(0L)
+    private val fadeOutDurationMs = fadeOutMs.coerceAtLeast(0L)
+    private val sortedVolumeKeyframes = volumeKeyframes.sortedBy { it.timeMs }
+    private var sampleRate = 0
+    private var channelCount = 0
+    private var bytesPerSample = 0
+    private var processedFrames = 0L
+
+    override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
+        if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT &&
+            inputAudioFormat.encoding != C.ENCODING_PCM_FLOAT
+        ) {
+            throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
+        }
+        sampleRate = inputAudioFormat.sampleRate
+        channelCount = inputAudioFormat.channelCount
+        bytesPerSample = if (inputAudioFormat.encoding == C.ENCODING_PCM_16BIT) 2 else 4
+        return inputAudioFormat
+    }
+
+    override fun onFlush() {
+        processedFrames = 0L
+    }
+
+    override fun isActive(): Boolean = baseGain != 1f ||
+        fadeInDurationMs > 0L ||
+        fadeOutDurationMs > 0L ||
+        sortedVolumeKeyframes.isNotEmpty()
+
+    override fun queueInput(inputBuffer: ByteBuffer) {
+        val input = inputBuffer.order(ByteOrder.LITTLE_ENDIAN)
+        val bytesPerFrame = (channelCount * bytesPerSample).coerceAtLeast(1)
+        val completeBytes = input.remaining() - input.remaining() % bytesPerFrame
+        val output = replaceOutputBuffer(completeBytes).order(ByteOrder.LITTLE_ENDIAN)
+        val frameCount = completeBytes / bytesPerFrame
+        repeat(frameCount) {
+            val frameTimeMs = if (sampleRate > 0) {
+                ((processedFrames + it) * 1_000L / sampleRate).coerceAtLeast(0L)
+            } else {
+                0L
+            }
+            val gain = gainAtTime(frameTimeMs)
+            repeat(channelCount) {
+                if (bytesPerSample == 2) {
+                    val sample = input.short.toInt()
+                    output.putShort((sample * gain).roundToInt().coerceIn(-32768, 32767).toShort())
+                } else {
+                    output.putFloat((input.float * gain).coerceIn(-1f, 1f))
+                }
+            }
+        }
+        processedFrames += frameCount
+        output.flip()
+    }
+
+    private fun gainAtTime(timeMs: Long): Float {
+        val keyframedGain = if (sortedVolumeKeyframes.isEmpty()) {
+            baseGain
+        } else if (timeMs <= sortedVolumeKeyframes.first().timeMs) {
+            sortedVolumeKeyframes.first().value
+        } else if (timeMs >= sortedVolumeKeyframes.last().timeMs) {
+            sortedVolumeKeyframes.last().value
+        } else {
+            val index = sortedVolumeKeyframes.indexOfLast { it.timeMs <= timeMs }
+            val first = sortedVolumeKeyframes[index]
+            val second = sortedVolumeKeyframes[index + 1]
+            val duration = second.timeMs - first.timeMs
+            val progress = if (duration <= 0L) 0f else {
+                applyEasing((timeMs - first.timeMs).toFloat() / duration, first.easing)
+            }
+            first.value + (second.value - first.value) * progress
+        }
+        val fadeInGain = if (fadeInDurationMs > 0L) {
+            (timeMs.toFloat() / fadeInDurationMs).coerceIn(0f, 1f)
+        } else {
+            1f
+        }
+        val fadeOutGain = if (fadeOutDurationMs > 0L && durationMs > 0L) {
+            ((durationMs - timeMs).toFloat() / fadeOutDurationMs).coerceIn(0f, 1f)
+        } else {
+            1f
+        }
+        return (keyframedGain * fadeInGain * fadeOutGain).coerceIn(0f, 1f)
     }
 }

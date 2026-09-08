@@ -137,6 +137,59 @@ class ExampleUnitTest {
   }
 
   @Test
+  fun keyframedVolumeProcessorAppliesFadeEnvelope() {
+    val processor = KeyframedVolumeAudioProcessor(
+      baseGain = 1f,
+      durationMs = 4L,
+      fadeInMs = 2L,
+      fadeOutMs = 2L,
+      volumeKeyframes = emptyList()
+    )
+    processor.configure(AudioProcessor.AudioFormat(1_000, 1, C.ENCODING_PCM_16BIT))
+    processor.flush()
+
+    val input = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).apply {
+      repeat(4) { putShort(10_000) }
+      flip()
+    }
+    processor.queueInput(input)
+
+    val output = processor.output.order(ByteOrder.LITTLE_ENDIAN)
+    assertEquals(0, output.short.toInt())
+    assertEquals(5_000, output.short.toInt())
+    assertEquals(10_000, output.short.toInt())
+    assertEquals(5_000, output.short.toInt())
+  }
+
+  @Test
+  fun audioEnvelopeAutomationIsAllowedButAdvancedAudioIsBlocked() {
+    val clip = MediaClip(
+      sourceUri = "content://media/video/1",
+      originalDurationMs = 1_000L,
+      trimEndMs = 1_000L,
+      keyframes = mapOf(
+        "volume" to listOf(
+          Keyframe(timeMs = 0L, value = 0.2f),
+          Keyframe(timeMs = 1_000L, value = 0.8f)
+        )
+      ),
+      audioEffects = AudioEffects(fadeInMs = 100L, fadeOutMs = 100L)
+    )
+    val audio = AudioClip(
+      sourceUri = "content://media/audio/1",
+      startTimeOnTimelineMs = 0L,
+      sourceDurationMs = 1_000L,
+      trimEndMs = 1_000L,
+      keyframes = mapOf("volume" to listOf(Keyframe(timeMs = 0L, value = 0.4f))),
+      audioEffects = AudioEffects(fadeInMs = 100L, fadeOutMs = 100L)
+    )
+
+    assertFalse(EditorState(clips = listOf(clip), audioClips = listOf(audio)).hasUnsupportedExportEdits())
+    assertTrue(EditorState(clips = listOf(clip.copy(audioEffects = AudioEffects(eqPreset = "Bass")))).hasUnsupportedExportEdits())
+    assertTrue(EditorState(clips = listOf(clip.copy(keyframes = mapOf("pan" to listOf(Keyframe(timeMs = 0L, value = 0f)))))).hasUnsupportedExportEdits())
+  }
+
+  @Test
   fun timelineMapperMapsAcrossTrimmedClips() {
     val first = MediaClip(
       sourceUri = "content://media/video/1",

@@ -33,6 +33,7 @@ import kotlin.math.sin
 
 private val EXPORT_DEFAULT_CROP = androidx.compose.ui.geometry.Rect(0f, 0f, 1f, 1f)
 private val EXPORT_SUPPORTED_CLIP_KEYFRAMES = setOf("posX", "posY", "scale", "rotation")
+internal val EXPORT_SUPPORTED_AUDIO_KEYFRAMES = setOf("volume")
 private val EXPORT_SUPPORTED_TEXT_ANIM_IN = setOf(
     TextAnimIn.NONE,
     TextAnimIn.FADE_IN,
@@ -704,10 +705,13 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
     val reasons = mutableListOf<String>()
     clips.forEach { clip ->
         if (clip.hasUnsupportedExportEdits()) reasons += "an unsupported clip edit"
-        if (clip.keyframes.keys.any { it !in EXPORT_SUPPORTED_CLIP_KEYFRAMES }) {
+        if (clip.keyframes.keys.any { it !in EXPORT_SUPPORTED_CLIP_KEYFRAMES && it !in EXPORT_SUPPORTED_AUDIO_KEYFRAMES }) {
             reasons += "unsupported clip keyframes"
         }
-        if (clip.audioEffects != AudioEffects()) reasons += "advanced clip audio effects"
+        if (clip.keyframes["volume"].orEmpty().any { it.timeMs < 0L || !it.value.isFinite() || it.value !in 0f..1f }) {
+            reasons += "invalid clip audio automation"
+        }
+        if (clip.audioEffects.hasUnsupportedExportAutomation()) reasons += "advanced clip audio automation"
         if (clip.transitionNext.type !in setOf(TransitionType.NONE, TransitionType.FADE_TO_BLACK, TransitionType.FADE_TO_WHITE)) {
             reasons += "this transition type"
         }
@@ -725,7 +729,15 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
         reasons += "an unsupported sticker animation"
     }
     if (audioClips.any { it.sourceUri.isNullOrBlank() && it.sourceClipId.isNullOrBlank() }) reasons += "an audio source"
-    if (audioClips.any { it.isLooped || it.keyframes.isNotEmpty() || it.autoDucking || it.audioEffects != AudioEffects() }) {
+    if (audioClips.any {
+            it.isLooped ||
+                it.autoDucking ||
+                it.keyframes.keys.any { key -> key !in EXPORT_SUPPORTED_AUDIO_KEYFRAMES } ||
+                it.keyframes["volume"].orEmpty().any { keyframe ->
+                    keyframe.timeMs < 0L || !keyframe.value.isFinite() || keyframe.value !in 0f..1f
+                } ||
+                it.audioEffects.hasUnsupportedExportAutomation()
+        }) {
         reasons += "advanced audio automation"
     }
     if (canvasSettings.aspectOption != AspectRatioOption.R_16_9 ||

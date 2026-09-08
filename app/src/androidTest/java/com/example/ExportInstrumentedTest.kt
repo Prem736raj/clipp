@@ -278,7 +278,14 @@ class ExportInstrumentedTest {
                     startTimeOnTimelineMs = 0L,
                     sourceDurationMs = 1_000L,
                     trimEndMs = 1_000L,
-                    volume = 0.65f
+                    volume = 0.65f,
+                    keyframes = mapOf(
+                        "volume" to listOf(
+                            Keyframe(timeMs = 0L, value = 0.2f),
+                            Keyframe(timeMs = 1_000L, value = 0.8f)
+                        )
+                    ),
+                    audioEffects = AudioEffects(fadeInMs = 200L, fadeOutMs = 200L)
                 )
             )
         )
