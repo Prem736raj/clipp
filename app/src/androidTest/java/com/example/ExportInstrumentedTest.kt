@@ -72,6 +72,48 @@ class ExportInstrumentedTest {
     }
 
     @Test
+    fun multipleSourceClipsAreConcatenatedInOrderAndDuration() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val firstSource = File.createTempFile("clipp-export-multi-first-", ".png", context.cacheDir)
+        val secondSource = File.createTempFile("clipp-export-multi-second-", ".png", context.cacheDir)
+        writeSolidPng(firstSource, android.graphics.Color.RED)
+        writeSolidPng(secondSource, android.graphics.Color.BLUE)
+
+        val firstClip = MediaClip(
+            sourceUri = Uri.fromFile(firstSource).toString(),
+            originalDurationMs = 700L,
+            trimEndMs = 700L,
+            isPhoto = true
+        )
+        val secondClip = MediaClip(
+            sourceUri = Uri.fromFile(secondSource).toString(),
+            originalDurationMs = 900L,
+            trimEndMs = 900L,
+            isPhoto = true
+        )
+        val exporter = VideoExporter(context)
+        var result: Outcome? = null
+        try {
+            result = awaitExport(
+                exporter,
+                listOf(firstClip, secondClip),
+                "Clipp_instrumented_multi_clip.mp4"
+            )
+            assertSuccessful(result!!)
+            assertPublishedMp4(context, result!!)
+            val durationMs = result!!.metadata!!.durationMs
+            assertTrue("Unexpected multi-clip duration: $durationMs", durationMs in 1_400L..1_800L)
+            assertFrameHasDominantColor(context, result!!, 200_000L, expected = "red")
+            assertFrameHasDominantColor(context, result!!, 1_000_000L, expected = "blue")
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            firstSource.delete()
+            secondSource.delete()
+        }
+    }
+
+    @Test
     fun staticLayersAndColorEditsAreRenderedAndPublished() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val source = File.createTempFile("clipp-export-layers-", ".png", context.cacheDir)
@@ -362,6 +404,47 @@ class ExportInstrumentedTest {
         } finally {
             retriever.release()
         }
+    }
+
+    private fun assertFrameHasDominantColor(
+        context: android.content.Context,
+        result: Outcome,
+        frameTimeUs: Long,
+        expected: String
+    ) {
+        val retriever = android.media.MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(context, result.uri!!)
+            val frame = retriever.getFrameAtTime(
+                frameTimeUs,
+                android.media.MediaMetadataRetriever.OPTION_CLOSEST
+            ) ?: error("Missing frame at $frameTimeUs")
+            try {
+                val pixel = frame.getPixel(frame.width / 2, frame.height / 2)
+                val red = (pixel ushr 16) and 0xff
+                val green = (pixel ushr 8) and 0xff
+                val blue = pixel and 0xff
+                when (expected) {
+                    "red" -> assertTrue("Expected red frame, got $red/$green/$blue", red > green + 40 && red > blue + 40)
+                    "blue" -> assertTrue("Expected blue frame, got $red/$green/$blue", blue > red + 40 && blue > green + 40)
+                    else -> error("Unknown expected color: $expected")
+                }
+            } finally {
+                frame.recycle()
+            }
+        } finally {
+            retriever.release()
+        }
+    }
+
+    private fun writeSolidPng(file: File, color: Int) {
+        val bitmap = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(color)
+        }
+        file.outputStream().use { output ->
+            assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
+        }
+        bitmap.recycle()
     }
 
     private fun assertFramesDiffer(
