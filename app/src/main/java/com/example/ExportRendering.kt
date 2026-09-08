@@ -4,10 +4,12 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
+import android.graphics.Shader
 import android.graphics.Typeface
 import android.media.MediaMetadataRetriever
 import android.net.Uri
@@ -30,6 +32,7 @@ import kotlin.math.PI
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.random.Random
 
 private val EXPORT_DEFAULT_CROP = androidx.compose.ui.geometry.Rect(0f, 0f, 1f, 1f)
 private val EXPORT_CROP_KEYFRAMES = setOf("cropLeft", "cropTop", "cropRight", "cropBottom")
@@ -43,7 +46,10 @@ private val EXPORT_SUPPORTED_EFFECTS = setOf(
     EffectType.SHAKE,
     EffectType.COMIC_BOOK,
     EffectType.PENCIL_SKETCH,
-    EffectType.POP_ART
+    EffectType.POP_ART,
+    EffectType.FILM_GRAIN,
+    EffectType.ANAMORPHIC_FLARE,
+    EffectType.SPARKLE
 )
 private val EXPORT_SUPPORTED_TEXT_ANIM_IN = setOf(
     TextAnimIn.NONE,
@@ -175,6 +181,115 @@ private class VideoFrameBitmapOverlay(
         return applyChromaKey(scaled, chromaKey).also { keyed ->
             if (keyed !== scaled) scaled.recycle()
         }
+    }
+}
+
+/** Renders deterministic per-frame cinematic textures without changing the source track. */
+private class ProceduralEffectBitmapOverlay(
+    private val type: EffectType,
+    private val intensity: Float,
+    private val blankBitmap: Bitmap
+) : BitmapOverlay() {
+    private companion object {
+        const val BITMAP_SIZE = 256
+        const val SAMPLE_INTERVAL_MS = 33L
+    }
+
+    private var cachedSampleTimeMs = Long.MIN_VALUE
+    private var cachedBitmap: Bitmap? = null
+    private var released = false
+
+    override fun getBitmap(presentationTimeUs: Long): Bitmap {
+        val sampleTimeMs = ((presentationTimeUs / 1_000L).coerceAtLeast(0L) / SAMPLE_INTERVAL_MS) * SAMPLE_INTERVAL_MS
+        synchronized(this) {
+            if (released) return blankBitmap
+            if (sampleTimeMs == cachedSampleTimeMs) return cachedBitmap ?: blankBitmap
+            val next = render(sampleTimeMs)
+            cachedBitmap?.recycle()
+            cachedBitmap = next
+            cachedSampleTimeMs = sampleTimeMs
+            return next
+        }
+    }
+
+    override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings {
+        return overlaySettings(0.5f, 0.5f, 1f, 1f)
+    }
+
+    override fun release() {
+        synchronized(this) {
+            if (released) return
+            released = true
+            cachedBitmap?.recycle()
+            cachedBitmap = null
+        }
+        super.release()
+    }
+
+    private fun render(sampleTimeMs: Long): Bitmap {
+        val bitmap = Bitmap.createBitmap(BITMAP_SIZE, BITMAP_SIZE, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val safeIntensity = intensity.coerceIn(0f, 1f)
+        when (type) {
+            EffectType.FILM_GRAIN -> {
+                val random = Random(sampleTimeMs)
+                val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+                repeat((2_500 * safeIntensity).toInt()) {
+                    val shade = if (random.nextBoolean()) 255 else 0
+                    paint.color = android.graphics.Color.argb(
+                        (48f * safeIntensity).toInt().coerceIn(1, 48),
+                        shade,
+                        shade,
+                        shade
+                    )
+                    val x = random.nextInt(BITMAP_SIZE).toFloat()
+                    val y = random.nextInt(BITMAP_SIZE).toFloat()
+                    canvas.drawRect(x, y, x + 2f, y + 2f, paint)
+                }
+            }
+            EffectType.SPARKLE -> {
+                val random = Random(sampleTimeMs + 17L)
+                val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.argb(
+                        (210f * safeIntensity).toInt().coerceIn(1, 210),
+                        255,
+                        255,
+                        255
+                    )
+                }
+                repeat((18 * safeIntensity).toInt()) {
+                    val radius = (1.5f + random.nextFloat() * 4f) * safeIntensity.coerceAtLeast(0.2f)
+                    canvas.drawCircle(
+                        random.nextFloat() * BITMAP_SIZE,
+                        random.nextFloat() * BITMAP_SIZE,
+                        radius,
+                        paint
+                    )
+                }
+            }
+            EffectType.ANAMORPHIC_FLARE -> {
+                val moveY = BITMAP_SIZE * 0.4f + sin(sampleTimeMs / 1_000f) * BITMAP_SIZE * 0.1f
+                val halfHeight = 10f.coerceAtLeast(2f * safeIntensity)
+                val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    shader = LinearGradient(
+                        0f,
+                        moveY - halfHeight,
+                        0f,
+                        moveY + halfHeight,
+                        intArrayOf(
+                            android.graphics.Color.TRANSPARENT,
+                            android.graphics.Color.argb((200f * safeIntensity).toInt(), 50, 150, 255),
+                            android.graphics.Color.TRANSPARENT
+                        ),
+                        null,
+                        Shader.TileMode.CLAMP
+                    )
+                }
+                canvas.drawRect(0f, moveY - halfHeight, BITMAP_SIZE.toFloat(), moveY + halfHeight, paint)
+            }
+            else -> Unit
+        }
+        return bitmap
     }
 }
 
@@ -810,6 +925,18 @@ internal fun buildExportOverlays(
             clipStartMs,
             clipStartMs + clipDurationMs
         ) { _ -> overlaySettings(0.5f, 0.5f, 1f, 1f) }
+    }
+
+    clip.effects.filter {
+        it.type == EffectType.FILM_GRAIN ||
+            it.type == EffectType.ANAMORPHIC_FLARE ||
+            it.type == EffectType.SPARKLE
+    }.forEach { effect ->
+        overlays += ProceduralEffectBitmapOverlay(
+            type = effect.type,
+            intensity = effect.intensity,
+            blankBitmap = blank
+        )
     }
 
     // These transition variants are safe to render as a deterministic color fade.

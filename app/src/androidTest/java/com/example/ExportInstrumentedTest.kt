@@ -238,7 +238,10 @@ class ExportInstrumentedTest {
                 AppliedEffect(type = EffectType.SHAKE),
                 AppliedEffect(type = EffectType.COMIC_BOOK),
                 AppliedEffect(type = EffectType.PENCIL_SKETCH),
-                AppliedEffect(type = EffectType.POP_ART)
+                AppliedEffect(type = EffectType.POP_ART),
+                AppliedEffect(type = EffectType.FILM_GRAIN),
+                AppliedEffect(type = EffectType.ANAMORPHIC_FLARE),
+                AppliedEffect(type = EffectType.SPARKLE)
             ),
             transitionNext = Transition(TransitionType.FADE_TO_BLACK, 200L)
         )
@@ -277,6 +280,36 @@ class ExportInstrumentedTest {
             result = awaitExport(exporter, listOf(clip), "Clipp_instrumented_layers.mp4", state)
             assertSuccessful(result!!)
             assertPublishedMp4(context, result!!)
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            source.delete()
+        }
+    }
+
+    @Test
+    fun proceduralCinematicEffectsChangePublishedFrames() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val source = File.createTempFile("clipp-export-cinematic-effects-", ".png", context.cacheDir)
+        writeSolidPng(source, android.graphics.Color.rgb(120, 120, 120))
+        val clip = MediaClip(
+            sourceUri = Uri.fromFile(source).toString(),
+            originalDurationMs = 1_000L,
+            trimEndMs = 1_000L,
+            isPhoto = true,
+            effects = listOf(
+                AppliedEffect(type = EffectType.FILM_GRAIN, intensity = 0.8f),
+                AppliedEffect(type = EffectType.SPARKLE, intensity = 0.8f),
+                AppliedEffect(type = EffectType.ANAMORPHIC_FLARE, intensity = 0.8f)
+            )
+        )
+        val exporter = VideoExporter(context)
+        var result: Outcome? = null
+        try {
+            result = awaitExport(exporter, listOf(clip), "Clipp_instrumented_cinematic_effects.mp4")
+            assertSuccessful(result!!)
+            assertPublishedMp4(context, result!!)
+            assertFramesDiffer(context, result!!, 100_000L, 800_000L)
         } finally {
             result?.uri?.let { context.contentResolver.delete(it, null, null) }
             exporter.close()

@@ -102,7 +102,7 @@ fun ExportSettingsScreen(
                     Spacer(Modifier.height(8.dp))
                     Text("MP4 export", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     Text(
-                        "Clipp will render the source timeline, trims, speed, crop, filters, mirror/shake/style effects, basic visual layers, supported layer animations, photo-overlay chroma key, video overlays, fades, audio volume envelopes, and audio tracks into a real MP4.",
+                        "Clipp will render the source timeline, trims, speed, crop, filters, mirror/shake/style effects including film grain, sparkle, and anamorphic flare, basic visual layers, supported layer animations, photo-overlay chroma key, video overlays, fades, audio volume envelopes, and audio tracks into a real MP4.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -119,7 +119,7 @@ fun ExportSettingsScreen(
                                 if (unsupportedReasons.isNotEmpty()) {
                                     "This project still contains export-blocked items: ${unsupportedReasons.distinct().joinToString(", ")}. Remove them before exporting."
                                 } else {
-                                    "The current renderer includes clip positioning and transform/crop keyframes, static text, captions, supported text/sticker/image/video-overlay animations, drawings, frames, image overlays, video overlays, photo-overlay chroma key, crop, filters, blur, mirror, shake, comic-book/pencil-sketch/pop-art style effects, supported fades, audio volume keyframes/fade envelopes, and separate audio tracks. GIF overlays, video-overlay chroma key, masks, blend modes, and partial-duration visual effects are not enabled."
+                                    "The current renderer includes clip positioning and transform/crop keyframes, static text, captions, supported text/sticker/image/video-overlay animations, drawings, frames, image overlays, video overlays, photo-overlay chroma key, crop, filters, blur, mirror, shake, comic-book/pencil-sketch/pop-art/film-grain/sparkle/anamorphic-flare style effects, supported fades, audio volume keyframes/fade envelopes, and separate audio tracks. GIF overlays, video-overlay chroma key, masks, blend modes, and partial-duration visual effects are not enabled."
                                 },
                                 style = MaterialTheme.typography.bodySmall
                             )

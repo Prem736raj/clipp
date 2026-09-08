@@ -75,7 +75,10 @@ class ExampleUnitTest {
         AppliedEffect(type = EffectType.SHAKE),
         AppliedEffect(type = EffectType.COMIC_BOOK),
         AppliedEffect(type = EffectType.PENCIL_SKETCH),
-        AppliedEffect(type = EffectType.POP_ART)
+        AppliedEffect(type = EffectType.POP_ART),
+        AppliedEffect(type = EffectType.FILM_GRAIN),
+        AppliedEffect(type = EffectType.ANAMORPHIC_FLARE),
+        AppliedEffect(type = EffectType.SPARKLE)
       )
     )
 
