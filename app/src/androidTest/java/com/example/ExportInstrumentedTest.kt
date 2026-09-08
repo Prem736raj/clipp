@@ -134,7 +134,14 @@ class ExportInstrumentedTest {
             filterType = FilterType.WARM,
             filterIntensity = 0.7f,
             adjustments = ColorAdjustments(brightness = 8f, saturation = 12f),
-            effects = listOf(AppliedEffect(type = EffectType.GAUSSIAN_BLUR, intensity = 0.05f)),
+            effects = listOf(
+                AppliedEffect(type = EffectType.GAUSSIAN_BLUR, intensity = 0.05f),
+                AppliedEffect(type = EffectType.MIRROR),
+                AppliedEffect(type = EffectType.SHAKE),
+                AppliedEffect(type = EffectType.COMIC_BOOK),
+                AppliedEffect(type = EffectType.PENCIL_SKETCH),
+                AppliedEffect(type = EffectType.POP_ART)
+            ),
             transitionNext = Transition(TransitionType.FADE_TO_BLACK, 200L)
         )
         val state = EditorState(

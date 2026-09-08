@@ -34,6 +34,15 @@ import kotlin.math.sin
 private val EXPORT_DEFAULT_CROP = androidx.compose.ui.geometry.Rect(0f, 0f, 1f, 1f)
 private val EXPORT_SUPPORTED_CLIP_KEYFRAMES = setOf("posX", "posY", "scale", "rotation")
 internal val EXPORT_SUPPORTED_AUDIO_KEYFRAMES = setOf("volume")
+private val EXPORT_SUPPORTED_EFFECTS = setOf(
+    EffectType.GAUSSIAN_BLUR,
+    EffectType.LETTERBOX,
+    EffectType.MIRROR,
+    EffectType.SHAKE,
+    EffectType.COMIC_BOOK,
+    EffectType.PENCIL_SKETCH,
+    EffectType.POP_ART
+)
 private val EXPORT_SUPPORTED_TEXT_ANIM_IN = setOf(
     TextAnimIn.NONE,
     TextAnimIn.FADE_IN,
@@ -105,6 +114,21 @@ private class KeyframedClipTransformation(
             )
             postRotate(rotation)
             postTranslate((posX - 0.5f) * 2f, (0.5f - posY) * 2f)
+        }
+    }
+}
+
+private class ShakeTransformation(
+    private val intensity: Float
+) : MatrixTransformation {
+    override fun getMatrix(presentationTimeUs: Long): Matrix {
+        val timeSeconds = presentationTimeUs / 1_000_000f
+        val amplitude = 0.025f * intensity.coerceIn(0f, 1f)
+        return Matrix().apply {
+            postTranslate(
+                sin(timeSeconds * 31f) * amplitude,
+                sin(timeSeconds * 43f + 0.7f) * amplitude
+            )
         }
     }
 }
@@ -212,6 +236,28 @@ private fun overlaySettings(
         .setScale(scaleX.coerceAtLeast(0.001f), scaleY.coerceAtLeast(0.001f))
         .setRotationDegrees(rotation)
         .build()
+}
+
+private fun toMedia3ColorMatrix(matrix: ColorMatrix): FloatArray {
+    val values = matrix.values
+    return floatArrayOf(
+        values[0], values[1], values[2], values[3],
+        values[5], values[6], values[7], values[8],
+        values[10], values[11], values[12], values[13],
+        values[15], values[16], values[17], values[18]
+    )
+}
+
+private fun buildExportEffectColorMatrix(effect: AppliedEffect): FloatArray? {
+    val intensity = effect.intensity.coerceIn(0f, 1f)
+    val matrix = ColorMatrix()
+    when (effect.type) {
+        EffectType.COMIC_BOOK -> matrix.setToSaturation(1f + 1.5f * intensity)
+        EffectType.PENCIL_SKETCH -> matrix.setToSaturation(1f - intensity)
+        EffectType.POP_ART -> matrix.setToSaturation(1f + 2f * intensity)
+        else -> return null
+    }
+    return toMedia3ColorMatrix(matrix)
 }
 
 private fun renderTextBitmap(
@@ -696,8 +742,24 @@ internal fun buildExportVideoEffects(
     ))
     if (!isIdentity) effects += ExportRgbMatrix(matrix4x4)
 
-    clip.effects.filter { it.type == EffectType.GAUSSIAN_BLUR }.forEach { effect ->
-        effects += GaussianBlur((24f * effect.intensity.coerceIn(0.05f, 1f)).coerceAtLeast(1f))
+    clip.effects.forEach { effect ->
+        when (effect.type) {
+            EffectType.GAUSSIAN_BLUR -> {
+                effects += GaussianBlur((24f * effect.intensity.coerceIn(0.05f, 1f)).coerceAtLeast(1f))
+            }
+            EffectType.MIRROR -> {
+                effects += ScaleAndRotateTransformation.Builder()
+                    .setScale(-1f, 1f)
+                    .build()
+            }
+            EffectType.SHAKE -> effects += ShakeTransformation(effect.intensity)
+            EffectType.COMIC_BOOK,
+            EffectType.PENCIL_SKETCH,
+            EffectType.POP_ART -> {
+                buildExportEffectColorMatrix(effect)?.let { effects += ExportRgbMatrix(it) }
+            }
+            else -> Unit
+        }
     }
 
     val overlays = buildExportOverlays(context, state, clipStartMs, clipDurationMs, clip)
@@ -719,8 +781,18 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
         if (clip.transitionNext.type !in setOf(TransitionType.NONE, TransitionType.FADE_TO_BLACK, TransitionType.FADE_TO_WHITE)) {
             reasons += "this transition type"
         }
-        if (clip.effects.any { it.type != EffectType.GAUSSIAN_BLUR && it.type != EffectType.LETTERBOX }) {
+        if (clip.effects.any { it.type !in EXPORT_SUPPORTED_EFFECTS }) {
             reasons += "this visual effect"
+        }
+        if (clip.effects.any {
+                it.startTimeMs < 0L ||
+                    it.endTimeMs < -1L ||
+                    it.startTimeMs > 0L ||
+                    (it.endTimeMs != -1L && it.endTimeMs < clip.durationMs) ||
+                    !it.intensity.isFinite() ||
+                    it.intensity !in 0f..1f
+            }) {
+            reasons += "partial-duration or invalid visual effect settings"
         }
     }
     if (overlays.any { !it.isPhoto || it.isGif || it.blendMode != OverlayBlendModeType.NORMAL || it.maskShape != MaskShape.NONE || it.entranceAnim == OverlayAnim.SLIDE || it.exitAnim == OverlayAnim.SLIDE }) {

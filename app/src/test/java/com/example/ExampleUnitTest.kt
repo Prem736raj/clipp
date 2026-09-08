@@ -46,6 +46,30 @@ class ExampleUnitTest {
   }
 
   @Test
+  fun supportedAdvancedEffectsCanBeExportedButPartialAndDistortionEffectsAreBlocked() {
+    val clip = MediaClip(
+      sourceUri = "content://media/video/1",
+      originalDurationMs = 1_000L,
+      trimEndMs = 1_000L,
+      effects = listOf(
+        AppliedEffect(type = EffectType.MIRROR),
+        AppliedEffect(type = EffectType.SHAKE),
+        AppliedEffect(type = EffectType.COMIC_BOOK),
+        AppliedEffect(type = EffectType.PENCIL_SKETCH),
+        AppliedEffect(type = EffectType.POP_ART)
+      )
+    )
+
+    assertFalse(EditorState(clips = listOf(clip)).hasUnsupportedExportEdits())
+    val partialEffect = clip.copy(
+      effects = listOf(AppliedEffect(type = EffectType.MIRROR, startTimeMs = 100L))
+    )
+    assertTrue(EditorState(clips = listOf(partialEffect)).hasUnsupportedExportEdits())
+    val blockedEffect = clip.copy(effects = listOf(AppliedEffect(type = EffectType.WAVE)))
+    assertTrue(EditorState(clips = listOf(blockedEffect)).hasUnsupportedExportEdits())
+  }
+
+  @Test
   fun transformClipKeyframesCanBeExportedButCropKeyframesAreBlocked() {
     val basic = MediaClip(
       sourceUri = "content://media/video/1",
