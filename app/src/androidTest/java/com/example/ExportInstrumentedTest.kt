@@ -670,6 +670,36 @@ class ExportInstrumentedTest {
     }
 
     @Test
+    fun proceduralLightEffectsChangePublishedFrames() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val source = File.createTempFile("clipp-export-light-effects-", ".png", context.cacheDir)
+        writeSolidPng(source, android.graphics.Color.rgb(90, 110, 130))
+        val clip = MediaClip(
+            sourceUri = Uri.fromFile(source).toString(),
+            originalDurationMs = 1_000L,
+            trimEndMs = 1_000L,
+            isPhoto = true,
+            effects = listOf(
+                AppliedEffect(type = EffectType.LIGHT_LEAK, intensity = 0.8f),
+                AppliedEffect(type = EffectType.LENS_FLARE, intensity = 0.8f),
+                AppliedEffect(type = EffectType.BOKEH, intensity = 0.8f)
+            )
+        )
+        val exporter = VideoExporter(context)
+        var result: Outcome? = null
+        try {
+            result = awaitExport(exporter, listOf(clip), "Clipp_instrumented_light_effects.mp4")
+            assertSuccessful(result!!)
+            assertPublishedMp4(context, result!!)
+            assertFramesDiffer(context, result!!, 100_000L, 800_000L)
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            source.delete()
+        }
+    }
+
+    @Test
     fun separateAudioTrackIsMixedIntoPublishedMp4() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val source = File.createTempFile("clipp-export-audio-base-", ".png", context.cacheDir)

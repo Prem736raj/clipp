@@ -9,6 +9,7 @@ import android.graphics.Matrix
 import android.graphics.Movie
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
@@ -50,7 +51,10 @@ private val EXPORT_SUPPORTED_EFFECTS = setOf(
     EffectType.POP_ART,
     EffectType.FILM_GRAIN,
     EffectType.ANAMORPHIC_FLARE,
-    EffectType.SPARKLE
+    EffectType.SPARKLE,
+    EffectType.LIGHT_LEAK,
+    EffectType.LENS_FLARE,
+    EffectType.BOKEH
 )
 private val EXPORT_SUPPORTED_TEXT_ANIM_IN = setOf(
     TextAnimIn.NONE,
@@ -354,6 +358,45 @@ private class ProceduralEffectBitmapOverlay(
                     )
                 }
                 canvas.drawRect(0f, moveY - halfHeight, BITMAP_SIZE.toFloat(), moveY + halfHeight, paint)
+            }
+            EffectType.LIGHT_LEAK -> {
+                val moveX = sin(sampleTimeMs / 1_000f) * BITMAP_SIZE * 0.5f
+                val centerX = BITMAP_SIZE * 0.5f + moveX
+                val centerY = BITMAP_SIZE * 0.2f
+                val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    shader = RadialGradient(
+                        centerX,
+                        centerY,
+                        BITMAP_SIZE * 0.8f,
+                        android.graphics.Color.argb((150f * safeIntensity).toInt(), 255, 100, 50),
+                        android.graphics.Color.TRANSPARENT,
+                        Shader.TileMode.CLAMP
+                    )
+                }
+                canvas.drawRect(0f, 0f, BITMAP_SIZE.toFloat(), BITMAP_SIZE.toFloat(), paint)
+            }
+            EffectType.LENS_FLARE -> {
+                val timeSeconds = sampleTimeMs / 1_000f
+                val posX = BITMAP_SIZE * (0.5f + 0.3f * sin(timeSeconds))
+                val posY = BITMAP_SIZE * (0.5f + 0.3f * kotlin.math.cos(timeSeconds))
+                val whitePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.argb((128f * safeIntensity).toInt(), 255, 255, 255)
+                }
+                val bluePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.argb((100f * safeIntensity).toInt(), 100, 200, 255)
+                }
+                canvas.drawCircle(posX, posY, 50f, whitePaint)
+                canvas.drawCircle(BITMAP_SIZE - posX, BITMAP_SIZE - posY, 150f, bluePaint)
+            }
+            EffectType.BOKEH -> {
+                val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.argb((50f * safeIntensity).toInt(), 255, 200, 100)
+                }
+                repeat(6) { index ->
+                    val px = (sin(sampleTimeMs / 1_000f * 0.5f + index) + 1f) / 2f * BITMAP_SIZE
+                    val py = (kotlin.math.cos(sampleTimeMs / 1_000f * 0.4f + index * 2) + 1f) / 2f * BITMAP_SIZE
+                    canvas.drawCircle(px, py, 60f + index * 10f, paint)
+                }
             }
             else -> Unit
         }
@@ -1009,7 +1052,10 @@ internal fun buildExportOverlays(
     clip.effects.filter {
         it.type == EffectType.FILM_GRAIN ||
             it.type == EffectType.ANAMORPHIC_FLARE ||
-            it.type == EffectType.SPARKLE
+            it.type == EffectType.SPARKLE ||
+            it.type == EffectType.LIGHT_LEAK ||
+            it.type == EffectType.LENS_FLARE ||
+            it.type == EffectType.BOKEH
     }.forEach { effect ->
         overlays += ProceduralEffectBitmapOverlay(
             type = effect.type,
