@@ -6768,14 +6768,18 @@ fun EditorScreen(
                         val newOverlays = overlays.toMutableList()
                         for (path in paths) {
                             val metadata = MediaMetadataReader.read(context, android.net.Uri.parse(path)) ?: continue
-                            val isPhoto = metadata.mimeType.startsWith("image/")
-                            val durationMs = if (isPhoto) PHOTO_DEFAULT_DURATION_MS else metadata.durationMs
+                            val isGif = metadata.mimeType.equals("image/gif", ignoreCase = true)
+                            val isPhoto = metadata.mimeType.startsWith("image/") && !isGif
+                            val durationMs = when {
+                                isPhoto || isGif -> PHOTO_DEFAULT_DURATION_MS
+                                else -> metadata.durationMs
+                            }
                             if (durationMs <= 0L) continue
                             newOverlays.add(OverlayClip(
                                 sourceUri = path,
                                 originalDurationMs = durationMs,
                                 isPhoto = isPhoto,
-                                isGif = false,
+                                isGif = isGif,
                                 trimEndMs = durationMs,
                                 startTimeOnTimelineMs = currentPositionMs
                             ))

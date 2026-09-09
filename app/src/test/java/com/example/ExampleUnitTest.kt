@@ -157,6 +157,7 @@ class ExampleUnitTest {
     )
 
     assertFalse(EditorState(clips = listOf(clip), texts = listOf(text), stickers = listOf(sticker), overlays = listOf(imageOverlay)).hasUnsupportedExportEdits())
+    assertFalse(EditorState(clips = listOf(clip), overlays = listOf(imageOverlay.copy(isPhoto = false, isGif = true))).hasUnsupportedExportEdits())
     assertTrue(EditorState(clips = listOf(clip), texts = listOf(text.copy(animIn = TextAnimIn.TYPEWRITER))).hasUnsupportedExportEdits())
     assertTrue(EditorState(clips = listOf(clip), overlays = listOf(imageOverlay.copy(entranceAnim = OverlayAnim.SLIDE))).hasUnsupportedExportEdits())
   }

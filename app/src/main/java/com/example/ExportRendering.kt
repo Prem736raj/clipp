@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.LinearGradient
 import android.graphics.Matrix
+import android.graphics.Movie
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
@@ -181,6 +182,73 @@ private class VideoFrameBitmapOverlay(
         return applyChromaKey(scaled, chromaKey).also { keyed ->
             if (keyed !== scaled) scaled.recycle()
         }
+    }
+}
+
+/** Decodes an animated GIF frame on demand while keeping only one bitmap alive. */
+private class GifFrameBitmapOverlay(
+    context: Context,
+    private val windowStartMs: Long,
+    private val windowEndMs: Long,
+    private val blankBitmap: Bitmap,
+    private val settingsAt: (Long) -> OverlaySettings,
+    sourceUri: String
+) : BitmapOverlay() {
+    private companion object {
+        const val SAMPLE_INTERVAL_MS = 33L
+        const val MAX_FRAME_DIMENSION = 1600
+    }
+
+    private val movie = context.contentResolver.openInputStream(Uri.parse(sourceUri))?.use { input ->
+        Movie.decodeStream(input)
+    } ?: error("GIF overlay could not be opened")
+    private val movieWidth = movie.width().coerceAtLeast(1)
+    private val movieHeight = movie.height().coerceAtLeast(1)
+    private val movieDurationMs = movie.duration().takeIf { it > 0 } ?: 1_000
+    private var cachedSampleTimeMs = Long.MIN_VALUE
+    private var cachedBitmap: Bitmap? = null
+    private var released = false
+
+    override fun getBitmap(presentationTimeUs: Long): Bitmap {
+        val localTimeMs = presentationTimeUs / 1_000L
+        if (localTimeMs < windowStartMs || localTimeMs >= windowEndMs) return blankBitmap
+        val gifTimeMs = (localTimeMs - windowStartMs) % movieDurationMs
+        val sampleTimeMs = (gifTimeMs / SAMPLE_INTERVAL_MS) * SAMPLE_INTERVAL_MS
+
+        synchronized(this) {
+            if (released) return blankBitmap
+            if (sampleTimeMs == cachedSampleTimeMs) return cachedBitmap ?: blankBitmap
+
+            val scale = min(1f, MAX_FRAME_DIMENSION.toFloat() / max(movieWidth, movieHeight).toFloat())
+            val bitmap = Bitmap.createBitmap(
+                (movieWidth * scale).toInt().coerceAtLeast(1),
+                (movieHeight * scale).toInt().coerceAtLeast(1),
+                Bitmap.Config.ARGB_8888
+            )
+            val canvas = Canvas(bitmap)
+            canvas.drawColor(android.graphics.Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
+            movie.setTime(sampleTimeMs.toInt())
+            canvas.scale(scale, scale)
+            movie.draw(canvas, 0f, 0f)
+            cachedBitmap?.recycle()
+            cachedBitmap = bitmap
+            cachedSampleTimeMs = sampleTimeMs
+            return bitmap
+        }
+    }
+
+    override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings {
+        return settingsAt(presentationTimeUs / 1_000L)
+    }
+
+    override fun release() {
+        synchronized(this) {
+            if (released) return
+            released = true
+            cachedBitmap?.recycle()
+            cachedBitmap = null
+        }
+        super.release()
     }
 }
 
@@ -818,12 +886,23 @@ internal fun buildExportOverlays(
         )
     }
 
-    state.overlays.filter { it.isVisible && !it.isGif && it.durationMs > 0L }.forEach { overlay ->
+    state.overlays.filter { it.isVisible && it.durationMs > 0L }.forEach { overlay ->
         val start = max(0L, overlay.startTimeOnTimelineMs - clipStartMs)
         val end = min(clipDurationMs, overlay.startTimeOnTimelineMs + overlay.durationMs - clipStartMs)
         if (end <= start) return@forEach
 
-        if (overlay.isPhoto) {
+        if (overlay.isGif) {
+            runCatching {
+                GifFrameBitmapOverlay(
+                    context = context,
+                    windowStartMs = start,
+                    windowEndMs = end,
+                    blankBitmap = blank,
+                    settingsAt = { localTime -> buildOverlaySettings(overlay, clipStartMs + localTime) },
+                    sourceUri = overlay.sourceUri
+                )
+            }.onSuccess { overlays += it }
+        } else if (overlay.isPhoto) {
             val bitmap = renderOverlayClipBitmap(context, overlay) ?: return@forEach
             addWindowed(
                 bitmap,
@@ -1064,8 +1143,8 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
             reasons += "partial-duration or invalid visual effect settings"
         }
     }
-    if (overlays.any { it.isGif || it.blendMode != OverlayBlendModeType.NORMAL || it.maskShape != MaskShape.NONE || it.entranceAnim == OverlayAnim.SLIDE || it.exitAnim == OverlayAnim.SLIDE }) {
-        reasons += "GIF or unsupported overlay animation"
+    if (overlays.any { it.blendMode != OverlayBlendModeType.NORMAL || it.maskShape != MaskShape.NONE || it.entranceAnim == OverlayAnim.SLIDE || it.exitAnim == OverlayAnim.SLIDE }) {
+        reasons += "unsupported overlay animation"
     }
     if (overlays.any { it.keyframes.keys.any { key -> key !in EXPORT_SUPPORTED_OVERLAY_KEYFRAMES } }) {
         reasons += "unsupported overlay keyframes"

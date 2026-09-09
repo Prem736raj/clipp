@@ -138,6 +138,7 @@ object MediaMetadataReader {
             "png" -> "image/png"
             "webp" -> "image/webp"
             "heic" -> "image/heic"
+            "gif" -> "image/gif"
             else -> "application/octet-stream"
         }
     }

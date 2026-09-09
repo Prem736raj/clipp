@@ -544,6 +544,50 @@ class ExportInstrumentedTest {
     }
 
     @Test
+    fun animatedGifOverlayIsRenderedAndPublished() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val baseSource = File.createTempFile("clipp-export-gif-overlay-base-", ".png", context.cacheDir)
+        val gifSource = File.createTempFile("clipp-export-gif-overlay-", ".gif", context.cacheDir)
+        writeSolidPng(baseSource, android.graphics.Color.BLUE)
+        writeAnimatedGif(gifSource)
+
+        val baseClip = MediaClip(
+            sourceUri = Uri.fromFile(baseSource).toString(),
+            originalDurationMs = 1_000L,
+            trimEndMs = 1_000L,
+            isPhoto = true
+        )
+        val state = EditorState(
+            clips = listOf(baseClip),
+            overlays = listOf(
+                OverlayClip(
+                    sourceUri = Uri.fromFile(gifSource).toString(),
+                    originalDurationMs = 1_000L,
+                    isPhoto = false,
+                    isGif = true,
+                    trimEndMs = 1_000L,
+                    scaleX = 0.5f,
+                    scaleY = 0.5f
+                )
+            )
+        )
+        val exporter = VideoExporter(context)
+        var result: Outcome? = null
+        try {
+            result = awaitExport(exporter, listOf(baseClip), "Clipp_instrumented_gif_overlay.mp4", state)
+            assertSuccessful(result!!)
+            assertPublishedMp4(context, result!!)
+            assertFrameHasDominantColor(context, result!!, 200_000L, expected = "green")
+            assertFrameHasDominantColor(context, result!!, 800_000L, expected = "red")
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            baseSource.delete()
+            gifSource.delete()
+        }
+    }
+
+    @Test
     fun separateAudioTrackIsMixedIntoPublishedMp4() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val source = File.createTempFile("clipp-export-audio-base-", ".png", context.cacheDir)
@@ -711,6 +755,23 @@ class ExportInstrumentedTest {
             assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
         }
         bitmap.recycle()
+    }
+
+    private fun writeAnimatedGif(file: File) {
+        file.writeBytes(
+            byteArrayOf(
+                0x47, 0x49, 0x46, 0x38, 0x39, 0x61,
+                0x02, 0x00, 0x02, 0x00, 0x80.toByte(), 0x00, 0x00,
+                0x00, 0xff.toByte(), 0x00, 0xff.toByte(), 0x00, 0x00,
+                0x21, 0xf9.toByte(), 0x04, 0x00, 0x32, 0x00, 0x00, 0x00,
+                0x2c, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x02, 0x00, 0x00,
+                0x02, 0x03, 0x04, 0x80.toByte(), 0x04, 0x00,
+                0x21, 0xf9.toByte(), 0x04, 0x00, 0x32, 0x00, 0x00, 0x00,
+                0x2c, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x02, 0x00, 0x00,
+                0x02, 0x03, 0x0c, 0x92.toByte(), 0x04, 0x00,
+                0x3b
+            )
+        )
     }
 
     private fun assertFramesDiffer(
