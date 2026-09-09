@@ -544,6 +544,88 @@ class ExportInstrumentedTest {
     }
 
     @Test
+    fun videoOverlayChromaKeyIsRenderedAndPublished() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val baseSource = File.createTempFile("clipp-export-video-chroma-base-", ".png", context.cacheDir)
+        val redSource = File.createTempFile("clipp-export-video-chroma-red-", ".png", context.cacheDir)
+        val greenSource = File.createTempFile("clipp-export-video-chroma-green-", ".png", context.cacheDir)
+        writeSolidPng(baseSource, android.graphics.Color.BLUE)
+        writeSolidPng(redSource, android.graphics.Color.RED)
+        writeSolidPng(greenSource, android.graphics.Color.GREEN)
+
+        val overlayExporter = VideoExporter(context)
+        val exporter = VideoExporter(context)
+        var overlayResult: Outcome? = null
+        var result: Outcome? = null
+        try {
+            overlayResult = awaitExport(
+                overlayExporter,
+                listOf(
+                    MediaClip(
+                        sourceUri = Uri.fromFile(redSource).toString(),
+                        originalDurationMs = 1_000L,
+                        trimEndMs = 1_000L,
+                        isPhoto = true
+                    ),
+                    MediaClip(
+                        sourceUri = Uri.fromFile(greenSource).toString(),
+                        originalDurationMs = 1_000L,
+                        trimEndMs = 1_000L,
+                        isPhoto = true
+                    )
+                ),
+                "Clipp_instrumented_video_chroma_source.mp4"
+            )
+            assertSuccessful(overlayResult!!)
+
+            val overlayDurationMs = overlayResult!!.metadata!!.durationMs
+            val baseClip = MediaClip(
+                sourceUri = Uri.fromFile(baseSource).toString(),
+                originalDurationMs = overlayDurationMs,
+                trimEndMs = overlayDurationMs,
+                isPhoto = true
+            )
+            val state = EditorState(
+                clips = listOf(baseClip),
+                overlays = listOf(
+                    OverlayClip(
+                        sourceUri = overlayResult!!.uri!!.toString(),
+                        originalDurationMs = overlayDurationMs,
+                        isPhoto = false,
+                        trimEndMs = overlayDurationMs,
+                        scaleX = 0.5f,
+                        scaleY = 0.5f,
+                        chromaKey = ChromaKeySettings(
+                            enabled = true,
+                            keyColorArgb = 0xff00ff00L,
+                            similarity = 0.16f,
+                            smoothness = 0.08f
+                        )
+                    )
+                )
+            )
+            result = awaitExport(
+                exporter,
+                listOf(baseClip),
+                "Clipp_instrumented_video_chroma.mp4",
+                state
+            )
+            assertSuccessful(result!!)
+            assertPublishedMp4(context, result!!)
+            assertFrameHasDominantColor(context, result!!, 200_000L, expected = "red")
+            assertFrameHasDominantColor(context, result!!, 1_200_000L, expected = "blue")
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            overlayResult?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            overlayExporter.close()
+            baseSource.delete()
+            redSource.delete()
+            greenSource.delete()
+        }
+    }
+
+    @Test
     fun animatedGifOverlayIsRenderedAndPublished() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val baseSource = File.createTempFile("clipp-export-gif-overlay-base-", ".png", context.cacheDir)

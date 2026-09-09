@@ -2564,6 +2564,21 @@ fun EditorScreen(
                                             modifier = Modifier.fillMaxSize(),
                                             contentScale = ContentScale.Fit
                                         )
+                                    } else if (overlay.chromaKey.enabled) {
+                                        AsyncImage(
+                                            model = ImageRequest.Builder(context)
+                                                .data(Uri.parse(overlay.sourceUri))
+                                                .videoFrameMillis(
+                                                    overlay.trimStartMs +
+                                                        (relativeTimeMs / 100L) * 100L
+                                                )
+                                                .transformations(ChromaKeyTransformation(overlay.chromaKey))
+                                                .build(),
+                                            imageLoader = imageLoader,
+                                            contentDescription = "Chroma-keyed video overlay",
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentScale = ContentScale.Fit
+                                        )
                                     } else {
                                         // We will just show an AsyncImage of the first frame for now 
                                         // since multiple active exoplayers might be heavy. 
@@ -5572,7 +5587,7 @@ fun EditorScreen(
                                 }
                             }
 
-                            if (overlay.isPhoto) {
+                            if (!overlay.isGif) {
                                 Divider()
                                 val chroma = overlay.chromaKey
                                 fun updateChromaSettings(update: (ChromaKeySettings) -> ChromaKeySettings, save: Boolean = true) {
@@ -5587,7 +5602,11 @@ fun EditorScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    Text("Chroma key", style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+                                    Text(
+                                        if (overlay.isPhoto) "Photo chroma key" else "Video chroma key",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        modifier = Modifier.weight(1f)
+                                    )
                                     FilterChip(
                                         selected = chroma.enabled,
                                         onClick = { updateChromaSettings(update = { it.copy(enabled = !it.enabled) }) },

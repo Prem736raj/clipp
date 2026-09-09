@@ -919,7 +919,7 @@ internal fun buildExportOverlays(
                     windowStartMs = start,
                     windowEndMs = end,
                     blankBitmap = blank,
-                    chromaKey = ChromaKeySettings(),
+                    chromaKey = overlay.chromaKey,
                     settingsAt = { localTime -> buildOverlaySettings(overlay, clipStartMs + localTime) }
                 )
             }.onSuccess { overlays += it }
@@ -1154,7 +1154,7 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
     }
     if (overlays.any {
             it.chromaKey.enabled &&
-                (!it.isPhoto ||
+                (it.isGif ||
                     !it.chromaKey.similarity.isFinite() ||
                     !it.chromaKey.smoothness.isFinite() ||
                     !it.chromaKey.spillSuppression.isFinite())

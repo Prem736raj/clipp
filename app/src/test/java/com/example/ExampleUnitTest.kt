@@ -287,7 +287,7 @@ class ExampleUnitTest {
   }
 
   @Test
-  fun photoChromaKeyIsAllowedButVideoChromaKeyIsBlocked() {
+  fun photoAndVideoChromaKeyAreAllowedButGifChromaKeyIsBlocked() {
     val photo = OverlayClip(
       sourceUri = "content://media/image/1",
       originalDurationMs = 1_000L,
@@ -296,9 +296,11 @@ class ExampleUnitTest {
       chromaKey = ChromaKeySettings(enabled = true)
     )
     val video = photo.copy(isPhoto = false)
+    val gif = photo.copy(isPhoto = false, isGif = true)
 
     assertFalse(EditorState(overlays = listOf(photo)).hasUnsupportedExportEdits())
-    assertTrue(EditorState(overlays = listOf(video)).hasUnsupportedExportEdits())
+    assertFalse(EditorState(overlays = listOf(video)).hasUnsupportedExportEdits())
+    assertTrue(EditorState(overlays = listOf(gif)).hasUnsupportedExportEdits())
   }
 
   @Test

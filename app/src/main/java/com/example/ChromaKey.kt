@@ -6,7 +6,7 @@ import coil.transform.Transformation
 import kotlin.math.max
 import kotlin.math.sqrt
 
-/** Settings for removing a selected color from a still-image overlay. */
+/** Settings for removing a selected color from an image or video overlay frame. */
 data class ChromaKeySettings(
     val enabled: Boolean = false,
     val keyColorArgb: Long = 0xff00ff00L,
@@ -17,7 +17,7 @@ data class ChromaKeySettings(
 
 /**
  * Applies a soft chroma-key alpha matte. The work is intentionally shared by
- * preview and export so an image overlay does not look opaque in one path and
+ * preview and export so an overlay does not look opaque in one path and
  * transparent in the other.
  */
 internal fun applyChromaKey(bitmap: Bitmap, settings: ChromaKeySettings): Bitmap {
@@ -62,7 +62,7 @@ internal fun chromaKeyPixelArgb(argb: Int, settings: ChromaKeySettings): Int {
         blue
 }
 
-/** Coil preview transformation for photo overlays. */
+/** Coil preview transformation for decoded photo or video overlay frames. */
 class ChromaKeyTransformation(
     private val settings: ChromaKeySettings
 ) : Transformation {
