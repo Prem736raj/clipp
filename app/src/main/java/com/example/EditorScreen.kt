@@ -16,6 +16,8 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.zIndex
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.ui.platform.LocalDensity
@@ -2087,11 +2089,13 @@ fun EditorScreen(
                         val tPosY = currentClipForTransform?.keyframes?.getValueAtTime("posY", relativeTimeForClip, currentClipForTransform.posY) ?: 0.5f
                         
                         var activeTransitionType by remember { mutableStateOf<TransitionType?>(null) }
+                        var activeTransitionClipIndex by remember { mutableStateOf<Int?>(null) }
                         var transitionProgress by remember { mutableStateOf(0f) } // -1f to 1f
                         
                         LaunchedEffect(currentPositionMs, clips) {
                             var accum = 0L
                             var foundTransition: TransitionType? = null
+                            var foundClipIndex: Int? = null
                             var foundProgress = 0f
                             for (i in 0 until clips.lastIndex) {
                                 val clip = clips[i]
@@ -2103,6 +2107,7 @@ fun EditorScreen(
                                     val tEnd = cutPoint + tHalf
                                     if (currentPositionMs in tStart..tEnd) {
                                         foundTransition = trans.type
+                                        foundClipIndex = i
                                         foundProgress = (currentPositionMs - cutPoint).toFloat() / tHalf.toFloat()
                                         break
                                     }
@@ -2110,8 +2115,28 @@ fun EditorScreen(
                                 accum += clip.durationMs
                             }
                             activeTransitionType = foundTransition
+                            activeTransitionClipIndex = foundClipIndex
                             transitionProgress = foundProgress
                         }
+
+                        val transitionNextPhoto = activeTransitionClipIndex
+                            ?.let { index -> clips.getOrNull(index + 1) }
+                            ?.takeIf { it.canRenderPhotoTransitionSource() }
+                        val isPhotoTransitionPreview = transitionNextPhoto != null &&
+                            activeTransitionType in setOf(
+                                TransitionType.CROSSFADE,
+                                TransitionType.SLIDE_LEFT,
+                                TransitionType.SLIDE_RIGHT,
+                                TransitionType.SLIDE_UP,
+                                TransitionType.SLIDE_DOWN,
+                                TransitionType.ZOOM_IN,
+                                TransitionType.ZOOM_OUT,
+                                TransitionType.WIPE_LEFT,
+                                TransitionType.WIPE_RIGHT,
+                                TransitionType.CLOCK_WIPE,
+                                TransitionType.SPIN,
+                                TransitionType.FLIP
+                            )
                         
                         // We need the layout size for translation, but we can't get size cleanly here before layout.
                         // However, we can use graphicsLayer properties, but animation requires state outside.
@@ -2231,7 +2256,7 @@ fun EditorScreen(
                                         this.translationX = (animPosX - 0.5f) * this.size.width
                                         this.translationY = (animPosY - 0.5f) * this.size.height
                                         
-                                        if (activeTransitionType != null) {
+                                        if (activeTransitionType != null && !isPhotoTransitionPreview) {
                                             val tType = if (isBudgetMode) TransitionType.CROSSFADE else activeTransitionType
                                             val p = transitionProgress
                                             val isOld = p < 0f
@@ -2291,8 +2316,61 @@ fun EditorScreen(
                                     }
                                 }
                         )
+
+                        if (isPhotoTransitionPreview && transitionProgress < 0f && transitionNextPhoto != null) {
+                            val incomingProgress = (transitionProgress + 1f).coerceIn(0f, 1f)
+                            val transitionModifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer {
+                                    alpha = when (activeTransitionType) {
+                                        TransitionType.CROSSFADE,
+                                        TransitionType.ZOOM_IN,
+                                        TransitionType.ZOOM_OUT,
+                                        TransitionType.SPIN,
+                                        TransitionType.FLIP -> incomingProgress
+                                        else -> 1f
+                                    }
+                                    when (activeTransitionType) {
+                                        TransitionType.SLIDE_LEFT -> translationX = (1f - incomingProgress) * size.width
+                                        TransitionType.SLIDE_RIGHT -> translationX = (incomingProgress - 1f) * size.width
+                                        TransitionType.SLIDE_UP -> translationY = (1f - incomingProgress) * size.height
+                                        TransitionType.SLIDE_DOWN -> translationY = (incomingProgress - 1f) * size.height
+                                        TransitionType.ZOOM_IN -> {
+                                            scaleX = 0.55f + 0.45f * incomingProgress
+                                            scaleY = 0.55f + 0.45f * incomingProgress
+                                        }
+                                        TransitionType.ZOOM_OUT -> {
+                                            scaleX = 1.45f - 0.45f * incomingProgress
+                                            scaleY = 1.45f - 0.45f * incomingProgress
+                                        }
+                                        TransitionType.SPIN -> rotationZ = (1f - incomingProgress) * 180f
+                                        TransitionType.FLIP -> scaleX = incomingProgress.coerceAtLeast(0.02f)
+                                        else -> Unit
+                                    }
+                                }
+                            val clippedModifier = when (activeTransitionType) {
+                                TransitionType.WIPE_LEFT -> transitionModifier.drawWithContent {
+                                    val drawSelf = { this@drawWithContent.drawContent() }
+                                    clipRect(right = size.width * incomingProgress) { drawSelf() }
+                                }
+                                TransitionType.WIPE_RIGHT -> transitionModifier.drawWithContent {
+                                    val drawSelf = { this@drawWithContent.drawContent() }
+                                    clipRect(left = size.width * (1f - incomingProgress)) { drawSelf() }
+                                }
+                                else -> transitionModifier
+                            }
+                            AsyncImage(
+                                model = ImageRequest.Builder(context)
+                                    .data(Uri.parse(transitionNextPhoto.sourceUri))
+                                    .build(),
+                                imageLoader = imageLoader,
+                                contentDescription = "Incoming photo transition preview",
+                                contentScale = ContentScale.Crop,
+                                modifier = clippedModifier.zIndex(1f)
+                            )
+                        }
                         
-                        if (activeTransitionType != null) {
+                        if (activeTransitionType != null && !isPhotoTransitionPreview) {
                             val tType = if (isBudgetMode) TransitionType.CROSSFADE else activeTransitionType
                             val p = transitionProgress
                             val isOld = p < 0f
@@ -5140,7 +5218,7 @@ fun EditorScreen(
                 Surface(
                     shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
                     color = MaterialTheme.colorScheme.surfaceColorAtElevation(12.dp),
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 430.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 620.dp),
                     shadowElevation = 16.dp
                 ) {
                     Column(
@@ -5232,8 +5310,128 @@ fun EditorScreen(
                             valueRange = 0f..maxFadeMs.toFloat()
                         )
 
+                        Text("Equalizer", style = MaterialTheme.typography.labelMedium)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(EXPORT_EQ_PRESETS.size) { index ->
+                                val preset = EXPORT_EQ_PRESETS[index]
+                                FilterChip(
+                                    selected = selectedAudio.audioEffects.eqPreset == preset,
+                                    onClick = {
+                                        updateSelectedAudio(
+                                            selectedAudio.copy(
+                                                audioEffects = selectedAudio.audioEffects.copy(eqPreset = preset)
+                                            )
+                                        )
+                                        persistHistory()
+                                    },
+                                    label = { Text(preset) }
+                                )
+                            }
+                        }
+
+                        Text("Reverb", style = MaterialTheme.typography.labelMedium)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(EXPORT_REVERB_PRESETS.size) { index ->
+                                val preset = EXPORT_REVERB_PRESETS[index]
+                                FilterChip(
+                                    selected = selectedAudio.audioEffects.reverbPreset == preset,
+                                    onClick = {
+                                        updateSelectedAudio(
+                                            selectedAudio.copy(
+                                                audioEffects = selectedAudio.audioEffects.copy(reverbPreset = preset)
+                                            )
+                                        )
+                                        persistHistory()
+                                    },
+                                    label = { Text(preset) }
+                                )
+                            }
+                        }
+
                         Text(
-                            "Export supports volume keyframes and fades. EQ, reverb, ducking, crossfade, and other advanced processors are not enabled yet.",
+                            "Reverb amount: ${(selectedAudio.audioEffects.reverbAmount * 100).toInt()}%",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        Slider(
+                            value = selectedAudio.audioEffects.reverbAmount,
+                            onValueChange = { value ->
+                                updateSelectedAudio(
+                                    selectedAudio.copy(
+                                        audioEffects = selectedAudio.audioEffects.copy(reverbAmount = value)
+                                    )
+                                )
+                            },
+                            onValueChangeFinished = { persistHistory() },
+                            valueRange = 0f..1f
+                        )
+
+                        Text("Delay: ${selectedAudio.audioEffects.delayTimeMs} ms", style = MaterialTheme.typography.labelMedium)
+                        Slider(
+                            value = selectedAudio.audioEffects.delayTimeMs.coerceIn(0L, MAX_EXPORT_DELAY_MS).toFloat(),
+                            onValueChange = { value ->
+                                updateSelectedAudio(
+                                    selectedAudio.copy(
+                                        audioEffects = selectedAudio.audioEffects.copy(delayTimeMs = value.toLong())
+                                    )
+                                )
+                            },
+                            onValueChangeFinished = { persistHistory() },
+                            valueRange = 0f..MAX_EXPORT_DELAY_MS.toFloat()
+                        )
+
+                        Text(
+                            "Delay feedback: ${(selectedAudio.audioEffects.delayFeedback * 100).toInt()}%",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        Slider(
+                            value = selectedAudio.audioEffects.delayFeedback,
+                            onValueChange = { value ->
+                                updateSelectedAudio(
+                                    selectedAudio.copy(
+                                        audioEffects = selectedAudio.audioEffects.copy(delayFeedback = value)
+                                    )
+                                )
+                            },
+                            onValueChangeFinished = { persistHistory() },
+                            valueRange = 0f..MAX_EXPORT_DELAY_FEEDBACK
+                        )
+
+                        Text(
+                            "Pitch: ${selectedAudio.audioEffects.pitchSemitones.toInt()} semitones",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        Slider(
+                            value = selectedAudio.audioEffects.pitchSemitones,
+                            onValueChange = { value ->
+                                updateSelectedAudio(
+                                    selectedAudio.copy(
+                                        audioEffects = selectedAudio.audioEffects.copy(pitchSemitones = value)
+                                    )
+                                )
+                            },
+                            onValueChangeFinished = { persistHistory() },
+                            valueRange = -MAX_EXPORT_PITCH_SEMITONES..MAX_EXPORT_PITCH_SEMITONES
+                        )
+
+                        Text(
+                            "Distortion: ${(selectedAudio.audioEffects.distortion * 100).toInt()}%",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        Slider(
+                            value = selectedAudio.audioEffects.distortion,
+                            onValueChange = { value ->
+                                updateSelectedAudio(
+                                    selectedAudio.copy(
+                                        audioEffects = selectedAudio.audioEffects.copy(distortion = value)
+                                    )
+                                )
+                            },
+                            onValueChangeFinished = { persistHistory() },
+                            valueRange = 0f..1f
+                        )
+
+                        Text(
+                            "Export applies EQ, pitch, bounded delay/reverb, distortion, volume keyframes, and fades. Preview playback currently uses the source track until export.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -6612,6 +6810,12 @@ fun EditorScreen(
                                 Icon(Icons.Filled.Close, contentDescription = "Close")
                             }
                         }
+
+                        Text(
+                            "Export supports crossfade, slide, zoom, spin, and flip between adjacent simple photo/video sources, plus wipe transitions for simple photos. Complex transitions involving edited sources stay gated until both composited frames can be rendered.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                         
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             val transitionCategories = mapOf(

@@ -23,7 +23,7 @@ val changelog = listOf(
         "September 2026",
         listOf(
             "Projects and media references stay local to the device.",
-            "MP4 export now renders clip positioning/transform/crop keyframes, crop, filters, blur, mirror, shake, comic-book/pencil-sketch/pop-art/film-grain/sparkle/anamorphic-flare/light-leak/lens-flare/bokeh style effects, static text, captions, stickers, drawings, frames, supported text/sticker/image/GIF/video-overlay animations, photo/video-overlay chroma key, image, GIF, and video overlays, supported fades, separate audio tracks, and volume keyframes/fade envelopes.",
+            "MP4 export now renders clip positioning/transform/crop keyframes, crop, filters, shader distortion effects, blur, mirror, shake, comic-book/pencil-sketch/pop-art/film-grain/sparkle/anamorphic-flare/light-leak/lens-flare/bokeh style effects, static text, captions, stickers, drawings, frames, supported text/sticker/image/GIF/video-overlay animations, photo/video-overlay chroma key, image, GIF, and video overlays, simple photo/video-source transitions, EQ/pitch/delay/reverb/distortion audio processing, supported fades, separate audio tracks, and volume keyframes/fade envelopes.",
             "Music import and microphone voiceover recording are available in the editor.",
             "Three built-in local templates can now replace selected media and create restorable projects, and saved projects can be exported sequentially as a local batch; remote templates, AI, cloud, and subscription flows remain clearly disabled."
         )

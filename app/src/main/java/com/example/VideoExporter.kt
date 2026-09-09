@@ -36,7 +36,10 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.PI
+import kotlin.math.pow
 import kotlin.math.roundToInt
+import kotlin.math.tanh
 
 data class ExportMetadata(
     val durationMs: Long,
@@ -50,19 +53,26 @@ class ExportHandle internal constructor(private val cancelAction: () -> Unit) {
 internal fun AudioEffects.hasUnsupportedExportAutomation(): Boolean {
     return fadeInMs < 0L || fadeOutMs < 0L ||
         crossfadeMs != 0L ||
-        eqPreset != "Flat" ||
-        reverbPreset != "None" ||
-        delayTimeMs != 0L ||
-        delayFeedback != 0f ||
-        pitchSemitones != 0f ||
+        eqPreset !in EXPORT_EQ_PRESETS ||
+        reverbPreset !in EXPORT_REVERB_PRESETS ||
+        delayTimeMs !in 0L..MAX_EXPORT_DELAY_MS ||
+        (delayTimeMs == 0L && delayFeedback != 0f) ||
+        !delayFeedback.isFinite() || delayFeedback !in 0f..MAX_EXPORT_DELAY_FEEDBACK ||
+        !pitchSemitones.isFinite() || pitchSemitones !in -MAX_EXPORT_PITCH_SEMITONES..MAX_EXPORT_PITCH_SEMITONES ||
         noiseReductionIntensity != 0f ||
         isWindNoiseReduction ||
         voicePreset != "None" ||
         voiceEffectIntensity != 1f ||
-        distortion != 0f ||
+        !distortion.isFinite() || distortion !in 0f..1f ||
         speed != 1f ||
-        reverbAmount != 0f
+        !reverbAmount.isFinite() || reverbAmount !in 0f..1f
 }
+
+internal val EXPORT_EQ_PRESETS = listOf("Flat", "Bass Boost", "Treble Boost", "Vocal")
+internal val EXPORT_REVERB_PRESETS = listOf("None", "Room", "Hall")
+internal const val MAX_EXPORT_DELAY_MS = 1_000L
+internal const val MAX_EXPORT_DELAY_FEEDBACK = 0.95f
+internal const val MAX_EXPORT_PITCH_SEMITONES = 12f
 
 /**
  * Renders the base timeline into a real MP4. Trims, still-image durations, and
@@ -239,12 +249,6 @@ class VideoExporter(context: Context) {
             videoEffects += SpeedChangeEffect(safeSpeed)
         }
         val audioProcessors = mutableListOf<AudioProcessor>()
-        if (!normalized.isPhoto && !normalized.isMuted && safeSpeed != 1f) {
-            audioProcessors += SonicAudioProcessor().apply {
-                setSpeed(safeSpeed)
-                setPitch(if (normalized.maintainPitch) 1f else safeSpeed)
-            }
-        }
         val effectiveVolume = (normalized.volume * state.canvasSettings.masterVolume).coerceIn(0f, 1f)
         val clipVolumeKeyframes = normalized.keyframes["volume"].orEmpty().map { keyframe ->
             keyframe.copy(value = keyframe.value.coerceIn(0f, 1f) * state.canvasSettings.masterVolume)
@@ -262,6 +266,13 @@ class VideoExporter(context: Context) {
             )
         } else if (!normalized.isPhoto && !normalized.isMuted && effectiveVolume != 1f) {
             audioProcessors += VolumeAudioProcessor(effectiveVolume)
+        }
+        if (!normalized.isPhoto && !normalized.isMuted) {
+            audioProcessors.addAdvancedAudioProcessors(
+                audioEffects = clipEffects,
+                speed = safeSpeed,
+                pitch = if (normalized.maintainPitch) 1f else safeSpeed
+            )
         }
 
         val editedItem = EditedMediaItem.Builder(builder.build())
@@ -326,6 +337,9 @@ class VideoExporter(context: Context) {
                 )
             } else if (!audioClip.isMuted && effectiveVolume != 1f) {
                 processors += VolumeAudioProcessor(effectiveVolume)
+            }
+            if (!audioClip.isMuted) {
+                processors.addAdvancedAudioProcessors(audioEffects)
             }
             val item = EditedMediaItem.Builder(mediaItem)
                 .setRemoveVideo(true)
@@ -448,6 +462,251 @@ fun MediaClip.hasUnsupportedExportEdits(): Boolean {
         scale <= 0f ||
         photoAnimationSettings.type != PhotoAnimationType.NONE ||
         speedCurve != null
+}
+
+private fun MutableList<AudioProcessor>.addAdvancedAudioProcessors(
+    audioEffects: AudioEffects,
+    speed: Float = 1f,
+    pitch: Float = 1f
+) {
+    val requestedPitch = (pitch * 2.0.pow(audioEffects.pitchSemitones.toDouble() / 12.0)).toFloat()
+    if (speed != 1f || requestedPitch != 1f) {
+        add(SonicAudioProcessor().apply {
+            setSpeed(speed)
+            setPitch(requestedPitch)
+        })
+    }
+    if (audioEffects.eqPreset != "Flat") {
+        add(ParametricEqAudioProcessor(audioEffects.eqPreset))
+    }
+    if (audioEffects.delayTimeMs > 0L) {
+        add(FeedbackDelayAudioProcessor(audioEffects.delayTimeMs, audioEffects.delayFeedback))
+    }
+    if (audioEffects.reverbPreset != "None" || audioEffects.reverbAmount > 0f) {
+        add(MultiTapReverbAudioProcessor(audioEffects.reverbPreset, audioEffects.reverbAmount))
+    }
+    if (audioEffects.distortion > 0f) {
+        add(DistortionAudioProcessor(audioEffects.distortion))
+    }
+}
+
+private fun requirePcmFormat(inputAudioFormat: AudioProcessor.AudioFormat) {
+    if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT &&
+        inputAudioFormat.encoding != C.ENCODING_PCM_FLOAT
+    ) {
+        throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
+    }
+}
+
+private fun processPcmFrames(
+    inputBuffer: ByteBuffer,
+    inputAudioFormat: AudioProcessor.AudioFormat,
+    channelCount: Int,
+    outputBuffer: (Int) -> ByteBuffer,
+    transform: (Float, Int) -> Float,
+    afterFrame: () -> Unit = {}
+) {
+    val input = inputBuffer.order(ByteOrder.LITTLE_ENDIAN)
+    val bytesPerSample = if (inputAudioFormat.encoding == C.ENCODING_PCM_16BIT) 2 else 4
+    val bytesPerFrame = (channelCount * bytesPerSample).coerceAtLeast(1)
+    val completeBytes = input.remaining() - input.remaining() % bytesPerFrame
+    val output = outputBuffer(completeBytes).order(ByteOrder.LITTLE_ENDIAN)
+    repeat(completeBytes / bytesPerFrame) {
+        repeat(channelCount) { channel ->
+            val sample = if (inputAudioFormat.encoding == C.ENCODING_PCM_16BIT) {
+                input.short / 32768f
+            } else {
+                input.float
+            }
+            val processed = transform(sample, channel).coerceIn(-1f, 1f)
+            if (inputAudioFormat.encoding == C.ENCODING_PCM_16BIT) {
+                output.putShort((processed * 32767f).roundToInt().coerceIn(-32768, 32767).toShort())
+            } else {
+                output.putFloat(processed)
+            }
+        }
+        afterFrame()
+    }
+    output.flip()
+}
+
+/** A small deterministic tone-shaping EQ that works on the PCM formats Media3 exports. */
+internal class ParametricEqAudioProcessor(
+    private val preset: String
+) : BaseAudioProcessor() {
+    private var sampleRate = 0
+    private var channelCount = 0
+    private var lowState = FloatArray(0)
+    private var midState = FloatArray(0)
+    private var highState = FloatArray(0)
+
+    override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
+        requirePcmFormat(inputAudioFormat)
+        sampleRate = inputAudioFormat.sampleRate.coerceAtLeast(1)
+        channelCount = inputAudioFormat.channelCount.coerceAtLeast(1)
+        lowState = FloatArray(channelCount)
+        midState = FloatArray(channelCount)
+        highState = FloatArray(channelCount)
+        return inputAudioFormat
+    }
+
+    override fun onFlush() {
+        lowState.fill(0f)
+        midState.fill(0f)
+        highState.fill(0f)
+    }
+
+    override fun isActive(): Boolean = super.isActive() || preset != "Flat"
+
+    override fun queueInput(inputBuffer: ByteBuffer) {
+        val lowAlpha = (2f * PI.toFloat() * 180f / sampleRate).coerceIn(0.001f, 1f)
+        val midAlpha = (2f * PI.toFloat() * 2_800f / sampleRate).coerceIn(0.001f, 1f)
+        processPcmFrames(inputBuffer, inputAudioFormat, channelCount, outputBuffer = { size -> replaceOutputBuffer(size) }, transform = { sample, channel ->
+            lowState[channel] += lowAlpha * (sample - lowState[channel])
+            midState[channel] += midAlpha * (sample - midState[channel])
+            highState[channel] = midState[channel]
+            val bass = lowState[channel]
+            val treble = sample - highState[channel]
+            val vocal = midState[channel] - bass
+            when (preset) {
+                "Bass Boost" -> sample + bass * 0.72f
+                "Treble Boost" -> sample + treble * 0.62f
+                "Vocal" -> sample + vocal * 0.55f
+                else -> sample
+            }
+        })
+    }
+}
+
+/** Adds a bounded echo while keeping the edited item's duration unchanged. */
+internal class FeedbackDelayAudioProcessor(
+    delayMs: Long,
+    feedback: Float
+) : BaseAudioProcessor() {
+    private val delayMs = delayMs.coerceIn(1L, MAX_EXPORT_DELAY_MS)
+    private val feedback = feedback.coerceIn(0f, MAX_EXPORT_DELAY_FEEDBACK)
+    private var channelCount = 0
+    private var delayFrames = 1
+    private var writeFrame = 0
+    private var delayBuffer = Array(0) { FloatArray(0) }
+
+    override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
+        requirePcmFormat(inputAudioFormat)
+        channelCount = inputAudioFormat.channelCount.coerceAtLeast(1)
+        delayFrames = (inputAudioFormat.sampleRate.coerceAtLeast(1) * delayMs / 1_000L)
+            .toInt()
+            .coerceAtLeast(1)
+        delayBuffer = Array(channelCount) { FloatArray(delayFrames) }
+        return inputAudioFormat
+    }
+
+    override fun onFlush() {
+        delayBuffer.forEach { it.fill(0f) }
+        writeFrame = 0
+    }
+
+    override fun isActive(): Boolean = super.isActive() || delayMs > 0L
+
+    override fun queueInput(inputBuffer: ByteBuffer) {
+        processPcmFrames(inputBuffer, inputAudioFormat, channelCount, outputBuffer = { size -> replaceOutputBuffer(size) }, transform = { sample, channel ->
+            val delayed = delayBuffer[channel][writeFrame]
+            delayBuffer[channel][writeFrame] = (sample + delayed * feedback).coerceIn(-1f, 1f)
+            sample + delayed * 0.65f
+        }, afterFrame = {
+            writeFrame = (writeFrame + 1) % delayFrames
+        })
+    }
+}
+
+/** A short multi-tap room/hall reverb with no unbounded tail allocation. */
+internal class MultiTapReverbAudioProcessor(
+    private val preset: String,
+    amount: Float
+) : BaseAudioProcessor() {
+    private val amount = amount.coerceIn(0f, 1f).let { if (it > 0f) it else if (preset == "Hall") 0.5f else 0.34f }
+    private val tapDelaysMs = if (preset == "Hall") {
+        intArrayOf(73, 109, 151, 223)
+    } else {
+        intArrayOf(31, 47, 71)
+    }
+    private val tapWeights = if (preset == "Hall") {
+        floatArrayOf(0.34f, 0.25f, 0.18f, 0.12f)
+    } else {
+        floatArrayOf(0.42f, 0.3f, 0.2f)
+    }
+    private var sampleRate = 0
+    private var channelCount = 0
+    private var tapPositions = IntArray(0)
+    private var tapBuffers = emptyArray<Array<FloatArray>>()
+
+    override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
+        requirePcmFormat(inputAudioFormat)
+        sampleRate = inputAudioFormat.sampleRate.coerceAtLeast(1)
+        channelCount = inputAudioFormat.channelCount.coerceAtLeast(1)
+        tapPositions = IntArray(tapDelaysMs.size)
+        tapBuffers = tapDelaysMs.map { delayMs ->
+            val frames = (sampleRate * delayMs / 1_000L).toInt().coerceAtLeast(1)
+            Array(channelCount) { FloatArray(frames) }
+        }.toTypedArray()
+        return inputAudioFormat
+    }
+
+    override fun onFlush() {
+        tapPositions.fill(0)
+        tapBuffers.forEach { tap -> tap.forEach { it.fill(0f) } }
+    }
+
+    override fun isActive(): Boolean = super.isActive() || amount > 0f
+
+    override fun queueInput(inputBuffer: ByteBuffer) {
+        processPcmFrames(inputBuffer, inputAudioFormat, channelCount, outputBuffer = { size -> replaceOutputBuffer(size) }, transform = { sample, channel ->
+            var wet = 0f
+            tapBuffers.indices.forEach { tapIndex ->
+                wet += tapBuffers[tapIndex][channel][tapPositions[tapIndex]] * tapWeights[tapIndex]
+            }
+            tapBuffers.indices.forEach { tapIndex ->
+                val position = tapPositions[tapIndex]
+                tapBuffers[tapIndex][channel][position] =
+                    (sample + wet * 0.18f).coerceIn(-1f, 1f)
+            }
+            sample + wet * amount
+        }, afterFrame = {
+            tapBuffers.indices.forEach { tapIndex ->
+                val position = tapPositions[tapIndex]
+                tapPositions[tapIndex] = (position + 1) % tapBuffers[tapIndex][0].size
+            }
+        })
+    }
+}
+
+/** A bounded waveshaper for deliberate lo-fi/distortion processing. */
+internal class DistortionAudioProcessor(amount: Float) : BaseAudioProcessor() {
+    private val amount = amount.coerceIn(0f, 1f)
+    private val drive = 1f + amount * 20f
+    private val normalization = 1f / tanh(drive)
+    private var channelCount = 0
+
+    override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
+        requirePcmFormat(inputAudioFormat)
+        channelCount = inputAudioFormat.channelCount.coerceAtLeast(1)
+        return inputAudioFormat
+    }
+
+    override fun isActive(): Boolean = super.isActive() || amount > 0f
+
+    override fun queueInput(inputBuffer: ByteBuffer) {
+        processPcmFrames(
+            inputBuffer,
+            inputAudioFormat,
+            channelCount,
+            outputBuffer = { size -> replaceOutputBuffer(size) },
+            transform = { sample, _ ->
+            val shaped = tanh(sample * drive) * normalization
+            val mix = amount * 0.65f
+            sample * (1f - mix) + shaped * mix
+            }
+        )
+    }
 }
 
 /** Applies a clip's simple linear volume change to decoded PCM audio. */

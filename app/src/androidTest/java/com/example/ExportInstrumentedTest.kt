@@ -818,6 +818,159 @@ class ExportInstrumentedTest {
     }
 
     @Test
+    fun shaderDistortionEffectsAreRenderedIntoPublishedFrames() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val source = File.createTempFile("clipp-export-shader-effects-", ".png", context.cacheDir)
+        writeVerticalSplitPng(source, android.graphics.Color.RED, android.graphics.Color.BLUE)
+        val clip = MediaClip(
+            sourceUri = Uri.fromFile(source).toString(),
+            originalDurationMs = 1_000L,
+            trimEndMs = 1_000L,
+            isPhoto = true,
+            effects = listOf(
+                AppliedEffect(type = EffectType.RGB_SPLIT, intensity = 0.8f),
+                AppliedEffect(type = EffectType.WAVE, intensity = 0.8f),
+                AppliedEffect(type = EffectType.FISHEYE, intensity = 0.55f),
+                AppliedEffect(type = EffectType.PIXELATE, intensity = 0.35f)
+            )
+        )
+        val exporter = VideoExporter(context)
+        var result: Outcome? = null
+        try {
+            result = awaitExport(exporter, listOf(clip), "Clipp_instrumented_shader_effects.mp4")
+            assertSuccessful(result!!)
+            assertPublishedMp4(context, result!!)
+            assertFramesDiffer(context, result!!, 100_000L, 800_000L)
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            source.delete()
+        }
+    }
+
+    @Test
+    fun photoCrossfadeRendersNextPhotoBeforeTheCut() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val firstSource = File.createTempFile("clipp-export-crossfade-first-", ".png", context.cacheDir)
+        val secondSource = File.createTempFile("clipp-export-crossfade-second-", ".png", context.cacheDir)
+        writeSolidPng(firstSource, android.graphics.Color.RED)
+        writeSolidPng(secondSource, android.graphics.Color.BLUE)
+        val firstClip = MediaClip(
+            sourceUri = Uri.fromFile(firstSource).toString(),
+            originalDurationMs = 1_000L,
+            trimEndMs = 1_000L,
+            isPhoto = true,
+            transitionNext = Transition(TransitionType.CROSSFADE, 400L)
+        )
+        val secondClip = MediaClip(
+            sourceUri = Uri.fromFile(secondSource).toString(),
+            originalDurationMs = 1_000L,
+            trimEndMs = 1_000L,
+            isPhoto = true
+        )
+        val exporter = VideoExporter(context)
+        var result: Outcome? = null
+        try {
+            result = awaitExport(exporter, listOf(firstClip, secondClip), "Clipp_instrumented_crossfade.mp4")
+            assertSuccessful(result!!)
+            assertPublishedMp4(context, result!!)
+            assertFrameHasDominantColor(context, result!!, 200_000L, expected = "red")
+            assertFrameIsMixed(context, result!!, 800_000L)
+            assertFrameHasDominantColor(context, result!!, 1_100_000L, expected = "blue")
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            firstSource.delete()
+            secondSource.delete()
+        }
+    }
+
+    @Test
+    fun simpleVideoCrossfadeRendersNextVideoBeforeTheCut() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val firstSource = File.createTempFile("clipp-export-video-crossfade-first-", ".png", context.cacheDir)
+        val secondSource = File.createTempFile("clipp-export-video-crossfade-second-", ".png", context.cacheDir)
+        writeSolidPng(firstSource, android.graphics.Color.RED)
+        writeSolidPng(secondSource, android.graphics.Color.GREEN)
+
+        val sourceExporter = VideoExporter(context)
+        val exporter = VideoExporter(context)
+        var firstVideo: Outcome? = null
+        var secondVideo: Outcome? = null
+        var result: Outcome? = null
+        try {
+            firstVideo = awaitExport(
+                sourceExporter,
+                listOf(
+                    MediaClip(
+                        sourceUri = Uri.fromFile(firstSource).toString(),
+                        originalDurationMs = 1_000L,
+                        trimEndMs = 1_000L,
+                        isPhoto = true
+                    )
+                ),
+                "Clipp_instrumented_video_crossfade_first.mp4"
+            )
+            secondVideo = awaitExport(
+                sourceExporter,
+                listOf(
+                    MediaClip(
+                        sourceUri = Uri.fromFile(secondSource).toString(),
+                        originalDurationMs = 1_000L,
+                        trimEndMs = 1_000L,
+                        isPhoto = true
+                    )
+                ),
+                "Clipp_instrumented_video_crossfade_second.mp4"
+            )
+            assertSuccessful(firstVideo!!)
+            assertSuccessful(secondVideo!!)
+
+            val firstDurationMs = firstVideo!!.metadata!!.durationMs
+            val secondDurationMs = secondVideo!!.metadata!!.durationMs
+            val firstClip = MediaClip(
+                sourceUri = firstVideo!!.uri!!.toString(),
+                originalDurationMs = firstDurationMs,
+                trimEndMs = firstDurationMs,
+                transitionNext = Transition(TransitionType.CROSSFADE, 400L)
+            )
+            val secondClip = MediaClip(
+                sourceUri = secondVideo!!.uri!!.toString(),
+                originalDurationMs = secondDurationMs,
+                trimEndMs = secondDurationMs
+            )
+
+            result = awaitExport(
+                exporter,
+                listOf(firstClip, secondClip),
+                "Clipp_instrumented_video_crossfade.mp4"
+            )
+            assertSuccessful(result!!)
+            assertPublishedMp4(context, result!!)
+            assertFrameHasDominantColor(context, result!!, 200_000L, expected = "red")
+            assertFrameHasRedGreenMix(
+                context,
+                result!!,
+                (firstDurationMs - 200L).coerceAtLeast(100L) * 1_000L
+            )
+            assertFrameHasDominantColor(
+                context,
+                result!!,
+                (firstDurationMs + 200L) * 1_000L,
+                expected = "green"
+            )
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            firstVideo?.uri?.let { context.contentResolver.delete(it, null, null) }
+            secondVideo?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            sourceExporter.close()
+            firstSource.delete()
+            secondSource.delete()
+        }
+    }
+
+    @Test
     fun separateAudioTrackIsMixedIntoPublishedMp4() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val source = File.createTempFile("clipp-export-audio-base-", ".png", context.cacheDir)
@@ -855,6 +1008,15 @@ class ExportInstrumentedTest {
                         )
                     ),
                     audioEffects = AudioEffects(fadeInMs = 200L, fadeOutMs = 200L)
+                        .copy(
+                            eqPreset = "Bass Boost",
+                            reverbPreset = "Room",
+                            reverbAmount = 0.35f,
+                            delayTimeMs = 80L,
+                            delayFeedback = 0.35f,
+                            pitchSemitones = 3f,
+                            distortion = 0.2f
+                        )
                 )
             )
         )
@@ -956,6 +1118,57 @@ class ExportInstrumentedTest {
                     "green" -> assertTrue("Expected green frame, got $red/$green/$blue", green > red + 40 && green > blue + 40)
                     else -> error("Unknown expected color: $expected")
                 }
+            } finally {
+                frame.recycle()
+            }
+        } finally {
+            retriever.release()
+        }
+    }
+
+    private fun assertFrameIsMixed(
+        context: android.content.Context,
+        result: Outcome,
+        frameTimeUs: Long
+    ) {
+        val retriever = android.media.MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(context, result.uri!!)
+            val frame = retriever.getFrameAtTime(
+                frameTimeUs,
+                android.media.MediaMetadataRetriever.OPTION_CLOSEST
+            ) ?: error("Missing frame at $frameTimeUs")
+            try {
+                val pixel = frame.getPixel(frame.width / 2, frame.height / 2)
+                val red = (pixel ushr 16) and 0xff
+                val blue = pixel and 0xff
+                assertTrue("Expected a crossfade frame, got $red/$blue", red > 30 && blue > 30)
+            } finally {
+                frame.recycle()
+            }
+        } finally {
+            retriever.release()
+        }
+    }
+
+    private fun assertFrameHasRedGreenMix(
+        context: android.content.Context,
+        result: Outcome,
+        frameTimeUs: Long
+    ) {
+        val retriever = android.media.MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(context, result.uri!!)
+            val frame = retriever.getFrameAtTime(
+                frameTimeUs,
+                android.media.MediaMetadataRetriever.OPTION_CLOSEST
+            ) ?: error("Missing frame at $frameTimeUs")
+            try {
+                val pixel = frame.getPixel(frame.width / 2, frame.height / 2)
+                val red = (pixel ushr 16) and 0xff
+                val green = (pixel ushr 8) and 0xff
+                val blue = pixel and 0xff
+                assertTrue("Expected red/green transition frame, got $red/$green/$blue", red > 30 && green > 30 && red > blue + 20 && green > blue + 20)
             } finally {
                 frame.recycle()
             }

@@ -55,7 +55,7 @@ private val EXPORT_SUPPORTED_EFFECTS = setOf(
     EffectType.LIGHT_LEAK,
     EffectType.LENS_FLARE,
     EffectType.BOKEH
-)
+) + EXPORT_SHADER_EFFECTS
 private val EXPORT_TIMED_OVERLAY_EFFECTS = setOf(
     EffectType.FILM_GRAIN,
     EffectType.ANAMORPHIC_FLARE,
@@ -63,6 +63,22 @@ private val EXPORT_TIMED_OVERLAY_EFFECTS = setOf(
     EffectType.LIGHT_LEAK,
     EffectType.LENS_FLARE,
     EffectType.BOKEH
+) + EXPORT_SHADER_EFFECTS
+private val EXPORT_VIDEO_TRANSITIONS = setOf(
+    TransitionType.CROSSFADE,
+    TransitionType.SLIDE_LEFT,
+    TransitionType.SLIDE_RIGHT,
+    TransitionType.SLIDE_UP,
+    TransitionType.SLIDE_DOWN,
+    TransitionType.ZOOM_IN,
+    TransitionType.ZOOM_OUT,
+    TransitionType.SPIN,
+    TransitionType.FLIP
+)
+private val EXPORT_PHOTO_TRANSITIONS = EXPORT_VIDEO_TRANSITIONS + setOf(
+    TransitionType.WIPE_LEFT,
+    TransitionType.WIPE_RIGHT,
+    TransitionType.CLOCK_WIPE
 )
 private val EXPORT_SUPPORTED_TEXT_ANIM_IN = setOf(
     TextAnimIn.NONE,
@@ -95,6 +111,155 @@ private class TimedBitmapOverlay(
 
     override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings {
         return settingsAt(presentationTimeUs / 1_000L)
+    }
+}
+
+/**
+ * Renders a still-image transition over the tail of a photo clip. The next
+ * photo is already the first frame after the cut, so this avoids duplicating
+ * or shortening the timeline while still producing a real transition.
+ */
+private class PhotoTransitionBitmapOverlay(
+    private val type: TransitionType,
+    private val sourceBitmap: Bitmap,
+    private val blankBitmap: Bitmap,
+    private val windowStartMs: Long,
+    private val windowEndMs: Long
+) : BitmapOverlay() {
+    private companion object {
+        const val SAMPLE_INTERVAL_MS = 33L
+    }
+
+    private var cachedSampleTimeMs = Long.MIN_VALUE
+    private var cachedBitmap: Bitmap? = null
+    private var released = false
+
+    override fun getBitmap(presentationTimeUs: Long): Bitmap {
+        val localTimeMs = presentationTimeUs / 1_000L
+        if (localTimeMs < windowStartMs || localTimeMs >= windowEndMs) return blankBitmap
+        if (type != TransitionType.WIPE_LEFT &&
+            type != TransitionType.WIPE_RIGHT &&
+            type != TransitionType.CLOCK_WIPE
+        ) return sourceBitmap
+
+        val sampleTimeMs = (localTimeMs / SAMPLE_INTERVAL_MS) * SAMPLE_INTERVAL_MS
+        synchronized(this) {
+            if (released) return blankBitmap
+            if (sampleTimeMs == cachedSampleTimeMs) return cachedBitmap ?: blankBitmap
+            val progress = transitionProgress(localTimeMs)
+            val next = Bitmap.createBitmap(
+                sourceBitmap.width.coerceAtLeast(1),
+                sourceBitmap.height.coerceAtLeast(1),
+                Bitmap.Config.ARGB_8888
+            )
+            val canvas = Canvas(next)
+            canvas.drawColor(android.graphics.Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
+            canvas.save()
+            when (type) {
+                TransitionType.WIPE_LEFT -> canvas.clipRect(
+                    0f,
+                    0f,
+                    sourceBitmap.width * progress,
+                    sourceBitmap.height.toFloat()
+                )
+                TransitionType.WIPE_RIGHT -> canvas.clipRect(
+                    sourceBitmap.width * (1f - progress),
+                    0f,
+                    sourceBitmap.width.toFloat(),
+                    sourceBitmap.height.toFloat()
+                )
+                TransitionType.CLOCK_WIPE -> {
+                    val centerX = sourceBitmap.width / 2f
+                    val centerY = sourceBitmap.height / 2f
+                    val radius = max(sourceBitmap.width, sourceBitmap.height).toFloat()
+                    val path = Path().apply {
+                        moveTo(centerX, centerY)
+                        lineTo(centerX, centerY - radius)
+                        arcTo(
+                            RectF(centerX - radius, centerY - radius, centerX + radius, centerY + radius),
+                            -90f,
+                            360f * progress,
+                            false
+                        )
+                        close()
+                    }
+                    canvas.clipPath(path)
+                }
+                else -> Unit
+            }
+            canvas.drawBitmap(sourceBitmap, 0f, 0f, null)
+            canvas.restore()
+            cachedBitmap?.takeIf { !it.isRecycled }?.recycle()
+            cachedBitmap = next
+            cachedSampleTimeMs = sampleTimeMs
+            return next
+        }
+    }
+
+    override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings {
+        return transitionOverlaySettings(
+            type = type,
+            localTimeMs = presentationTimeUs / 1_000L,
+            windowStartMs = windowStartMs,
+            windowEndMs = windowEndMs
+        )
+    }
+
+    override fun release() {
+        synchronized(this) {
+            if (released) return
+            released = true
+            cachedBitmap?.takeIf { !it.isRecycled && it !== sourceBitmap }?.recycle()
+            cachedBitmap = null
+            sourceBitmap.takeIf { !it.isRecycled }?.recycle()
+        }
+        super.release()
+    }
+
+    private fun transitionProgress(localTimeMs: Long): Float {
+        return transitionProgress(localTimeMs, windowStartMs, windowEndMs)
+    }
+}
+
+private fun transitionProgress(localTimeMs: Long, windowStartMs: Long, windowEndMs: Long): Float {
+    val duration = (windowEndMs - windowStartMs).coerceAtLeast(1L)
+    return ((localTimeMs - windowStartMs).toFloat() / duration).coerceIn(0f, 1f)
+}
+
+private fun transitionOverlaySettings(
+    type: TransitionType,
+    localTimeMs: Long,
+    windowStartMs: Long,
+    windowEndMs: Long
+): OverlaySettings {
+    val eased = easedProgress(transitionProgress(localTimeMs, windowStartMs, windowEndMs))
+    return when (type) {
+        TransitionType.CROSSFADE -> overlaySettings(0.5f, 0.5f, 1f, 1f, alpha = eased)
+        TransitionType.SLIDE_LEFT -> overlaySettings(
+            1.5f - eased, 0.5f, 1f, 1f, allowOffscreen = true
+        )
+        TransitionType.SLIDE_RIGHT -> overlaySettings(
+            -0.5f + eased, 0.5f, 1f, 1f, allowOffscreen = true
+        )
+        TransitionType.SLIDE_UP -> overlaySettings(
+            0.5f, 1.5f - eased, 1f, 1f, allowOffscreen = true
+        )
+        TransitionType.SLIDE_DOWN -> overlaySettings(
+            0.5f, -0.5f + eased, 1f, 1f, allowOffscreen = true
+        )
+        TransitionType.ZOOM_IN -> overlaySettings(
+            0.5f, 0.5f, 0.55f + 0.45f * eased, 0.55f + 0.45f * eased, alpha = eased
+        )
+        TransitionType.ZOOM_OUT -> overlaySettings(
+            0.5f, 0.5f, 1.45f - 0.45f * eased, 1.45f - 0.45f * eased, alpha = eased
+        )
+        TransitionType.SPIN -> overlaySettings(
+            0.5f, 0.5f, 1f, 1f, rotation = (1f - eased) * 180f, alpha = eased
+        )
+        TransitionType.FLIP -> overlaySettings(
+            0.5f, 0.5f, eased.coerceAtLeast(0.02f), 1f, alpha = eased
+        )
+        else -> overlaySettings(0.5f, 0.5f, 1f, 1f)
     }
 }
 
@@ -583,14 +748,25 @@ private fun overlaySettings(
     scaleX: Float,
     scaleY: Float,
     rotation: Float = 0f,
-    alpha: Float = 1f
+    alpha: Float = 1f,
+    allowOffscreen: Boolean = false
 ): OverlaySettings {
     // Media3 uses a centred coordinate system with positive Y upwards.
+    val frameAnchorX = if (allowOffscreen) {
+        posX * 2f - 1f
+    } else {
+        (posX.coerceIn(0f, 1f) * 2f) - 1f
+    }
+    val frameAnchorY = if (allowOffscreen) {
+        1f - posY * 2f
+    } else {
+        1f - (posY.coerceIn(0f, 1f) * 2f)
+    }
     return OverlaySettings.Builder()
         .setAlphaScale(alpha.coerceIn(0f, 1f))
         .setBackgroundFrameAnchor(
-            (posX.coerceIn(0f, 1f) * 2f) - 1f,
-            1f - (posY.coerceIn(0f, 1f) * 2f)
+            frameAnchorX,
+            frameAnchorY
         )
         .setOverlayFrameAnchor(0f, 0f)
         .setScale(scaleX.coerceAtLeast(0.001f), scaleY.coerceAtLeast(0.001f))
@@ -1100,8 +1276,73 @@ internal fun buildExportOverlays(
             overlaySettings(0.5f, 0.5f, 1f, 1f, alpha = ((localTime - start).toFloat() / duration).coerceIn(0f, 1f))
         }
     }
+    if (transition.type in EXPORT_PHOTO_TRANSITIONS) {
+        val clipIndex = state.clips.indexOfFirst { it.id == clip.id }
+        val nextClip = state.clips.getOrNull(clipIndex + 1)
+        val duration = transition.durationMs.coerceIn(1L, clipDurationMs)
+        val start = clipDurationMs - duration
+        if (clip.canRenderTransitionSource() && nextClip?.canRenderTransitionSource() == true) {
+            if (nextClip.isPhoto) {
+                loadBitmap(context, nextClip.sourceUri)?.let { nextBitmap ->
+                    overlays += PhotoTransitionBitmapOverlay(
+                        type = transition.type,
+                        sourceBitmap = nextBitmap,
+                        blankBitmap = blank,
+                        windowStartMs = start,
+                        windowEndMs = clipDurationMs
+                    )
+                }
+            } else if (transition.type in EXPORT_VIDEO_TRANSITIONS && nextClip.canRenderVideoTransitionSource()) {
+                runCatching {
+                    VideoFrameBitmapOverlay(
+                        context = context,
+                        sourceUri = nextClip.sourceUri,
+                        sourceTrimStartMs = nextClip.effectiveTrimStartMs,
+                        sourceTrimEndMs = nextClip.effectiveTrimEndMs,
+                        windowStartMs = start,
+                        windowEndMs = clipDurationMs,
+                        blankBitmap = blank,
+                        chromaKey = ChromaKeySettings(),
+                        settingsAt = { localTime ->
+                            transitionOverlaySettings(
+                                type = transition.type,
+                                localTimeMs = localTime,
+                                windowStartMs = start,
+                                windowEndMs = clipDurationMs
+                            )
+                        }
+                    )
+                }.onSuccess { overlays += it }
+            }
+        }
+    }
 
     return overlays
+}
+
+internal fun MediaClip.canRenderPhotoTransitionSource(): Boolean {
+    return isPhoto && canRenderTransitionSource()
+}
+
+internal fun MediaClip.canRenderVideoTransitionSource(): Boolean {
+    return !isPhoto && playbackSpeed == 1f && canRenderTransitionSource()
+}
+
+private fun MediaClip.canRenderTransitionSource(): Boolean {
+    return sourceUri.isNotBlank() &&
+        effectiveTrimEndMs > effectiveTrimStartMs &&
+        rotation == 0f &&
+        !flipHorizontal &&
+        !flipVertical &&
+        cropRect == EXPORT_DEFAULT_CROP &&
+        scale == 1f &&
+        posX == 0.5f &&
+        posY == 0.5f &&
+        filterType == FilterType.NONE &&
+        adjustments == ColorAdjustments() &&
+        effects.isEmpty() &&
+        photoAnimationSettings.type == PhotoAnimationType.NONE &&
+        keyframes.isEmpty()
 }
 
 internal fun buildExportVideoEffects(
@@ -1172,6 +1413,15 @@ internal fun buildExportVideoEffects(
             EffectType.POP_ART -> {
                 buildExportEffectColorMatrix(effect)?.let { effects += ExportRgbMatrix(it) }
             }
+            in EXPORT_SHADER_EFFECTS -> {
+                val endTimeMs = if (effect.endTimeMs == -1L) clipDurationMs else effect.endTimeMs
+                effects += ShaderDistortionEffect(
+                    type = effect.type,
+                    intensity = effect.intensity,
+                    startTimeMs = effect.startTimeMs,
+                    endTimeMs = endTimeMs
+                )
+            }
             else -> Unit
         }
     }
@@ -1183,7 +1433,7 @@ internal fun buildExportVideoEffects(
 
 internal fun EditorState.exportUnsupportedReasons(): List<String> {
     val reasons = mutableListOf<String>()
-    clips.forEach { clip ->
+    clips.forEachIndexed { index, clip ->
         if (clip.hasUnsupportedExportEdits()) reasons += "an unsupported clip edit"
         if (clip.keyframes.keys.any { it !in EXPORT_SUPPORTED_CLIP_KEYFRAMES && it !in EXPORT_SUPPORTED_AUDIO_KEYFRAMES }) {
             reasons += "unsupported clip keyframes"
@@ -1193,7 +1443,18 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
             reasons += "invalid clip audio automation"
         }
         if (clip.audioEffects.hasUnsupportedExportAutomation()) reasons += "advanced clip audio automation"
-        if (clip.transitionNext.type !in setOf(TransitionType.NONE, TransitionType.FADE_TO_BLACK, TransitionType.FADE_TO_WHITE)) {
+        val transitionType = clip.transitionNext.type
+        val isSupportedSourceTransition = transitionType in EXPORT_PHOTO_TRANSITIONS &&
+            index < clips.lastIndex &&
+            clip.canRenderTransitionSource() &&
+            ((clips[index + 1].isPhoto && clips[index + 1].canRenderPhotoTransitionSource()) ||
+                (!clips[index + 1].isPhoto &&
+                    transitionType in EXPORT_VIDEO_TRANSITIONS &&
+                    clips[index + 1].canRenderVideoTransitionSource()))
+        val isColorFade = transitionType == TransitionType.NONE ||
+            transitionType == TransitionType.FADE_TO_BLACK ||
+            transitionType == TransitionType.FADE_TO_WHITE
+        if (!isColorFade && !isSupportedSourceTransition) {
             reasons += "this transition type"
         }
         if (clip.effects.any { it.type !in EXPORT_SUPPORTED_EFFECTS }) {

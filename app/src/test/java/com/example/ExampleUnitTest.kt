@@ -65,7 +65,7 @@ class ExampleUnitTest {
   }
 
   @Test
-  fun supportedAdvancedEffectsCanBeExportedButPartialAndDistortionEffectsAreBlocked() {
+  fun supportedAdvancedEffectsCanBeExportedAndUnsupportedEffectsAreBlocked() {
     val clip = MediaClip(
       sourceUri = "content://media/video/1",
       originalDurationMs = 1_000L,
@@ -78,7 +78,11 @@ class ExampleUnitTest {
         AppliedEffect(type = EffectType.POP_ART),
         AppliedEffect(type = EffectType.FILM_GRAIN),
         AppliedEffect(type = EffectType.ANAMORPHIC_FLARE),
-        AppliedEffect(type = EffectType.SPARKLE)
+        AppliedEffect(type = EffectType.SPARKLE),
+        AppliedEffect(type = EffectType.RGB_SPLIT),
+        AppliedEffect(type = EffectType.WAVE),
+        AppliedEffect(type = EffectType.FISHEYE),
+        AppliedEffect(type = EffectType.PIXELATE)
       )
     )
 
@@ -91,8 +95,54 @@ class ExampleUnitTest {
       effects = listOf(AppliedEffect(type = EffectType.MIRROR, startTimeMs = 100L))
     )
     assertTrue(EditorState(clips = listOf(partialEffect)).hasUnsupportedExportEdits())
-    val blockedEffect = clip.copy(effects = listOf(AppliedEffect(type = EffectType.WAVE)))
+    val blockedEffect = clip.copy(effects = listOf(AppliedEffect(type = EffectType.OIL_PAINTING)))
     assertTrue(EditorState(clips = listOf(blockedEffect)).hasUnsupportedExportEdits())
+  }
+
+  @Test
+  fun simpleSourceTransitionsAreAllowedOnlyForSimpleAdjacentSources() {
+    val firstPhoto = MediaClip(
+      sourceUri = "content://media/image/1",
+      originalDurationMs = 1_000L,
+      trimEndMs = 1_000L,
+      isPhoto = true,
+      transitionNext = Transition(TransitionType.CROSSFADE, 300L)
+    )
+    val secondPhoto = MediaClip(
+      sourceUri = "content://media/image/2",
+      originalDurationMs = 1_000L,
+      trimEndMs = 1_000L,
+      isPhoto = true
+    )
+    assertFalse(EditorState(clips = listOf(firstPhoto, secondPhoto)).hasUnsupportedExportEdits())
+
+    val video = secondPhoto.copy(isPhoto = false, sourceUri = "content://media/video/2")
+    assertFalse(EditorState(clips = listOf(firstPhoto, video)).hasUnsupportedExportEdits())
+    assertTrue(
+      EditorState(
+        clips = listOf(
+          firstPhoto.copy(transitionNext = Transition(TransitionType.WIPE_LEFT, 300L)),
+          video
+        )
+      ).hasUnsupportedExportEdits()
+    )
+
+    val firstVideo = MediaClip(
+      sourceUri = "content://media/video/1",
+      originalDurationMs = 1_000L,
+      trimEndMs = 1_000L,
+      transitionNext = Transition(TransitionType.CROSSFADE, 300L)
+    )
+    val secondVideo = firstVideo.copy(
+      id = "second-video",
+      transitionNext = Transition()
+    )
+    assertFalse(EditorState(clips = listOf(firstVideo, secondVideo)).hasUnsupportedExportEdits())
+    assertTrue(
+      EditorState(
+        clips = listOf(firstVideo, secondVideo.copy(rotation = 90f))
+      ).hasUnsupportedExportEdits()
+    )
   }
 
   @Test
@@ -275,6 +325,57 @@ class ExampleUnitTest {
     assertFalse(EditorState(clips = listOf(clip), audioClips = listOf(audio)).hasUnsupportedExportEdits())
     assertTrue(EditorState(clips = listOf(clip.copy(audioEffects = AudioEffects(eqPreset = "Bass")))).hasUnsupportedExportEdits())
     assertTrue(EditorState(clips = listOf(clip.copy(keyframes = mapOf("pan" to listOf(Keyframe(timeMs = 0L, value = 0f)))))).hasUnsupportedExportEdits())
+  }
+
+  @Test
+  fun supportedAdvancedAudioProcessorsAreAllowed() {
+    val effects = AudioEffects(
+      eqPreset = "Bass Boost",
+      reverbPreset = "Room",
+      delayTimeMs = 80L,
+      delayFeedback = 0.4f,
+      pitchSemitones = 3f,
+      distortion = 0.35f
+    )
+    val clip = MediaClip(
+      sourceUri = "content://media/video/1",
+      originalDurationMs = 1_000L,
+      trimEndMs = 1_000L,
+      audioEffects = effects
+    )
+
+    assertFalse(EditorState(clips = listOf(clip)).hasUnsupportedExportEdits())
+    assertTrue(
+      EditorState(clips = listOf(clip.copy(audioEffects = effects.copy(delayTimeMs = 1_001L))))
+        .hasUnsupportedExportEdits()
+    )
+  }
+
+  @Test
+  fun distortionAndDelayProcessorsChangePcmSamples() {
+    val distortion = DistortionAudioProcessor(0.8f)
+    distortion.configure(AudioProcessor.AudioFormat(1_000, 1, C.ENCODING_PCM_FLOAT))
+    distortion.flush()
+    val distortionInput = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).apply {
+      putFloat(0.8f)
+      flip()
+    }
+    distortion.queueInput(distortionInput)
+    val distorted = distortion.output.order(ByteOrder.LITTLE_ENDIAN).float
+    assertTrue("Distortion should change the sample", kotlin.math.abs(distorted - 0.8f) > 0.01f)
+
+    val delay = FeedbackDelayAudioProcessor(delayMs = 10L, feedback = 0.4f)
+    delay.configure(AudioProcessor.AudioFormat(1_000, 1, C.ENCODING_PCM_FLOAT))
+    delay.flush()
+    val delayInput = ByteBuffer.allocate(14 * 4).order(ByteOrder.LITTLE_ENDIAN).apply {
+      putFloat(1f)
+      repeat(13) { putFloat(0f) }
+      flip()
+    }
+    delay.queueInput(delayInput)
+    val delayedOutput = delay.output.order(ByteOrder.LITTLE_ENDIAN)
+    repeat(10) { delayedOutput.float }
+    assertTrue("Delay should produce an echo", delayedOutput.float > 0.1f)
   }
 
   @Test
