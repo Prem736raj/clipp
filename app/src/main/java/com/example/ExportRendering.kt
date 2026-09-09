@@ -56,6 +56,14 @@ private val EXPORT_SUPPORTED_EFFECTS = setOf(
     EffectType.LENS_FLARE,
     EffectType.BOKEH
 )
+private val EXPORT_TIMED_OVERLAY_EFFECTS = setOf(
+    EffectType.FILM_GRAIN,
+    EffectType.ANAMORPHIC_FLARE,
+    EffectType.SPARKLE,
+    EffectType.LIGHT_LEAK,
+    EffectType.LENS_FLARE,
+    EffectType.BOKEH
+)
 private val EXPORT_SUPPORTED_TEXT_ANIM_IN = setOf(
     TextAnimIn.NONE,
     TextAnimIn.FADE_IN,
@@ -260,7 +268,9 @@ private class GifFrameBitmapOverlay(
 private class ProceduralEffectBitmapOverlay(
     private val type: EffectType,
     private val intensity: Float,
-    private val blankBitmap: Bitmap
+    private val blankBitmap: Bitmap,
+    private val windowStartMs: Long,
+    private val windowEndMs: Long
 ) : BitmapOverlay() {
     private companion object {
         const val BITMAP_SIZE = 256
@@ -272,7 +282,9 @@ private class ProceduralEffectBitmapOverlay(
     private var released = false
 
     override fun getBitmap(presentationTimeUs: Long): Bitmap {
-        val sampleTimeMs = ((presentationTimeUs / 1_000L).coerceAtLeast(0L) / SAMPLE_INTERVAL_MS) * SAMPLE_INTERVAL_MS
+        val localTimeMs = presentationTimeUs / 1_000L
+        if (localTimeMs < windowStartMs || localTimeMs >= windowEndMs) return blankBitmap
+        val sampleTimeMs = (localTimeMs / SAMPLE_INTERVAL_MS) * SAMPLE_INTERVAL_MS
         synchronized(this) {
             if (released) return blankBitmap
             if (sampleTimeMs == cachedSampleTimeMs) return cachedBitmap ?: blankBitmap
@@ -1055,12 +1067,21 @@ internal fun buildExportOverlays(
             it.type == EffectType.SPARKLE ||
             it.type == EffectType.LIGHT_LEAK ||
             it.type == EffectType.LENS_FLARE ||
-            it.type == EffectType.BOKEH
+        it.type == EffectType.BOKEH
     }.forEach { effect ->
+        val windowStartMs = effect.startTimeMs.coerceIn(0L, clipDurationMs)
+        val windowEndMs = if (effect.endTimeMs == -1L) {
+            clipDurationMs
+        } else {
+            effect.endTimeMs.coerceIn(0L, clipDurationMs)
+        }
+        if (windowEndMs <= windowStartMs) return@forEach
         overlays += ProceduralEffectBitmapOverlay(
             type = effect.type,
             intensity = effect.intensity,
-            blankBitmap = blank
+            blankBitmap = blank,
+            windowStartMs = windowStartMs,
+            windowEndMs = windowEndMs
         )
     }
 
@@ -1181,8 +1202,8 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
         if (clip.effects.any {
                 it.startTimeMs < 0L ||
                     it.endTimeMs < -1L ||
-                    it.startTimeMs > 0L ||
-                    (it.endTimeMs != -1L && it.endTimeMs < clip.durationMs) ||
+                    (it.startTimeMs > 0L && it.type !in EXPORT_TIMED_OVERLAY_EFFECTS) ||
+                    (it.endTimeMs != -1L && it.endTimeMs < clip.durationMs && it.type !in EXPORT_TIMED_OVERLAY_EFFECTS) ||
                     !it.intensity.isFinite() ||
                     it.intensity !in 0f..1f
             }) {

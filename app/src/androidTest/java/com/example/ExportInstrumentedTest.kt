@@ -700,6 +700,40 @@ class ExportInstrumentedTest {
     }
 
     @Test
+    fun partialProceduralEffectIsRenderedOnlyInsideItsWindow() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val source = File.createTempFile("clipp-export-timed-effect-", ".png", context.cacheDir)
+        writeSolidPng(source, android.graphics.Color.rgb(90, 110, 130))
+        val clip = MediaClip(
+            sourceUri = Uri.fromFile(source).toString(),
+            originalDurationMs = 1_000L,
+            trimEndMs = 1_000L,
+            isPhoto = true,
+            effects = listOf(
+                AppliedEffect(
+                    type = EffectType.LIGHT_LEAK,
+                    intensity = 1f,
+                    startTimeMs = 300L,
+                    endTimeMs = 700L
+                )
+            )
+        )
+        val exporter = VideoExporter(context)
+        var result: Outcome? = null
+        try {
+            result = awaitExport(exporter, listOf(clip), "Clipp_instrumented_timed_effect.mp4")
+            assertSuccessful(result!!)
+            assertPublishedMp4(context, result!!)
+            assertFramesDiffer(context, result!!, 200_000L, 500_000L)
+            assertFramesDiffer(context, result!!, 500_000L, 800_000L)
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            source.delete()
+        }
+    }
+
+    @Test
     fun separateAudioTrackIsMixedIntoPublishedMp4() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val source = File.createTempFile("clipp-export-audio-base-", ".png", context.cacheDir)

@@ -83,6 +83,10 @@ class ExampleUnitTest {
     )
 
     assertFalse(EditorState(clips = listOf(clip)).hasUnsupportedExportEdits())
+    val partialProceduralEffect = clip.copy(
+      effects = listOf(AppliedEffect(type = EffectType.LIGHT_LEAK, startTimeMs = 100L, endTimeMs = 700L))
+    )
+    assertFalse(EditorState(clips = listOf(partialProceduralEffect)).hasUnsupportedExportEdits())
     val partialEffect = clip.copy(
       effects = listOf(AppliedEffect(type = EffectType.MIRROR, startTimeMs = 100L))
     )
