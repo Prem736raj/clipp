@@ -115,6 +115,90 @@ class ExportInstrumentedTest {
     }
 
     @Test
+    fun multipleVideoSourceClipsAreConcatenatedInOrderAndDuration() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val firstSource = File.createTempFile("clipp-export-video-first-", ".png", context.cacheDir)
+        val secondSource = File.createTempFile("clipp-export-video-second-", ".png", context.cacheDir)
+        writeSolidPng(firstSource, android.graphics.Color.RED)
+        writeSolidPng(secondSource, android.graphics.Color.GREEN)
+
+        val sourceExporter = VideoExporter(context)
+        val exporter = VideoExporter(context)
+        var firstVideo: Outcome? = null
+        var secondVideo: Outcome? = null
+        var result: Outcome? = null
+        try {
+            firstVideo = awaitExport(
+                sourceExporter,
+                listOf(
+                    MediaClip(
+                        sourceUri = Uri.fromFile(firstSource).toString(),
+                        originalDurationMs = 1_000L,
+                        trimEndMs = 1_000L,
+                        isPhoto = true
+                    )
+                ),
+                "Clipp_instrumented_video_source_first.mp4"
+            )
+            secondVideo = awaitExport(
+                sourceExporter,
+                listOf(
+                    MediaClip(
+                        sourceUri = Uri.fromFile(secondSource).toString(),
+                        originalDurationMs = 1_000L,
+                        trimEndMs = 1_000L,
+                        isPhoto = true
+                    )
+                ),
+                "Clipp_instrumented_video_source_second.mp4"
+            )
+            assertSuccessful(firstVideo!!)
+            assertSuccessful(secondVideo!!)
+
+            val firstDurationMs = firstVideo!!.metadata!!.durationMs
+            val secondDurationMs = secondVideo!!.metadata!!.durationMs
+            val firstClip = MediaClip(
+                sourceUri = firstVideo!!.uri!!.toString(),
+                originalDurationMs = firstDurationMs,
+                trimEndMs = firstDurationMs
+            )
+            val secondClip = MediaClip(
+                sourceUri = secondVideo!!.uri!!.toString(),
+                originalDurationMs = secondDurationMs,
+                trimEndMs = secondDurationMs
+            )
+
+            result = awaitExport(
+                exporter,
+                listOf(firstClip, secondClip),
+                "Clipp_instrumented_multi_video_clip.mp4"
+            )
+            assertSuccessful(result!!)
+            assertPublishedMp4(context, result!!)
+            val expectedDurationMs = firstDurationMs + secondDurationMs
+            assertTrue(
+                "Unexpected multi-video duration: ${result!!.metadata!!.durationMs}",
+                result!!.metadata!!.durationMs in (expectedDurationMs - 250L)..(expectedDurationMs + 250L)
+            )
+            assertFrameHasDominantColor(context, result!!, 200_000L, expected = "red")
+            assertFrameHasDominantColor(
+                context,
+                result!!,
+                (firstDurationMs + 200L) * 1_000L,
+                expected = "green"
+            )
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            firstVideo?.uri?.let { context.contentResolver.delete(it, null, null) }
+            secondVideo?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            sourceExporter.close()
+            firstSource.delete()
+            secondSource.delete()
+        }
+    }
+
+    @Test
     fun localTemplateCreatesRestorableStateAndExports() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val firstSource = File.createTempFile("clipp-template-first-", ".png", context.cacheDir)
