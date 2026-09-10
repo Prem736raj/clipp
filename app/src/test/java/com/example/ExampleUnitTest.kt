@@ -4,6 +4,8 @@ import androidx.compose.ui.geometry.Rect
 import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import com.example.data.ProjectEntity
+import com.example.viewmodel.PerformanceMode
+import com.example.viewmodel.PlaybackUiCadence
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import org.junit.Assert.assertEquals
@@ -12,6 +14,26 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ExampleUnitTest {
+  @Test
+  fun playbackUiCadenceScalesStateUpdatesWithoutChangingPlaybackRate() {
+    assertEquals(
+      PlaybackUiCadence.BETTER_PERFORMANCE_INTERVAL_MS,
+      PlaybackUiCadence.intervalMs(PerformanceMode.BETTER_PERFORMANCE, isPlaying = true)
+    )
+    assertEquals(
+      PlaybackUiCadence.BALANCED_INTERVAL_MS,
+      PlaybackUiCadence.intervalMs(PerformanceMode.BALANCED, isPlaying = true)
+    )
+    assertEquals(
+      PlaybackUiCadence.BEST_QUALITY_INTERVAL_MS,
+      PlaybackUiCadence.intervalMs(PerformanceMode.BEST_QUALITY, isPlaying = true)
+    )
+    assertEquals(
+      PlaybackUiCadence.IDLE_INTERVAL_MS,
+      PlaybackUiCadence.intervalMs(PerformanceMode.BEST_QUALITY, isPlaying = false)
+    )
+  }
+
   @Test
   fun newProjectsStartWithHonestLocalMetadata() {
     val project = ProjectEntity(name = "Test", duration = "00:01")

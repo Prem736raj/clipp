@@ -1358,6 +1358,7 @@ fun EditorScreen(
     }
 
     LaunchedEffect(Unit) {
+        var lastUiUpdateAtMs = 0L
         while (true) {
             val bgSyncThresh = 200L
             if (bgExoPlayer.currentWindowIndex != exoPlayer.currentWindowIndex || Math.abs(exoPlayer.currentPosition - bgExoPlayer.currentPosition) > bgSyncThresh) {
@@ -1370,6 +1371,7 @@ fun EditorScreen(
                 bgExoPlayer.playbackParameters = exoPlayer.playbackParameters
             }
 
+            var nextGlobalPositionMs: Long? = null
             if (clips.isNotEmpty()) {
                 val windowIndex = exoPlayer.currentWindowIndex
                 if (windowIndex in clips.indices) {
@@ -1388,20 +1390,24 @@ fun EditorScreen(
                         exoPlayer.playbackParameters = params
                     }
                     if (isPlaying) {
-                        currentPositionMs = timelineMapper.globalPositionForPlayer(
+                        nextGlobalPositionMs = timelineMapper.globalPositionForPlayer(
                             windowIndex,
                             exoPlayer.currentPosition
                         )
                     }
                 }
             } else if (isPlaying) {
-                currentPositionMs = exoPlayer.currentPosition
+                nextGlobalPositionMs = exoPlayer.currentPosition
             }
-            if (isPlaying) {
+            val nowMs = android.os.SystemClock.elapsedRealtime()
+            val uiIntervalMs = com.example.viewmodel.PlaybackUiCadence.intervalMs(performanceMode, isPlaying)
+            if (isPlaying && nextGlobalPositionMs != null && nowMs - lastUiUpdateAtMs >= uiIntervalMs) {
+                currentPositionMs = nextGlobalPositionMs
                 val secs = currentPositionMs / 1000
                 val m = secs / 60
                 val s = secs % 60
                 currentTime = String.format("%02d:%02d", m, s)
+                lastUiUpdateAtMs = nowMs
             }
             delay(50)
         }
