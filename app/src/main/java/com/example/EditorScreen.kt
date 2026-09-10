@@ -1,6 +1,7 @@
 package com.example
 
 import com.example.R
+import com.example.viewmodel.EditorDocumentState
 import android.Manifest
 import android.content.pm.PackageManager
 import android.media.MediaRecorder
@@ -880,19 +881,20 @@ fun EditorScreen(
     val skipHeavyEffects = isBudgetMode && isPlaying
     var currentTime by remember { mutableStateOf("00:00") }
     
-    var clips by remember { mutableStateOf<List<MediaClip>>(emptyList()) }
-    var overlays by remember { mutableStateOf<List<OverlayClip>>(emptyList()) }
-    var texts by remember { mutableStateOf<List<TextOverlay>>(emptyList()) }
-    var captions by remember { mutableStateOf<List<AutoCaptionSegment>>(emptyList()) }
-    var captionSettings by remember { mutableStateOf(CaptionSettings()) }
+    val documentState = remember { EditorDocumentState() }
+    var clips by documentState.clips
+    var overlays by documentState.overlays
+    var texts by documentState.texts
+    var captions by documentState.captions
+    var captionSettings by documentState.captionSettings
     var showExportPanel by remember { mutableStateOf(false) }
     var isScreenshotMode by remember { mutableStateOf(false) }
-    var stickers by remember { mutableStateOf<List<StickerOverlay>>(emptyList()) }
-    var drawings by remember { mutableStateOf<List<DrawOverlay>>(emptyList()) }
-    var frames by remember { mutableStateOf<List<FrameOverlay>>(emptyList()) }
-    var audioClips by remember { mutableStateOf<List<AudioClip>>(emptyList()) }
-    var layerOrder by remember { mutableStateOf<List<String>>(emptyList()) }
-    var canvasSettings by remember { mutableStateOf(CanvasSettingsState()) }
+    var stickers by documentState.stickers
+    var drawings by documentState.drawings
+    var frames by documentState.frames
+    var audioClips by documentState.audioClips
+    var layerOrder by documentState.layerOrder
+    var canvasSettings by documentState.canvasSettings
     var zoom by remember { mutableFloatStateOf(1f) }
     var activeTool by remember { mutableStateOf<String?>(null) }
     var selectedClipId by remember { mutableStateOf<String?>(null) }
@@ -920,8 +922,8 @@ fun EditorScreen(
     var currentBrushSize by remember { mutableFloatStateOf(0.015f) }
     var currentBrushColor by remember { mutableStateOf(Color.White) }
     var currentIsEraser by remember { mutableStateOf(false) }
-    var undoStack by remember { mutableStateOf<List<HistoryAction>>(emptyList()) }
-    var redoStack by remember { mutableStateOf<List<HistoryAction>>(emptyList()) }
+    var undoStack by documentState.undoStack
+    var redoStack by documentState.redoStack
     
     LaunchedEffect(overlays, texts, stickers, drawings, frames) {
         val allIds = overlays.map { it.id } + texts.map { it.id } + stickers.map { it.id } + drawings.map { it.id } + frames.map { it.id }

@@ -6,6 +6,7 @@ import androidx.media3.common.audio.AudioProcessor
 import com.example.data.ProjectEntity
 import com.example.viewmodel.PerformanceMode
 import com.example.viewmodel.EditorPerformanceProfile
+import com.example.viewmodel.EditorDocumentState
 import com.example.viewmodel.PlaybackUiCadence
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -15,6 +16,25 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ExampleUnitTest {
+  @Test
+  fun editorDocumentStateStartsWithIndependentEmptyDocument() {
+    val state = EditorDocumentState()
+
+    assertTrue(state.clips.value.isEmpty())
+    assertTrue(state.overlays.value.isEmpty())
+    assertTrue(state.texts.value.isEmpty())
+    assertTrue(state.captions.value.isEmpty())
+    assertEquals(CaptionSettings(), state.captionSettings.value)
+    assertTrue(state.stickers.value.isEmpty())
+    assertTrue(state.drawings.value.isEmpty())
+    assertTrue(state.frames.value.isEmpty())
+    assertTrue(state.audioClips.value.isEmpty())
+    assertTrue(state.layerOrder.value.isEmpty())
+    assertEquals(CanvasSettingsState(), state.canvasSettings.value)
+    assertTrue(state.undoStack.value.isEmpty())
+    assertTrue(state.redoStack.value.isEmpty())
+  }
+
   @Test
   fun editorPerformanceProfileTightensPreviewAndCacheBudgetsByMode() {
     val budget = EditorPerformanceProfile.forMode(PerformanceMode.BETTER_PERFORMANCE)
