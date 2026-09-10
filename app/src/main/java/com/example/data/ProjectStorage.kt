@@ -2,6 +2,8 @@ package com.example.data
 
 import android.content.Context
 import android.net.Uri
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 
 /**
@@ -37,12 +39,75 @@ object ProjectStorage {
         }
         var total = metadata.toByteArray(Charsets.UTF_8).size.toLong()
         total += project.historyState.toByteArray(Charsets.UTF_8).size.toLong()
-        ownedFile(context, project.thumbnailUri)?.let { total += it.length() }
+        ownedFiles(context, project).forEach { file ->
+            if (file.exists()) total += file.length()
+        }
         return total
     }
 
     fun deleteOwnedFiles(context: Context, project: ProjectEntity) {
-        ownedFile(context, project.thumbnailUri)?.takeIf { it.exists() }?.delete()
+        ownedFiles(context, project).forEach { file ->
+            file.takeIf { it.exists() }?.delete()
+        }
+    }
+
+    /**
+     * Removes only known app-owned directories. Source media referenced by a
+     * project is never included here because it lives outside Clipp's roots.
+     */
+    fun deleteAllOwnedFiles(context: Context) {
+        listOf(
+            File(context.filesDir, "voiceovers"),
+            File(context.filesDir, "projects"),
+            File(context.filesDir, "thumbnails"),
+            File(context.filesDir, "proxies"),
+            File(context.filesDir, "exports-temp")
+        ).forEach { directory ->
+            if (directory.exists()) directory.deleteRecursively()
+        }
+    }
+
+    private fun ownedFiles(context: Context, project: ProjectEntity): Set<File> {
+        return buildSet {
+            ownedFile(context, project.thumbnailUri)?.let(::add)
+            collectOwnedHistoryFiles(context, project.historyState, this)
+        }
+    }
+
+    private fun collectOwnedHistoryFiles(
+        context: Context,
+        historyState: String,
+        output: MutableSet<File>
+    ) {
+        if (historyState.isBlank()) return
+        runCatching {
+            visitJsonValue(context, JSONObject(historyState), output)
+        }
+    }
+
+    private fun visitJsonValue(
+        context: Context,
+        value: Any?,
+        output: MutableSet<File>
+    ) {
+        when (value) {
+            is JSONObject -> {
+                val keys = value.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    val child = value.opt(key)
+                    if (key == "sourceUri" || key == "thumbnailUri") {
+                        (child as? String)?.let { ownedFile(context, it)?.let(output::add) }
+                    }
+                    visitJsonValue(context, child, output)
+                }
+            }
+            is JSONArray -> {
+                for (index in 0 until value.length()) {
+                    visitJsonValue(context, value.opt(index), output)
+                }
+            }
+        }
     }
 
     private fun ownedFile(context: Context, uriString: String?): File? {
