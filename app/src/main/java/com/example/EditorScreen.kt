@@ -853,6 +853,9 @@ fun EditorScreen(
     val context = LocalContext.current
     val view = androidx.compose.ui.platform.LocalView.current
     val performanceMode = remember { com.example.viewmodel.PerformanceModeManager.getMode(context) }
+    val performanceProfile = remember(performanceMode) {
+        com.example.viewmodel.EditorPerformanceProfile.forMode(performanceMode)
+    }
     val isBudgetMode = performanceMode == com.example.viewmodel.PerformanceMode.BETTER_PERFORMANCE
     
     DisposableEffect(Unit) {
@@ -1177,9 +1180,12 @@ fun EditorScreen(
     
     val exoPlayer = remember {
         val trackSelector = androidx.media3.exoplayer.trackselection.DefaultTrackSelector(context)
-        if (isBudgetMode) {
-            trackSelector.setParameters(trackSelector.buildUponParameters().setMaxVideoSize(854, 480))
-        }
+        trackSelector.setParameters(
+            trackSelector.buildUponParameters().setMaxVideoSize(
+                performanceProfile.previewMaxWidth,
+                performanceProfile.previewMaxHeight
+            )
+        )
         ExoPlayer.Builder(context).setTrackSelector(trackSelector).build().apply {
             repeatMode = Player.REPEAT_MODE_OFF
             setSeekParameters(androidx.media3.exoplayer.SeekParameters.EXACT)
@@ -1200,9 +1206,12 @@ fun EditorScreen(
     
     val overlayExoPlayer = remember {
         val trackSelector = androidx.media3.exoplayer.trackselection.DefaultTrackSelector(context)
-        if (isBudgetMode) {
-            trackSelector.setParameters(trackSelector.buildUponParameters().setMaxVideoSize(854, 480))
-        }
+        trackSelector.setParameters(
+            trackSelector.buildUponParameters().setMaxVideoSize(
+                performanceProfile.previewMaxWidth,
+                performanceProfile.previewMaxHeight
+            )
+        )
         ExoPlayer.Builder(context).setTrackSelector(trackSelector).build().apply {
             repeatMode = Player.REPEAT_MODE_OFF
             setSeekParameters(androidx.media3.exoplayer.SeekParameters.EXACT)
@@ -1212,9 +1221,12 @@ fun EditorScreen(
     
     val bgExoPlayer = remember {
         val trackSelector = androidx.media3.exoplayer.trackselection.DefaultTrackSelector(context)
-        if (isBudgetMode) {
-            trackSelector.setParameters(trackSelector.buildUponParameters().setMaxVideoSize(854, 480))
-        }
+        trackSelector.setParameters(
+            trackSelector.buildUponParameters().setMaxVideoSize(
+                performanceProfile.previewMaxWidth,
+                performanceProfile.previewMaxHeight
+            )
+        )
         ExoPlayer.Builder(context).setTrackSelector(trackSelector).build().apply {
             repeatMode = Player.REPEAT_MODE_OFF
             setSeekParameters(androidx.media3.exoplayer.SeekParameters.EXACT)
@@ -1420,18 +1432,18 @@ fun EditorScreen(
     val durationSecs = videoDurationMs / 1000
     val durationText = String.format("%02d:%02d", durationSecs / 60, durationSecs % 60)
 
-    val imageLoader = remember {
+    val imageLoader = remember(performanceProfile) {
         ImageLoader.Builder(context)
             .components { add(VideoFrameDecoder.Factory()) }
             .memoryCache {
                 coil.memory.MemoryCache.Builder(context)
-                    .maxSizePercent(0.15) // Limit to 15% for 4GB RAM devices
+                    .maxSizePercent(performanceProfile.thumbnailMemoryCacheFraction)
                     .build()
             }
             .diskCache {
                 coil.disk.DiskCache.Builder()
                     .directory(context.cacheDir.resolve("thumbnail_cache"))
-                    .maxSizePercent(0.02)
+                    .maxSizePercent(performanceProfile.thumbnailDiskCacheFraction)
                     .build()
             }
             .crossfade(true)

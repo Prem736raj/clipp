@@ -5,6 +5,7 @@ import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import com.example.data.ProjectEntity
 import com.example.viewmodel.PerformanceMode
+import com.example.viewmodel.EditorPerformanceProfile
 import com.example.viewmodel.PlaybackUiCadence
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -14,6 +15,20 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ExampleUnitTest {
+  @Test
+  fun editorPerformanceProfileTightensPreviewAndCacheBudgetsByMode() {
+    val budget = EditorPerformanceProfile.forMode(PerformanceMode.BETTER_PERFORMANCE)
+    val balanced = EditorPerformanceProfile.forMode(PerformanceMode.BALANCED)
+    val quality = EditorPerformanceProfile.forMode(PerformanceMode.BEST_QUALITY)
+
+    assertEquals(854, budget.previewMaxWidth)
+    assertEquals(480, budget.previewMaxHeight)
+    assertTrue(budget.thumbnailMemoryCacheFraction < balanced.thumbnailMemoryCacheFraction)
+    assertTrue(balanced.thumbnailMemoryCacheFraction < quality.thumbnailMemoryCacheFraction)
+    assertTrue(budget.thumbnailDiskCacheFraction < quality.thumbnailDiskCacheFraction)
+    assertTrue(budget.previewMaxWidth < quality.previewMaxWidth)
+  }
+
   @Test
   fun playbackUiCadenceScalesStateUpdatesWithoutChangingPlaybackRate() {
     assertEquals(
