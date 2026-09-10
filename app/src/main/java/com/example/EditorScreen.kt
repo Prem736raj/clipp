@@ -621,7 +621,10 @@ data class StickerOverlay(
     val animLoopDelayMs: Long = 0L,
     val animOut: TextAnimOut = TextAnimOut.NONE,
     val animOutDurationMs: Long = 500L,
-    val animOutDelayMs: Long = 0L
+    val animOutDelayMs: Long = 0L,
+    // Kept on the layer payload so the unified timeline can animate sticker
+    // transforms without losing the data during legacy-state migration.
+    val keyframes: Map<String, List<Keyframe>> = emptyMap()
 )
 
 data class OverlayClip(
@@ -756,7 +759,10 @@ data class HistoryAction(
 data class EditorHistoryModel(
     val undoStack: List<HistoryAction> = emptyList(),
     val redoStack: List<HistoryAction> = emptyList(),
-    val currentState: EditorState? = null
+    val currentState: EditorState? = null,
+    // New projects persist the canonical layer document alongside the legacy
+    // state. Older JSON has no field and remains readable through the default.
+    val timelineProject: TimelineProject? = currentState?.toTimelineProject()
 )
 
 class ComposeDataAdapter {
@@ -1279,18 +1285,18 @@ fun EditorScreen(
                     if (historyModel != null) {
                         undoStack = historyModel.undoStack.takeLast(MAX_EDITOR_HISTORY_DEPTH)
                         redoStack = historyModel.redoStack.takeLast(MAX_EDITOR_HISTORY_DEPTH)
-                        if (historyModel.currentState != null) {
-                            clips = historyModel.currentState.clips
-                            canvasSettings = historyModel.currentState.canvasSettings
-                            overlays = historyModel.currentState.overlays ?: emptyList()
-                            texts = historyModel.currentState.texts ?: emptyList()
-                            captions = historyModel.currentState.captions ?: emptyList()
-                            captionSettings = historyModel.currentState.captionSettings ?: CaptionSettings()
-                            stickers = historyModel.currentState.stickers ?: emptyList()
-                            drawings = historyModel.currentState.drawings ?: emptyList()
-                            frames = historyModel.currentState.frames ?: emptyList()
-                            audioClips = historyModel.currentState.audioClips ?: emptyList()
-                            layerOrder = historyModel.currentState.layerOrder ?: emptyList()
+                        historyModel.restoredEditorState()?.let { restoredState ->
+                            clips = restoredState.clips
+                            canvasSettings = restoredState.canvasSettings
+                            overlays = restoredState.overlays
+                            texts = restoredState.texts
+                            captions = restoredState.captions
+                            captionSettings = restoredState.captionSettings
+                            stickers = restoredState.stickers
+                            drawings = restoredState.drawings
+                            frames = restoredState.frames
+                            audioClips = restoredState.audioClips
+                            layerOrder = restoredState.layerOrder
                         }
                     }
                 } catch (e: Exception) { e.printStackTrace() }

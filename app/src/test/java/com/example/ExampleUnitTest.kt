@@ -41,6 +41,166 @@ class ExampleUnitTest {
   }
 
   @Test
+  fun editorStateMigratesToUnifiedTimelineAndBack() {
+    val first = MediaClip(
+      id = "video-1",
+      sourceUri = "content://media/video/1",
+      originalDurationMs = 1_000L,
+      trimEndMs = 1_000L
+    )
+    val second = MediaClip(
+      id = "video-2",
+      sourceUri = "content://media/video/2",
+      originalDurationMs = 2_000L,
+      trimEndMs = 2_000L,
+      playbackSpeed = 2f
+    )
+    val overlay = OverlayClip(
+      id = "overlay-1",
+      sourceUri = "content://media/image/1",
+      originalDurationMs = 1_500L,
+      isPhoto = true,
+      trimEndMs = 1_500L,
+      startTimeOnTimelineMs = 250L,
+      posX = 0.25f,
+      scaleX = 0.4f,
+      scaleY = 0.6f,
+      opacity = 0.75f,
+      blendMode = OverlayBlendModeType.SCREEN
+    )
+    val text = TextOverlay(
+      id = "text-1",
+      text = "Title",
+      startTimeOnTimelineMs = 500L,
+      durationMs = 1_000L,
+      posY = 0.2f,
+      keyframes = mapOf("opacity" to listOf(Keyframe(timeMs = 0L, value = 0f), Keyframe(timeMs = 1_000L, value = 1f)))
+    )
+    val caption = AutoCaptionSegment(
+      id = "caption-1",
+      text = "Hello",
+      words = emptyList(),
+      startTimeMs = 700L,
+      durationMs = 500L
+    )
+    val sticker = StickerOverlay(
+      id = "sticker-1",
+      modelId = "star",
+      content = "★",
+      category = StickerCategory.SHAPE,
+      startTimeOnTimelineMs = 900L,
+      durationMs = 500L,
+      keyframes = mapOf("scale" to listOf(Keyframe(timeMs = 0L, value = 0.5f)))
+    )
+    val audio = AudioClip(
+      id = "audio-1",
+      sourceUri = "content://media/audio/1",
+      startTimeOnTimelineMs = 100L,
+      sourceDurationMs = 2_000L,
+      trimEndMs = 2_000L,
+      volume = 0.4f
+    )
+    val state = EditorState(
+      clips = listOf(first, second),
+      overlays = listOf(overlay),
+      texts = listOf(text),
+      captions = listOf(caption),
+      stickers = listOf(sticker),
+      audioClips = listOf(audio),
+      layerOrder = listOf(sticker.id, overlay.id, text.id)
+    )
+
+    val document = state.toTimelineProject()
+
+    assertEquals(TIMELINE_PROJECT_SCHEMA_VERSION, document.schemaVersion)
+    assertEquals(2_000L, document.durationMs)
+    assertEquals(7, document.layers.size)
+    assertTrue(document.validate().isEmpty())
+    assertEquals(0L, document.layers.first { it.id == first.id }.startTimeMs)
+    assertEquals(1_000L, document.layers.first { it.id == second.id }.startTimeMs)
+    assertEquals(0, document.layers.first { it.id == sticker.id }.zIndex)
+    assertEquals(1, document.layers.first { it.id == overlay.id }.zIndex)
+    assertEquals(2, document.layers.first { it.id == text.id }.zIndex)
+    assertEquals(3, document.layers.first { it.id == caption.id }.zIndex)
+
+    val restored = document.toEditorState()
+    assertEquals(listOf(first.id, second.id), restored.clips.map { it.id })
+    assertEquals(0.25f, restored.overlays.single().posX)
+    assertEquals(0.4f, restored.overlays.single().scaleX)
+    assertEquals(0.6f, restored.overlays.single().scaleY)
+    assertEquals(0.75f, restored.overlays.single().opacity)
+    assertEquals(text.keyframes, restored.texts.single().keyframes)
+    assertEquals(sticker.keyframes, restored.stickers.single().keyframes)
+    assertEquals(audio.startTimeOnTimelineMs, restored.audioClips.single().startTimeOnTimelineMs)
+    assertEquals(listOf(sticker.id, overlay.id, text.id), restored.layerOrder)
+  }
+
+  @Test
+  fun unifiedTimelineIsPersistedAndOldHistoryStillRestores() {
+    val state = EditorState(
+      clips = listOf(
+        MediaClip(
+          id = "legacy-video",
+          sourceUri = "content://media/video/legacy",
+          originalDurationMs = 500L,
+          trimEndMs = 500L
+        )
+      )
+    )
+
+    val json = editorHistoryMoshi
+      .adapter(EditorHistoryModel::class.java)
+      .toJson(EditorHistoryModel(currentState = state))
+    assertTrue(json.contains("\"timelineProject\""))
+
+    val restored = editorHistoryMoshi
+      .adapter(EditorHistoryModel::class.java)
+      .fromJson(json)
+      ?.restoredEditorState()
+    assertEquals(listOf("legacy-video"), restored?.clips?.map { it.id })
+
+    val oldJson = editorHistoryMoshi
+      .adapter(EditorHistoryModel::class.java)
+      .toJson(EditorHistoryModel(currentState = state, timelineProject = null))
+    val restoredOld = editorHistoryMoshi
+      .adapter(EditorHistoryModel::class.java)
+      .fromJson(oldJson)
+      ?.restoredEditorState()
+    assertEquals(listOf("legacy-video"), restoredOld?.clips?.map { it.id })
+  }
+
+  @Test
+  fun unifiedTimelineReportsStructuralCorruptionInsteadOfDroppingLayers() {
+    val invalid = TimelineProject(
+      layers = listOf(
+        TimelineLayer(
+          id = "duplicate",
+          kind = TimelineLayerKind.TEXT,
+          track = TimelineTrackType.VISUAL_OVERLAY,
+          startTimeMs = 0L,
+          durationMs = 1_000L,
+          zIndex = 0,
+          payload = TimelineLayerPayload()
+        ),
+        TimelineLayer(
+          id = "duplicate",
+          kind = TimelineLayerKind.TEXT,
+          track = TimelineTrackType.AUDIO,
+          startTimeMs = 0L,
+          durationMs = 1_000L,
+          zIndex = 1,
+          payload = TimelineLayerPayload()
+        )
+      )
+    )
+
+    val errors = invalid.validate()
+    assertTrue(errors.any { it == "duplicate layer id: duplicate" })
+    assertTrue(errors.any { it == "missing layer payload: duplicate" })
+    assertTrue(errors.any { it == "invalid layer track: duplicate" })
+  }
+
+  @Test
   fun basicTimelineAndSupportedVisualEditsCanBeExported() {
     val basic = MediaClip(
       sourceUri = "content://media/video/1",

@@ -100,11 +100,19 @@ class VideoExporter(context: Context) {
         val outputFile = File(appContext.cacheDir, "export-${UUID.randomUUID()}.mp4")
         temporaryOutput = outputFile
 
+        // Export through the canonical document boundary. The renderer still
+        // consumes the legacy payloads today, but all timing/order/shared
+        // properties are now normalized by one versioned layer model first.
+        val canonicalState = editorState
+            .copy(clips = clips)
+            .toTimelineProject()
+            .toEditorState()
+        val exportClips = canonicalState.clips
         val editedItems = mutableListOf<EditedMediaItem>()
         var clipStartMs = 0L
-        clips.forEachIndexed { index, clip ->
+        exportClips.forEachIndexed { index, clip ->
             clip.toEditedMediaItem(
-                state = editorState,
+                state = canonicalState,
                 clipIndex = index,
                 clipStartMs = clipStartMs
             )?.let { editedItems += it }
@@ -116,7 +124,7 @@ class VideoExporter(context: Context) {
         }
 
         val sequences = mutableListOf(EditedMediaItemSequence(editedItems))
-        sequences += buildAudioSequences(editorState, clips, clipStartMs)
+        sequences += buildAudioSequences(canonicalState, exportClips, clipStartMs)
         val composition = Composition.Builder(sequences).build()
 
         val builtTransformer = Transformer.Builder(appContext)

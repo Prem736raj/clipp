@@ -1028,8 +1028,9 @@ private fun buildTextSettings(text: TextOverlay, globalTimeMs: Long): OverlaySet
 }
 
 private fun buildStickerSettings(sticker: StickerOverlay, globalTimeMs: Long): OverlaySettings {
+    val relative = (globalTimeMs - sticker.startTimeOnTimelineMs).coerceAtLeast(0L)
     val motion = textLayerMotion(
-        relativeTimeMs = (globalTimeMs - sticker.startTimeOnTimelineMs).coerceAtLeast(0L),
+        relativeTimeMs = relative,
         durationMs = sticker.durationMs,
         animIn = sticker.animIn,
         animInDurationMs = sticker.animInDurationMs,
@@ -1042,12 +1043,12 @@ private fun buildStickerSettings(sticker: StickerOverlay, globalTimeMs: Long): O
         animOutDelayMs = sticker.animOutDelayMs
     )
     return overlaySettings(
-        sticker.posX,
-        sticker.posY,
-        0.28f * sticker.scale * motion.scale,
-        0.28f * sticker.scale * motion.scale,
-        sticker.rotation + motion.rotationDegrees,
-        sticker.opacity * motion.alpha
+        posX = sticker.keyframes.getValueAtTime("posX", relative, sticker.posX),
+        posY = sticker.keyframes.getValueAtTime("posY", relative, sticker.posY),
+        scaleX = 0.28f * sticker.keyframes.getValueAtTime("scale", relative, sticker.scale) * motion.scale,
+        scaleY = 0.28f * sticker.keyframes.getValueAtTime("scale", relative, sticker.scale) * motion.scale,
+        rotation = sticker.keyframes.getValueAtTime("rotation", relative, sticker.rotation) + motion.rotationDegrees,
+        alpha = sticker.keyframes.getValueAtTime("opacity", relative, sticker.opacity) * motion.alpha
     )
 }
 
@@ -1495,6 +1496,12 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
     if (stickers.any { it.animIn !in EXPORT_SUPPORTED_TEXT_ANIM_IN || it.animLoop !in EXPORT_SUPPORTED_TEXT_ANIM_LOOP || it.animOut !in EXPORT_SUPPORTED_TEXT_ANIM_OUT }) {
         reasons += "an unsupported sticker animation"
     }
+    if (stickers.any { it.keyframes.keys.any { key -> key !in EXPORT_SUPPORTED_OVERLAY_KEYFRAMES } }) {
+        reasons += "unsupported sticker keyframes"
+    }
+    if (stickers.any { it.keyframes.hasInvalidExportKeyframes(it.durationMs) }) {
+        reasons += "invalid sticker keyframes"
+    }
     if (audioClips.any { it.sourceUri.isNullOrBlank() && it.sourceClipId.isNullOrBlank() }) reasons += "an audio source"
     if (audioClips.any {
             it.isLooped ||
@@ -1536,18 +1543,22 @@ private fun MediaClip.hasInvalidCropKeyframes(): Boolean {
     }
 }
 
-private fun OverlayClip.hasInvalidExportKeyframes(): Boolean {
-    if (keyframes.isEmpty()) return false
+private fun Map<String, List<Keyframe>>.hasInvalidExportKeyframes(durationMs: Long): Boolean {
+    if (isEmpty()) return false
     val duration = durationMs.coerceAtLeast(0L)
     if (duration <= 0L) return true
-    if (keyframes.values.flatten().any { it.timeMs !in 0L..duration || !it.value.isFinite() }) return true
-    if (keyframes["scaleX"].orEmpty().any { it.value <= 0f } ||
-        keyframes["scaleY"].orEmpty().any { it.value <= 0f } ||
-        keyframes["opacity"].orEmpty().any { it.value !in 0f..1f } ||
-        keyframes["posX"].orEmpty().any { it.value !in 0f..1f } ||
-        keyframes["posY"].orEmpty().any { it.value !in 0f..1f }
+    if (values.flatten().any { it.timeMs !in 0L..duration || !it.value.isFinite() }) return true
+    if (this["scaleX"].orEmpty().any { it.value <= 0f } ||
+        this["scaleY"].orEmpty().any { it.value <= 0f } ||
+        this["scale"].orEmpty().any { it.value <= 0f } ||
+        this["opacity"].orEmpty().any { it.value !in 0f..1f } ||
+        this["posX"].orEmpty().any { it.value !in 0f..1f } ||
+        this["posY"].orEmpty().any { it.value !in 0f..1f }
     ) return true
     return false
 }
+
+private fun OverlayClip.hasInvalidExportKeyframes(): Boolean =
+    keyframes.hasInvalidExportKeyframes(durationMs)
 
 internal fun EditorState.hasUnsupportedExportEdits(): Boolean = exportUnsupportedReasons().isNotEmpty()

@@ -80,7 +80,7 @@ class BatchExportRunner(private val context: Context) {
                 editorHistoryMoshi
                     .adapter(EditorHistoryModel::class.java)
                     .fromJson(project.historyState)
-                    ?.currentState
+                    ?.restoredEditorState()
             }.getOrNull()
         } else {
             null
