@@ -27,6 +27,9 @@ class ExampleUnitTest {
     assertTrue(balanced.thumbnailMemoryCacheFraction < quality.thumbnailMemoryCacheFraction)
     assertTrue(budget.thumbnailDiskCacheFraction < quality.thumbnailDiskCacheFraction)
     assertTrue(budget.previewMaxWidth < quality.previewMaxWidth)
+    assertEquals(96f, budget.timelineFrameWidthDp)
+    assertEquals(48f, quality.timelineFrameWidthDp)
+    assertTrue(budget.thumbnailOverscanPx < quality.thumbnailOverscanPx)
   }
 
   @Test

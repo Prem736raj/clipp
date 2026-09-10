@@ -3912,14 +3912,33 @@ fun EditorScreen(
                                                 )
                                             }
                                     ) {
-                                        val frameWidthDp = if (isBudgetMode) 96.dp else 48.dp
+                                        val frameWidthDp = performanceProfile.timelineFrameWidthDp.dp
                                         val frameWidthPx = with(density) { frameWidthDp.toPx() }
-                                        val usableWidthPx = clipWidthPx - if (clipIndex < clips.lastIndex) with(density){2.dp.toPx()} else 0f
+                                        val usableWidthPx = (clipWidthPx - if (clipIndex < clips.lastIndex) with(density){2.dp.toPx()} else 0f)
+                                            .coerceAtLeast(1f)
                                         val numFrames = (usableWidthPx / frameWidthPx).toInt().coerceAtLeast(1)
                                         val actualFrameWidth = usableWidthPx / numFrames.toFloat()
+                                        val thumbnailWindowStartPx = (viewportStartPx - targetX - performanceProfile.thumbnailOverscanPx)
+                                            .coerceIn(0f, usableWidthPx)
+                                        val thumbnailWindowEndPx = (viewportEndPx - targetX + performanceProfile.thumbnailOverscanPx)
+                                            .coerceIn(0f, usableWidthPx)
+                                        val firstThumbnailIndex = (thumbnailWindowStartPx / actualFrameWidth)
+                                            .toInt()
+                                            .coerceIn(0, numFrames)
+                                        val lastThumbnailIndex = ((thumbnailWindowEndPx / actualFrameWidth).toInt() + 1)
+                                            .coerceIn(firstThumbnailIndex, numFrames)
                                         
                                         Row {
-                                            for (i in 0 until numFrames) {
+                                            if (firstThumbnailIndex > 0) {
+                                                Spacer(
+                                                    modifier = Modifier.width(
+                                                        with(density) {
+                                                            (firstThumbnailIndex * actualFrameWidth).toDp()
+                                                        }
+                                                    )
+                                                )
+                                            }
+                                            for (i in firstThumbnailIndex until lastThumbnailIndex) {
                                                 val localTargetTimeMs = ((i.toFloat() / numFrames) * clip.durationMs).toLong()
                                                 val srcFraction = mapPlaybackTimeToOriginalFraction(localTargetTimeMs, Math.max(1L, clip.trimEndMs - clip.trimStartMs), clip.speedCurve)
                                                 val timeMs = clip.trimStartMs + (srcFraction * (clip.trimEndMs - clip.trimStartMs)).toLong()
@@ -3934,6 +3953,15 @@ fun EditorScreen(
                                                     modifier = Modifier
                                                         .fillMaxHeight()
                                                         .width(with(density) { actualFrameWidth.toDp() })
+                                                )
+                                            }
+                                            if (lastThumbnailIndex < numFrames) {
+                                                Spacer(
+                                                    modifier = Modifier.width(
+                                                        with(density) {
+                                                            ((numFrames - lastThumbnailIndex) * actualFrameWidth).toDp()
+                                                        }
+                                                    )
                                                 )
                                             }
                                         }
