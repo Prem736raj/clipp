@@ -732,8 +732,12 @@ class ExportInstrumentedTest {
                     isPhoto = false,
                     isGif = true,
                     trimEndMs = 1_000L,
-                    scaleX = 0.5f,
-                    scaleY = 0.5f
+                    // The compact 2x2 fixture is deliberately enlarged so
+                    // the exported frame remains measurable after H.264
+                    // filtering; this test targets frame timing, not source
+                    // asset resolution.
+                    scaleX = 48f,
+                    scaleY = 48f
                 )
             )
         )
