@@ -359,6 +359,59 @@ class ExampleUnitTest {
   }
 
   @Test
+  fun capabilityRegistryKeepsPreviewOnlyControlsOutOfNewEdits() {
+    assertTrue(FeatureCapabilityRegistry.effect(EffectType.MIRROR).isSelectable)
+    assertFalse(FeatureCapabilityRegistry.effect(EffectType.OIL_PAINTING).isSelectable)
+    assertFalse(FeatureCapabilityRegistry.speedCurve().isSelectable)
+    assertFalse(FeatureCapabilityRegistry.overlayAnimation(OverlayAnim.SLIDE).isSelectable)
+    assertFalse(FeatureCapabilityRegistry.blendMode(OverlayBlendModeType.SCREEN).isSelectable)
+    assertFalse(FeatureCapabilityRegistry.maskShape(MaskShape.CIRCLE).isSelectable)
+    assertFalse(FeatureCapabilityRegistry.transition(TransitionType.PUSH_LEFT).isSelectable)
+
+    val photo = MediaClip(
+      sourceUri = "content://media/image/1",
+      originalDurationMs = 1_000L,
+      trimEndMs = 1_000L,
+      isPhoto = true
+    )
+    assertTrue(
+      FeatureCapabilityRegistry.transition(
+        TransitionType.CROSSFADE,
+        outgoing = photo,
+        incoming = photo.copy(id = "second")
+      ).isSelectable
+    )
+    assertFalse(
+      FeatureCapabilityRegistry.transition(
+        TransitionType.CROSSFADE,
+        outgoing = photo.copy(rotation = 90f),
+        incoming = photo.copy(id = "second")
+      ).isSelectable
+    )
+  }
+
+  @Test
+  fun newlyGatedDecorationsAnd3dTextAreBlockedFromExport() {
+    val clip = MediaClip(
+      sourceUri = "content://media/video/1",
+      originalDurationMs = 1_000L,
+      trimEndMs = 1_000L
+    )
+    val decoratedOverlay = OverlayClip(
+      sourceUri = "content://media/image/1",
+      originalDurationMs = 1_000L,
+      isPhoto = true,
+      trimEndMs = 1_000L,
+      borderWidth = 2f,
+      shadowRadius = 4f
+    )
+    val threeDText = TextOverlay(text = "3D", is3D = true)
+
+    assertTrue(EditorState(clips = listOf(clip), overlays = listOf(decoratedOverlay)).hasUnsupportedExportEdits())
+    assertTrue(EditorState(clips = listOf(clip), texts = listOf(threeDText)).hasUnsupportedExportEdits())
+  }
+
+  @Test
   fun simpleSourceTransitionsAreAllowedOnlyForSimpleAdjacentSources() {
     val firstPhoto = MediaClip(
       sourceUri = "content://media/image/1",

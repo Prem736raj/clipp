@@ -94,13 +94,14 @@ fun StickerToolbar(
                         val anims = TextAnimIn.values()
                         items(anims.size) { i ->
                             val anim = anims[i]
+                            val capability = FeatureCapabilityRegistry.textAnimation(anim)
                             val isSelected = stickerOverlay.animIn == anim
                             Box(
                                 modifier = Modifier
                                     .size(80.dp)
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant)
-                                    .clickable { onUpdate(stickerOverlay.copy(animIn = anim)) }
+                                    .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else if (capability.isSelectable) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                                    .clickable(enabled = capability.isSelectable) { onUpdate(stickerOverlay.copy(animIn = anim)) }
                                     .border(2.dp, if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent, RoundedCornerShape(8.dp)),
                                 contentAlignment = Alignment.Center
                             ) {
@@ -135,13 +136,14 @@ fun StickerToolbar(
                         val anims = TextAnimLoop.values()
                         items(anims.size) { i ->
                             val anim = anims[i]
+                            val capability = FeatureCapabilityRegistry.textAnimation(anim)
                             val isSelected = stickerOverlay.animLoop == anim
                             Box(
                                 modifier = Modifier
                                     .size(80.dp)
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant)
-                                    .clickable { onUpdate(stickerOverlay.copy(animLoop = anim)) }
+                                    .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else if (capability.isSelectable) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                                    .clickable(enabled = capability.isSelectable) { onUpdate(stickerOverlay.copy(animLoop = anim)) }
                                     .border(2.dp, if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent, RoundedCornerShape(8.dp)),
                                 contentAlignment = Alignment.Center
                             ) {
@@ -176,13 +178,14 @@ fun StickerToolbar(
                         val anims = TextAnimOut.values()
                         items(anims.size) { i ->
                             val anim = anims[i]
+                            val capability = FeatureCapabilityRegistry.textAnimation(anim)
                             val isSelected = stickerOverlay.animOut == anim
                             Box(
                                 modifier = Modifier
                                     .size(80.dp)
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant)
-                                    .clickable { onUpdate(stickerOverlay.copy(animOut = anim)) }
+                                    .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else if (capability.isSelectable) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                                    .clickable(enabled = capability.isSelectable) { onUpdate(stickerOverlay.copy(animOut = anim)) }
                                     .border(2.dp, if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent, RoundedCornerShape(8.dp)),
                                 contentAlignment = Alignment.Center
                             ) {

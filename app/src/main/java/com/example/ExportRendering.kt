@@ -37,66 +37,17 @@ import kotlin.math.sin
 import kotlin.random.Random
 
 private val EXPORT_DEFAULT_CROP = androidx.compose.ui.geometry.Rect(0f, 0f, 1f, 1f)
-private val EXPORT_CROP_KEYFRAMES = setOf("cropLeft", "cropTop", "cropRight", "cropBottom")
-private val EXPORT_SUPPORTED_CLIP_KEYFRAMES = setOf("posX", "posY", "scale", "rotation") + EXPORT_CROP_KEYFRAMES
-private val EXPORT_SUPPORTED_OVERLAY_KEYFRAMES = setOf("posX", "posY", "scaleX", "scaleY", "rotation", "opacity")
-internal val EXPORT_SUPPORTED_AUDIO_KEYFRAMES = setOf("volume")
-private val EXPORT_SUPPORTED_EFFECTS = setOf(
-    EffectType.GAUSSIAN_BLUR,
-    EffectType.LETTERBOX,
-    EffectType.MIRROR,
-    EffectType.SHAKE,
-    EffectType.COMIC_BOOK,
-    EffectType.PENCIL_SKETCH,
-    EffectType.POP_ART,
-    EffectType.FILM_GRAIN,
-    EffectType.ANAMORPHIC_FLARE,
-    EffectType.SPARKLE,
-    EffectType.LIGHT_LEAK,
-    EffectType.LENS_FLARE,
-    EffectType.BOKEH
-) + EXPORT_SHADER_EFFECTS
-private val EXPORT_TIMED_OVERLAY_EFFECTS = setOf(
-    EffectType.FILM_GRAIN,
-    EffectType.ANAMORPHIC_FLARE,
-    EffectType.SPARKLE,
-    EffectType.LIGHT_LEAK,
-    EffectType.LENS_FLARE,
-    EffectType.BOKEH
-) + EXPORT_SHADER_EFFECTS
-private val EXPORT_VIDEO_TRANSITIONS = setOf(
-    TransitionType.CROSSFADE,
-    TransitionType.SLIDE_LEFT,
-    TransitionType.SLIDE_RIGHT,
-    TransitionType.SLIDE_UP,
-    TransitionType.SLIDE_DOWN,
-    TransitionType.ZOOM_IN,
-    TransitionType.ZOOM_OUT,
-    TransitionType.SPIN,
-    TransitionType.FLIP
-)
-private val EXPORT_PHOTO_TRANSITIONS = EXPORT_VIDEO_TRANSITIONS + setOf(
-    TransitionType.WIPE_LEFT,
-    TransitionType.WIPE_RIGHT,
-    TransitionType.CLOCK_WIPE
-)
-private val EXPORT_SUPPORTED_TEXT_ANIM_IN = setOf(
-    TextAnimIn.NONE,
-    TextAnimIn.FADE_IN,
-    TextAnimIn.SCALE_IN,
-    TextAnimIn.ROTATE_IN
-)
-private val EXPORT_SUPPORTED_TEXT_ANIM_LOOP = setOf(
-    TextAnimLoop.NONE,
-    TextAnimLoop.PULSE,
-    TextAnimLoop.WAVE,
-    TextAnimLoop.SWING
-)
-private val EXPORT_SUPPORTED_TEXT_ANIM_OUT = setOf(
-    TextAnimOut.NONE,
-    TextAnimOut.FADE_OUT,
-    TextAnimOut.SCALE_OUT
-)
+private val EXPORT_CROP_KEYFRAMES = FeatureCapabilityRegistry.exportCropKeyframes
+private val EXPORT_SUPPORTED_CLIP_KEYFRAMES = FeatureCapabilityRegistry.exportSupportedClipKeyframes
+private val EXPORT_SUPPORTED_OVERLAY_KEYFRAMES = FeatureCapabilityRegistry.exportSupportedOverlayKeyframes
+internal val EXPORT_SUPPORTED_AUDIO_KEYFRAMES = FeatureCapabilityRegistry.exportSupportedAudioKeyframes
+private val EXPORT_SUPPORTED_EFFECTS = FeatureCapabilityRegistry.exportSupportedEffects
+private val EXPORT_TIMED_OVERLAY_EFFECTS = FeatureCapabilityRegistry.exportTimedOverlayEffects
+private val EXPORT_VIDEO_TRANSITIONS = FeatureCapabilityRegistry.exportVideoTransitions
+private val EXPORT_PHOTO_TRANSITIONS = FeatureCapabilityRegistry.exportPhotoTransitions
+private val EXPORT_SUPPORTED_TEXT_ANIM_IN = FeatureCapabilityRegistry.exportSupportedTextAnimIn
+private val EXPORT_SUPPORTED_TEXT_ANIM_LOOP = FeatureCapabilityRegistry.exportSupportedTextAnimLoop
+private val EXPORT_SUPPORTED_TEXT_ANIM_OUT = FeatureCapabilityRegistry.exportSupportedTextAnimOut
 
 /** A small, deterministic overlay implementation used by the Media3 renderer. */
 private class TimedBitmapOverlay(
@@ -1498,6 +1449,9 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
     if (overlays.any { it.blendMode != OverlayBlendModeType.NORMAL || it.maskShape != MaskShape.NONE || it.entranceAnim == OverlayAnim.SLIDE || it.exitAnim == OverlayAnim.SLIDE }) {
         reasons += "unsupported overlay animation"
     }
+    if (overlays.any { it.shadowRadius != 0f || it.borderWidth != 0f }) {
+        reasons += "overlay border or shadow"
+    }
     if (overlays.any { it.keyframes.keys.any { key -> key !in EXPORT_SUPPORTED_OVERLAY_KEYFRAMES } }) {
         reasons += "unsupported overlay keyframes"
     }
@@ -1516,6 +1470,7 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
     if (texts.any { it.animIn !in EXPORT_SUPPORTED_TEXT_ANIM_IN || it.animLoop !in EXPORT_SUPPORTED_TEXT_ANIM_LOOP || it.animOut !in EXPORT_SUPPORTED_TEXT_ANIM_OUT }) {
         reasons += "an unsupported text animation"
     }
+    if (texts.any { it.is3D }) reasons += "3D text"
     if (stickers.any { it.animIn !in EXPORT_SUPPORTED_TEXT_ANIM_IN || it.animLoop !in EXPORT_SUPPORTED_TEXT_ANIM_LOOP || it.animOut !in EXPORT_SUPPORTED_TEXT_ANIM_OUT }) {
         reasons += "an unsupported sticker animation"
     }

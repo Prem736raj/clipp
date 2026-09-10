@@ -5146,6 +5146,37 @@ fun EditorScreen(
                                 }
                             }
                         } else {
+                            if (selectedClip.speedCurve != null) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.errorContainer,
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            "This saved speed curve is preview-only and will block MP4 export.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onErrorContainer
+                                        )
+                                        OutlinedButton(
+                                            onClick = {
+                                                val newClips = clips.toMutableList()
+                                                val idx = newClips.indexOfFirst { it.id == selectedClip.id }
+                                                if (idx >= 0) {
+                                                    newClips[idx] = selectedClip.copy(speedCurve = null, playbackSpeed = 1f)
+                                                    saveState(newClips, canvasSettings, "Remove preview-only speed curve")
+                                                }
+                                            }
+                                        ) {
+                                            Text("Reset to export-ready speed")
+                                        }
+                                    }
+                                }
+                            }
+
                             // Presets
                             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 val presets = listOf(0.25f, 0.5f, 1f, 1.5f, 2f, 3f, 4f)
@@ -5197,8 +5228,11 @@ fun EditorScreen(
                                 )
                                 Text("Keep original pitch", style = MaterialTheme.typography.bodyMedium)
                                 Spacer(Modifier.weight(1f))
-                                FilledTonalButton(onClick = { isCurveMode = true }) {
-                                    Text("Curve")
+                                FilledTonalButton(
+                                    onClick = { isCurveMode = true },
+                                    enabled = FeatureCapabilityRegistry.speedCurve().isSelectable
+                                ) {
+                                    Text("Curve · Coming later")
                                 }
                             }
                         }
@@ -5693,15 +5727,54 @@ fun EditorScreen(
                             }
                         }
                     } else {
-                        val overlay = overlays.find { it.id == selectedOverlayId }
+                            val overlay = overlays.find { it.id == selectedOverlayId }
                         if (overlay != null) {
+                            val decorationCapability = FeatureCapabilityRegistry.overlayDecoration()
+                            if (overlay.shadowRadius != 0f || overlay.borderWidth != 0f) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.errorContainer,
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            "${decorationCapability.label} is ${decorationCapability.shortLabel.lowercase()} and blocks export.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onErrorContainer,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        OutlinedButton(onClick = {
+                                            val newOverlays = overlays.toMutableList()
+                                            val idx = newOverlays.indexOfFirst { it.id == overlay.id }
+                                            if (idx >= 0) {
+                                                newOverlays[idx] = overlay.copy(
+                                                    shadowColor = Color.Transparent,
+                                                    shadowRadius = 0f,
+                                                    borderColor = Color.Transparent,
+                                                    borderWidth = 0f
+                                                )
+                                                saveOverlayState(newOverlays, "Remove preview-only overlay decoration")
+                                            }
+                                        }) {
+                                            Text("Reset")
+                                        }
+                                    }
+                                }
+                            }
                             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 val blendModes = OverlayBlendModeType.values()
                                 items(blendModes.size) { i ->
                                     val bm = blendModes[i]
+                                    val capability = FeatureCapabilityRegistry.blendMode(bm)
                                     FilterChip(
                                         selected = overlay.blendMode == bm,
+                                        enabled = capability.isSelectable,
                                         onClick = {
+                                            if (!capability.isSelectable) return@FilterChip
                                             val newOverlays = overlays.toMutableList()
                                             val idx = newOverlays.indexOfFirst { it.id == overlay.id }
                                             newOverlays[idx] = overlay.copy(blendMode = bm)
@@ -5740,6 +5813,7 @@ fun EditorScreen(
                                         newOverlays[idx] = overlay.copy(shadowRadius = newVal, shadowColor = Color.Black.copy(alpha = 0.5f))
                                         overlays = newOverlays
                                     },
+                                    enabled = false,
                                     onValueChangeFinished = { saveOverlayState(overlays, "Change shadow") },
                                     valueRange = 0f..50f,
                                     modifier = Modifier.weight(1f)
@@ -5757,6 +5831,7 @@ fun EditorScreen(
                                         newOverlays[idx] = overlay.copy(borderWidth = newVal, borderColor = Color.White)
                                         overlays = newOverlays
                                     },
+                                    enabled = false,
                                     onValueChangeFinished = { saveOverlayState(overlays, "Change border") },
                                     valueRange = 0f..20f,
                                     modifier = Modifier.weight(1f)
@@ -5769,9 +5844,12 @@ fun EditorScreen(
                                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(start = 8.dp)) {
                                     items(anims.size) { i ->
                                         val anim = anims[i]
+                                        val capability = FeatureCapabilityRegistry.overlayAnimation(anim)
                                         FilterChip(
                                             selected = overlay.entranceAnim == anim,
+                                            enabled = capability.isSelectable,
                                             onClick = {
+                                                if (!capability.isSelectable) return@FilterChip
                                                 val newOverlays = overlays.toMutableList()
                                                 val idx = newOverlays.indexOfFirst { it.id == overlay.id }
                                                 newOverlays[idx] = overlay.copy(entranceAnim = anim)
@@ -5789,9 +5867,12 @@ fun EditorScreen(
                                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(start = 8.dp)) {
                                     items(anims.size) { i ->
                                         val anim = anims[i]
+                                        val capability = FeatureCapabilityRegistry.overlayAnimation(anim)
                                         FilterChip(
                                             selected = overlay.exitAnim == anim,
+                                            enabled = capability.isSelectable,
                                             onClick = {
+                                                if (!capability.isSelectable) return@FilterChip
                                                 val newOverlays = overlays.toMutableList()
                                                 val idx = newOverlays.indexOfFirst { it.id == overlay.id }
                                                 newOverlays[idx] = overlay.copy(exitAnim = anim)
@@ -5809,9 +5890,12 @@ fun EditorScreen(
                                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(start = 8.dp)) {
                                     items(masks.size) { i ->
                                         val mask = masks[i]
+                                        val capability = FeatureCapabilityRegistry.maskShape(mask)
                                         FilterChip(
                                             selected = overlay.maskShape == mask,
+                                            enabled = capability.isSelectable,
                                             onClick = {
+                                                if (!capability.isSelectable) return@FilterChip
                                                 val newOverlays = overlays.toMutableList()
                                                 val idx = newOverlays.indexOfFirst { it.id == overlay.id }
                                                 newOverlays[idx] = overlay.copy(maskShape = mask)
@@ -5819,6 +5903,37 @@ fun EditorScreen(
                                             },
                                             label = { Text(mask.name.lowercase().capitalize()) }
                                         )
+                                    }
+                                }
+                            }
+
+                            if (overlay.isGif && overlay.chromaKey.enabled) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.errorContainer,
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            "GIF chroma key is preview-only and blocks export.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onErrorContainer,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        OutlinedButton(onClick = {
+                                            val newOverlays = overlays.toMutableList()
+                                            val idx = newOverlays.indexOfFirst { it.id == overlay.id }
+                                            if (idx >= 0) {
+                                                newOverlays[idx] = overlay.copy(chromaKey = overlay.chromaKey.copy(enabled = false))
+                                                saveOverlayState(newOverlays, "Disable preview-only GIF chroma key")
+                                            }
+                                        }) {
+                                            Text("Disable")
+                                        }
                                     }
                                 }
                             }
@@ -6364,13 +6479,18 @@ fun EditorScreen(
                             ) {
                                 items(clip.effects.size) { i ->
                                     val eff = clip.effects[i]
+                                    val capability = FeatureCapabilityRegistry.effect(eff.type)
                                     Row(
                                         modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp)).padding(8.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
                                         Column(modifier = Modifier.weight(1f)) {
-                                            Text(eff.type.label, style = MaterialTheme.typography.bodyMedium)
+                                            Text(
+                                                "${eff.type.label} · ${capability.shortLabel}",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = if (capability.isExportReady) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error
+                                            )
                                             Row(verticalAlignment = Alignment.CenterVertically) {
                                                 Text("Strength", style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(60.dp))
                                                 Slider(
@@ -6382,6 +6502,7 @@ fun EditorScreen(
                                                         newClips[clipIndex] = clip.copy(effects = newEffects)
                                                         clips = newClips
                                                     },
+                                                    enabled = capability.isSelectable,
                                                     valueRange = 0f..1f,
                                                     modifier = Modifier.height(24.dp).weight(1f)
                                                 )
@@ -6399,6 +6520,7 @@ fun EditorScreen(
                                                         newClips[clipIndex] = clip.copy(effects = newEffects)
                                                         clips = newClips
                                                     },
+                                                    enabled = capability.isSelectable,
                                                     valueRange = 0f..kotlin.math.max(1f, clip.durationMs.toFloat()),
                                                     modifier = Modifier.height(24.dp).weight(1f)
                                                 )
@@ -6420,13 +6542,21 @@ fun EditorScreen(
                         }
                         
                         val availableEffects = EffectType.values().filter { it.category == selectedCategory }
+                        if (availableEffects.any { !FeatureCapabilityRegistry.effect(it).isSelectable }) {
+                            Text(
+                                "Preview-only effects are shown for reference but disabled until their export renderer is ready.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                             items(availableEffects.size) { i ->
                                 val tType = availableEffects[i]
+                                val capability = FeatureCapabilityRegistry.effect(tType)
                                 val isSelected = clip.effects.any { it.type == tType }
                                 Column(
                                     horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.clickable { 
+                                    modifier = Modifier.clickable(enabled = capability.isSelectable) {
                                         if (!isSelected) {
                                             val newClips = clips.toMutableList()
                                             val newEffects = clip.effects.toMutableList()
@@ -6471,7 +6601,10 @@ fun EditorScreen(
                                         }
                                     }
                                     Spacer(modifier = Modifier.height(4.dp))
-                                    Text(tType.label, style = MaterialTheme.typography.labelSmall, color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                                    Text(tType.label, style = MaterialTheme.typography.labelSmall, color = if (isSelected) MaterialTheme.colorScheme.primary else if (capability.isSelectable) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                                    if (!capability.isSelectable) {
+                                        Text(capability.shortLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                                    }
                                 }
                             }
                         }
@@ -6872,9 +7005,15 @@ fun EditorScreen(
                                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                             types.forEach { tType ->
                                                 val isSelected = clip.transitionNext.type == tType
+                                                val capability = FeatureCapabilityRegistry.transition(
+                                                    type = tType,
+                                                    outgoing = clip,
+                                                    incoming = clips.getOrNull(clipIndex + 1)
+                                                )
                                                 TransitionThumbnail(
                                                     type = tType,
                                                     selected = isSelected,
+                                                    enabled = capability.isSelectable,
                                                     onClick = { 
                                                         val newClips = clips.toMutableList()
                                                         newClips[clipIndex] = clip.copy(transitionNext = clip.transitionNext.copy(type = tType))
@@ -7087,7 +7226,7 @@ fun EditorScreen(
 } // End of EditorScreen
 
 @Composable
-fun TransitionThumbnail(type: TransitionType, selected: Boolean, onClick: () -> Unit) {
+fun TransitionThumbnail(type: TransitionType, selected: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
     val infiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "infinite")
     val progress by infiniteTransition.animateFloat(
         initialValue = -1f,
@@ -7106,7 +7245,8 @@ fun TransitionThumbnail(type: TransitionType, selected: Boolean, onClick: () -> 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
-            .clickable(onClick = onClick)
+            .graphicsLayer { alpha = if (enabled) 1f else 0.45f }
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(4.dp)
     ) {
         Box(

@@ -102,7 +102,7 @@ fun ExportSettingsScreen(
                     Spacer(Modifier.height(8.dp))
                     Text("MP4 export", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     Text(
-                        "Clipp will render the source timeline, trims, speed, crop, filters, shader distortion effects, basic visual layers, supported layer animations, photo/video-overlay chroma key, GIF/video overlays, simple photo/video-source transitions, fades, EQ/pitch/delay/reverb/distortion audio processing, volume envelopes, and audio tracks into a real MP4.",
+                        "Clipp renders the source timeline and every export-ready capability below into a real MP4. The same registry also blocks preview-only controls before they can make this project unexportable.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -123,6 +123,34 @@ fun ExportSettingsScreen(
                                 },
                                 style = MaterialTheme.typography.bodySmall
                             )
+                        }
+                    }
+                }
+                item {
+                    Text("Capability status", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FeatureCapabilityRegistry.launchStatuses.forEach { status ->
+                            val statusColor = when (status.capability) {
+                                FeatureCapability.PREVIEW_AND_EXPORT_SUPPORTED -> MaterialTheme.colorScheme.primary
+                                FeatureCapability.PREVIEW_ONLY_EXPERIMENTAL -> MaterialTheme.colorScheme.tertiary
+                                FeatureCapability.DISABLED,
+                                FeatureCapability.COMING_LATER -> MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(status.label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                                    Text(status.shortLabel, style = MaterialTheme.typography.labelSmall, color = statusColor)
+                                }
+                                Text(
+                                    status.detail,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }
