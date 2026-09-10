@@ -26,12 +26,21 @@ fun CaptionRenderer(
     captions: List<AutoCaptionSegment>,
     settings: CaptionSettings,
     currentPositionMs: Long,
+    renderFrame: TimelineRenderFrame? = null,
     modifier: Modifier = Modifier
 ) {
     if (captions.isEmpty()) return
 
-    val currentCaption = captions.find {
-        currentPositionMs >= it.startTimeMs && currentPositionMs < it.startTimeMs + it.durationMs
+    val currentCaption = if (renderFrame != null) {
+        renderFrame.visualLayers
+            .firstOrNull { it.kind == TimelineLayerKind.CAPTION }
+            ?.layer
+            ?.payload
+            ?.caption
+    } else {
+        captions.find {
+            currentPositionMs >= it.startTimeMs && currentPositionMs < it.startTimeMs + it.durationMs
+        }
     }
 
     if (currentCaption != null) {

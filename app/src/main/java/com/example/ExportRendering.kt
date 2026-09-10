@@ -1102,6 +1102,7 @@ internal fun buildExportOverlays(
     if (clipDurationMs <= 0L) return emptyList()
     val blank = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
     val overlays = mutableListOf<TextureOverlay>()
+    val renderGraph = TimelineRenderGraph(state.toTimelineProject())
 
     fun addWindowed(
         bitmap: Bitmap,
@@ -1118,115 +1119,137 @@ internal fun buildExportOverlays(
         )
     }
 
-    state.overlays.filter { it.isVisible && it.durationMs > 0L }.forEach { overlay ->
-        val start = max(0L, overlay.startTimeOnTimelineMs - clipStartMs)
-        val end = min(clipDurationMs, overlay.startTimeOnTimelineMs + overlay.durationMs - clipStartMs)
-        if (end <= start) return@forEach
+    // Build all user-authored visual overlays from the same canonical order
+    // used by the preview graph. Effects and transitions remain separate because
+    // they belong to the primary clip rather than an independent timeline layer.
+    renderGraph.visualLayersInOrder().forEach { renderLayer ->
+        val layer = renderLayer
+            .takeIf { it.isVisible && it.durationMs > 0L }
+            ?: return@forEach
+        val startTimeMs = layer.startTimeMs
+        val endTimeMs = layer.endTimeMs
 
-        if (overlay.isGif) {
-            runCatching {
-                GifFrameBitmapOverlay(
+        when (layer.kind) {
+            TimelineLayerKind.IMAGE_OVERLAY -> {
+                val overlay = layer.payload.overlay ?: return@forEach
+                val start = max(0L, startTimeMs - clipStartMs)
+                val end = min(clipDurationMs, endTimeMs - clipStartMs)
+                if (end <= start) return@forEach
+
+                if (overlay.isGif) {
+                    runCatching {
+                        GifFrameBitmapOverlay(
+                            context = context,
+                            windowStartMs = start,
+                            windowEndMs = end,
+                            blankBitmap = blank,
+                            settingsAt = { localTime -> buildOverlaySettings(overlay, clipStartMs + localTime) },
+                            sourceUri = overlay.sourceUri
+                        )
+                    }.onSuccess { overlays += it }
+                } else if (overlay.isPhoto) {
+                    val bitmap = renderOverlayClipBitmap(context, overlay) ?: return@forEach
+                    addWindowed(bitmap, startTimeMs, endTimeMs) { localTime ->
+                        buildOverlaySettings(overlay, clipStartMs + localTime)
+                    }
+                } else {
+                    runCatching {
+                        VideoFrameBitmapOverlay(
+                            context = context,
+                            sourceUri = overlay.sourceUri,
+                            sourceTrimStartMs = overlay.trimStartMs,
+                            sourceTrimEndMs = overlay.trimEndMs,
+                            windowStartMs = start,
+                            windowEndMs = end,
+                            blankBitmap = blank,
+                            chromaKey = overlay.chromaKey,
+                            settingsAt = { localTime -> buildOverlaySettings(overlay, clipStartMs + localTime) }
+                        )
+                    }.onSuccess { overlays += it }
+                }
+            }
+
+            TimelineLayerKind.DRAWING -> {
+                val drawing = layer.payload.drawing ?: return@forEach
+                if (drawing.strokes.isEmpty()) return@forEach
+                addWindowed(
+                    renderDrawingBitmap(listOf(drawing)),
+                    startTimeMs,
+                    endTimeMs
+                ) { _ -> overlaySettings(0.5f, 0.5f, 1f, 1f, alpha = layer.properties.opacity) }
+            }
+
+            TimelineLayerKind.FRAME -> {
+                val frame = layer.payload.frame ?: return@forEach
+                addWindowed(
+                    renderFrameBitmap(frame),
+                    startTimeMs,
+                    endTimeMs
+                ) { _ -> overlaySettings(0.5f, 0.5f, 1f, 1f, alpha = layer.properties.opacity) }
+            }
+
+            TimelineLayerKind.TEXT -> {
+                val text = layer.payload.text ?: return@forEach
+                if (text.text.isBlank()) return@forEach
+                val bitmap = renderTextBitmap(
                     context = context,
-                    windowStartMs = start,
-                    windowEndMs = end,
-                    blankBitmap = blank,
-                    settingsAt = { localTime -> buildOverlaySettings(overlay, clipStartMs + localTime) },
-                    sourceUri = overlay.sourceUri
+                    text = text.text,
+                    fontName = text.fontName,
+                    fontSize = text.fontSize,
+                    textColor = text.textColor.toArgb(),
+                    backgroundColor = text.backgroundColor.toArgb(),
+                    strokeColor = text.strokeColor.toArgb(),
+                    strokeWidth = text.strokeWidth,
+                    shadowColor = text.shadowColor.toArgb(),
+                    shadowOffsetX = text.shadowOffsetX,
+                    shadowOffsetY = text.shadowOffsetY,
+                    shadowBlur = text.shadowBlur,
+                    isBold = text.isBold,
+                    isItalic = text.isItalic,
+                    alignment = text.alignment,
+                    lineHeightMultiplier = text.lineHeightMultiplier
                 )
-            }.onSuccess { overlays += it }
-        } else if (overlay.isPhoto) {
-            val bitmap = renderOverlayClipBitmap(context, overlay) ?: return@forEach
-            addWindowed(
-                bitmap,
-                overlay.startTimeOnTimelineMs,
-                overlay.startTimeOnTimelineMs + overlay.durationMs
-            ) { localTime -> buildOverlaySettings(overlay, clipStartMs + localTime) }
-        } else {
-            runCatching {
-                VideoFrameBitmapOverlay(
+                addWindowed(bitmap, startTimeMs, endTimeMs) { localTime ->
+                    buildTextSettings(text, clipStartMs + localTime)
+                }
+            }
+
+            TimelineLayerKind.STICKER -> {
+                val sticker = layer.payload.sticker ?: return@forEach
+                addWindowed(
+                    renderStickerBitmap(context, sticker),
+                    startTimeMs,
+                    endTimeMs
+                ) { localTime -> buildStickerSettings(sticker, clipStartMs + localTime) }
+            }
+
+            TimelineLayerKind.CAPTION -> {
+                val caption = layer.payload.caption ?: return@forEach
+                val bitmap = renderTextBitmap(
                     context = context,
-                    sourceUri = overlay.sourceUri,
-                    sourceTrimStartMs = overlay.trimStartMs,
-                    sourceTrimEndMs = overlay.trimEndMs,
-                    windowStartMs = start,
-                    windowEndMs = end,
-                    blankBitmap = blank,
-                    chromaKey = overlay.chromaKey,
-                    settingsAt = { localTime -> buildOverlaySettings(overlay, clipStartMs + localTime) }
+                    text = caption.text,
+                    fontName = state.captionSettings.fontName,
+                    fontSize = state.captionSettings.fontSize,
+                    textColor = state.captionSettings.textColor.toArgb(),
+                    backgroundColor = state.captionSettings.backgroundColor.toArgb(),
+                    strokeColor = state.captionSettings.strokeColor.toArgb(),
+                    strokeWidth = state.captionSettings.strokeWidth,
+                    shadowColor = android.graphics.Color.TRANSPARENT,
+                    shadowOffsetX = 0f,
+                    shadowOffsetY = 0f,
+                    shadowBlur = 0f,
+                    isBold = true,
+                    isItalic = false,
+                    alignment = state.captionSettings.alignment,
+                    lineHeightMultiplier = 1f
                 )
-            }.onSuccess { overlays += it }
-        }
-    }
+                addWindowed(bitmap, startTimeMs, endTimeMs) { _ ->
+                    overlaySettings(state.captionSettings.posX, state.captionSettings.posY, 0.55f, 0.55f)
+                }
+            }
 
-    state.drawings.filter { it.isVisible && it.strokes.isNotEmpty() }.forEach { drawing ->
-        addWindowed(
-            renderDrawingBitmap(listOf(drawing)),
-            drawing.startTimeOnTimelineMs,
-            drawing.startTimeOnTimelineMs + drawing.durationMs
-        ) { _ -> overlaySettings(0.5f, 0.5f, 1f, 1f, alpha = drawing.opacity) }
-    }
-
-    state.frames.filter { it.isVisible }.forEach { frame ->
-        addWindowed(
-            renderFrameBitmap(frame),
-            frame.startTimeOnTimelineMs,
-            frame.startTimeOnTimelineMs + frame.durationMs
-        ) { _ -> overlaySettings(0.5f, 0.5f, 1f, 1f, alpha = frame.opacity) }
-    }
-
-    state.texts.filter { it.isVisible && it.text.isNotBlank() }.forEach { text ->
-        val bitmap = renderTextBitmap(
-            context = context,
-            text = text.text,
-            fontName = text.fontName,
-            fontSize = text.fontSize,
-            textColor = text.textColor.toArgb(),
-            backgroundColor = text.backgroundColor.toArgb(),
-            strokeColor = text.strokeColor.toArgb(),
-            strokeWidth = text.strokeWidth,
-            shadowColor = text.shadowColor.toArgb(),
-            shadowOffsetX = text.shadowOffsetX,
-            shadowOffsetY = text.shadowOffsetY,
-            shadowBlur = text.shadowBlur,
-            isBold = text.isBold,
-            isItalic = text.isItalic,
-            alignment = text.alignment,
-            lineHeightMultiplier = text.lineHeightMultiplier
-        )
-        addWindowed(bitmap, text.startTimeOnTimelineMs, text.startTimeOnTimelineMs + text.durationMs) { localTime ->
-            buildTextSettings(text, clipStartMs + localTime)
-        }
-    }
-
-    state.stickers.filter { it.isVisible }.forEach { sticker ->
-        addWindowed(
-            renderStickerBitmap(context, sticker),
-            sticker.startTimeOnTimelineMs,
-            sticker.startTimeOnTimelineMs + sticker.durationMs
-        ) { localTime -> buildStickerSettings(sticker, clipStartMs + localTime) }
-    }
-
-    state.captions.forEach { caption ->
-        val bitmap = renderTextBitmap(
-            context = context,
-            text = caption.text,
-            fontName = state.captionSettings.fontName,
-            fontSize = state.captionSettings.fontSize,
-            textColor = state.captionSettings.textColor.toArgb(),
-            backgroundColor = state.captionSettings.backgroundColor.toArgb(),
-            strokeColor = state.captionSettings.strokeColor.toArgb(),
-            strokeWidth = state.captionSettings.strokeWidth,
-            shadowColor = android.graphics.Color.TRANSPARENT,
-            shadowOffsetX = 0f,
-            shadowOffsetY = 0f,
-            shadowBlur = 0f,
-            isBold = true,
-            isItalic = false,
-            alignment = state.captionSettings.alignment,
-            lineHeightMultiplier = 1f
-        )
-        addWindowed(bitmap, caption.startTimeMs, caption.startTimeMs + caption.durationMs) { _ ->
-            overlaySettings(state.captionSettings.posX, state.captionSettings.posY, 0.55f, 0.55f)
+            TimelineLayerKind.VIDEO_CLIP,
+            TimelineLayerKind.AUDIO -> Unit
         }
     }
 

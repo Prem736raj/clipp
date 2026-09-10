@@ -201,6 +201,105 @@ class ExampleUnitTest {
   }
 
   @Test
+  fun previewAndExportUseTheSameResolvedTimelineFramePlan() {
+    val clip = MediaClip(
+      id = "primary",
+      sourceUri = "content://media/video/primary",
+      originalDurationMs = 2_000L,
+      trimEndMs = 2_000L
+    )
+    val overlay = OverlayClip(
+      id = "overlay",
+      sourceUri = "content://media/image/overlay",
+      originalDurationMs = 1_000L,
+      isPhoto = true,
+      trimEndMs = 1_000L,
+      startTimeOnTimelineMs = 500L,
+      posX = 0.2f,
+      keyframes = mapOf(
+        "posX" to listOf(
+          Keyframe(timeMs = 0L, value = 0.2f, easing = EasingType.LINEAR),
+          Keyframe(timeMs = 1_000L, value = 0.8f, easing = EasingType.LINEAR)
+        ),
+        "opacity" to listOf(
+          Keyframe(timeMs = 0L, value = 0.4f, easing = EasingType.LINEAR),
+          Keyframe(timeMs = 1_000L, value = 1f, easing = EasingType.LINEAR)
+        )
+      )
+    )
+    val text = TextOverlay(
+      id = "title",
+      text = "Title",
+      startTimeOnTimelineMs = 0L,
+      durationMs = 2_000L
+    )
+    val audio = AudioClip(
+      id = "music",
+      sourceUri = "content://media/audio/music",
+      startTimeOnTimelineMs = 400L,
+      sourceDurationMs = 2_000L,
+      trimEndMs = 2_000L
+    )
+    val state = EditorState(
+      clips = listOf(clip),
+      overlays = listOf(overlay),
+      texts = listOf(text),
+      audioClips = listOf(audio),
+      layerOrder = listOf(text.id, overlay.id)
+    )
+
+    val project = state.toTimelineProject()
+    val previewFrame = TimelineRenderGraph(project).frameAt(750L)
+    val exportFrame = TimelineRenderGraph(project).frameAt(750L)
+
+    assertEquals(previewFrame, exportFrame)
+    assertEquals("primary", previewFrame.primaryVideo?.id)
+    assertEquals(750L, previewFrame.primaryVideo?.localTimeMs)
+    assertEquals(listOf("title", "overlay"), previewFrame.visualLayers.map { it.id })
+    assertEquals(250L, previewFrame.visualLayer("overlay")?.localTimeMs)
+    assertEquals(0.35f, previewFrame.visualLayer("overlay")?.properties?.transform?.positionX ?: 0f, 0.0001f)
+    assertEquals(0.55f, previewFrame.visualLayer("overlay")?.properties?.opacity ?: 0f, 0.0001f)
+    assertEquals(listOf("music"), previewFrame.audioLayers.map { it.id })
+    assertEquals(350L, previewFrame.audioLayers.single().localTimeMs)
+  }
+
+  @Test
+  fun renderGraphExcludesHiddenAndExpiredLayers() {
+    val hidden = TextOverlay(
+      id = "hidden",
+      text = "Hidden",
+      startTimeOnTimelineMs = 0L,
+      durationMs = 2_000L,
+      isVisible = false
+    )
+    val expired = StickerOverlay(
+      id = "expired",
+      modelId = "star",
+      content = "★",
+      category = StickerCategory.SHAPE,
+      startTimeOnTimelineMs = 0L,
+      durationMs = 300L
+    )
+    val active = FrameOverlay(
+      id = "active",
+      typeId = "clean_solid",
+      startTimeOnTimelineMs = 200L,
+      durationMs = 1_000L
+    )
+    val graph = TimelineRenderGraph(
+      EditorState(
+        texts = listOf(hidden),
+        stickers = listOf(expired),
+        frames = listOf(active),
+        layerOrder = listOf(hidden.id, expired.id, active.id)
+      ).toTimelineProject()
+    )
+
+    assertEquals(listOf("active"), graph.frameAt(500L).visualLayers.map { it.id })
+    assertTrue(graph.frameAt(1_500L).visualLayers.isEmpty())
+  }
+
+  @Test
   fun basicTimelineAndSupportedVisualEditsCanBeExported() {
     val basic = MediaClip(
       sourceUri = "content://media/video/1",

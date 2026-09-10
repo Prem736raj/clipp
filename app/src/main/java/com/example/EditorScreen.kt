@@ -943,6 +943,35 @@ fun EditorScreen(
     }
     
     val timelineMapper = remember(clips) { TimelineMapper(clips) }
+    val timelineRenderGraph = remember(
+        clips,
+        canvasSettings,
+        overlays,
+        texts,
+        captions,
+        captionSettings,
+        stickers,
+        drawings,
+        frames,
+        audioClips,
+        layerOrder
+    ) {
+        TimelineRenderGraph(
+            EditorState(
+                clips = clips,
+                canvasSettings = canvasSettings,
+                overlays = overlays,
+                texts = texts,
+                captions = captions,
+                captionSettings = captionSettings,
+                stickers = stickers,
+                drawings = drawings,
+                frames = frames,
+                audioClips = audioClips,
+                layerOrder = layerOrder
+            ).toTimelineProject()
+        )
+    }
     val videoDurationMs = timelineMapper.totalDurationMs
     var currentPositionMs by remember { mutableStateOf(0L) }
 
@@ -2028,6 +2057,8 @@ fun EditorScreen(
                             showFullscreenControls = true
                         }
                 ) {
+                    val previewFrame = timelineRenderGraph.frameAt(currentPositionMs)
+
                     // Render Background
                     if (canvasSettings.fitMode == FitMode.Fit) {
                         val bgMod = Modifier.fillMaxSize()
@@ -2053,21 +2084,11 @@ fun EditorScreen(
                         }
                     }
 
-                    val currentClipForTransform = if (clips.isNotEmpty() && exoPlayer.currentWindowIndex in clips.indices) clips[exoPlayer.currentWindowIndex] else null
+                    val currentClipForTransform = previewFrame.primaryVideo?.layer?.payload?.mediaClip
 
                     val mediaPath = project?.sourceMediaPaths?.firstOrNull()
                     if (mediaPath != null) {
-                        var relativeTimeForClip = 0L
-                        if (currentClipForTransform != null) {
-                            var accumT = 0L
-                            for (c in clips) {
-                                if (c.id == currentClipForTransform.id) {
-                                    relativeTimeForClip = currentPositionMs - accumT
-                                    break
-                                }
-                                accumT += c.durationMs
-                            }
-                        }
+                        val relativeTimeForClip = previewFrame.primaryVideo?.localTimeMs ?: 0L
                         
                         LaunchedEffect(isMuted, currentClipForTransform?.isMuted, currentClipForTransform?.volume, canvasSettings.masterVolume) {
                             val clipVolume = currentClipForTransform?.volume ?: 1f
@@ -2498,19 +2519,19 @@ fun EditorScreen(
                         
                         // Render Overlays
                         for (overlay in overlays) {
-                            if (!overlay.isVisible) continue
-                            if (currentPositionMs >= overlay.startTimeOnTimelineMs && currentPositionMs < overlay.startTimeOnTimelineMs + overlay.durationMs) {
-                                val isSelected = selectedOverlayId == overlay.id
-                                val relativeTimeMs = currentPositionMs - overlay.startTimeOnTimelineMs
-                                
-                                val animPosX = overlay.keyframes.getValueAtTime("posX", relativeTimeMs, overlay.posX)
-                                val animPosY = overlay.keyframes.getValueAtTime("posY", relativeTimeMs, overlay.posY)
-                                val animScaleX = overlay.keyframes.getValueAtTime("scaleX", relativeTimeMs, overlay.scaleX)
-                                val animScaleY = overlay.keyframes.getValueAtTime("scaleY", relativeTimeMs, overlay.scaleY)
-                                val animRotation = overlay.keyframes.getValueAtTime("rotation", relativeTimeMs, overlay.rotation)
-                                val animOpacity = overlay.keyframes.getValueAtTime("opacity", relativeTimeMs, overlay.opacity)
-                                
-                                val cBlendMode = when (overlay.blendMode) {
+                            val renderLayer = previewFrame.visualLayer(overlay.id) ?: continue
+                            val renderProperties = renderLayer.properties
+                            val isSelected = selectedOverlayId == overlay.id
+                            val relativeTimeMs = renderLayer.localTimeMs
+
+                            val animPosX = renderProperties.transform.positionX
+                            val animPosY = renderProperties.transform.positionY
+                            val animScaleX = renderProperties.transform.scaleX
+                            val animScaleY = renderProperties.transform.scaleY
+                            val animRotation = renderProperties.transform.rotationDegrees
+                            val animOpacity = renderProperties.opacity
+
+                                val cBlendMode = when (renderProperties.blendMode) {
                                     OverlayBlendModeType.MULTIPLY -> androidx.compose.ui.graphics.BlendMode.Multiply
                                     OverlayBlendModeType.SCREEN -> androidx.compose.ui.graphics.BlendMode.Screen
                                     OverlayBlendModeType.OVERLAY -> androidx.compose.ui.graphics.BlendMode.Overlay
@@ -2532,7 +2553,7 @@ fun EditorScreen(
                                 Box(
                                     modifier = Modifier
                                         .fillMaxSize()
-                                        .zIndex((layerOrder.indexOf(overlay.id).takeIf { it >= 0 } ?: 0).toFloat())
+                                        .zIndex(renderLayer.layer.zIndex.toFloat())
                                         // Pinch/drag input
                                         .pointerInput(overlay.id) {
                                             if (isSelected && !overlay.isLocked) {
@@ -2545,7 +2566,7 @@ fun EditorScreen(
                                                     if (idx != -1) {
                                                         val o = finalOverlays[idx]
                                                         
-                                                        val relT = currentPositionMs - o.startTimeOnTimelineMs
+                                                        val relT = renderLayer.localTimeMs
                                                         val mKfs = o.keyframes.toMutableMap()
                                                         
                                                         val currX = mKfs.getValueAtTime("posX", relT, o.posX)
@@ -2597,7 +2618,7 @@ fun EditorScreen(
                                             alpha = animOpacity
                                             
                                             val tIn = relativeTimeMs.toFloat() / 500f
-                                            val tOut = (overlay.durationMs - relativeTimeMs).toFloat() / 500f
+                                            val tOut = (renderLayer.layer.durationMs - relativeTimeMs).toFloat() / 500f
                                             if (tIn >= 0 && tIn < 1f && overlay.entranceAnim != OverlayAnim.NONE) {
                                                 when (overlay.entranceAnim) {
                                                     OverlayAnim.FADE -> alpha *= tIn
@@ -2718,41 +2739,52 @@ fun EditorScreen(
                                             .border(2.dp, Color.White)
                                     )
                                 }
-                            }
                         }
                         
                         // Frame Overlays
-                        frames.forEach { frameOverlay ->
-                            if (!frameOverlay.isVisible) return@forEach
-                            if (currentPositionMs >= frameOverlay.startTimeOnTimelineMs && currentPositionMs < frameOverlay.startTimeOnTimelineMs + frameOverlay.durationMs) {
-                                FrameRenderer(frameOverlay = frameOverlay, modifier = Modifier.fillMaxSize().zIndex((layerOrder.indexOf(frameOverlay.id).takeIf { it >= 0 } ?: 0).toFloat()).graphicsLayer { alpha = frameOverlay.opacity })
-                            }
+                        for (frameOverlay in frames) {
+                            val renderLayer = previewFrame.visualLayer(frameOverlay.id) ?: continue
+                            FrameRenderer(
+                                frameOverlay = frameOverlay,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .zIndex(renderLayer.layer.zIndex.toFloat())
+                                    .graphicsLayer { alpha = renderLayer.properties.opacity }
+                            )
                         }
                         
                         CaptionRenderer(
                             captions = captions,
                             settings = captionSettings,
                             currentPositionMs = currentPositionMs,
-                            modifier = Modifier.zIndex(100f) // Keep captions on top
+                            renderFrame = previewFrame,
+                            modifier = Modifier.zIndex(
+                                previewFrame.visualLayers
+                                    .firstOrNull { it.kind == TimelineLayerKind.CAPTION }
+                                    ?.layer
+                                    ?.zIndex
+                                    ?.toFloat()
+                                    ?: 0f
+                            )
                         )
 
                         // Text Overlays
-                        texts.forEach { textOverlay ->
-                            if (!textOverlay.isVisible) return@forEach
-                            if (currentPositionMs >= textOverlay.startTimeOnTimelineMs && currentPositionMs < textOverlay.startTimeOnTimelineMs + textOverlay.durationMs) {
-                                val isSelected = textOverlay.id == selectedTextId
+                        for (textOverlay in texts) {
+                            val renderLayer = previewFrame.visualLayer(textOverlay.id) ?: continue
+                            val renderProperties = renderLayer.properties
+                            val isSelected = textOverlay.id == selectedTextId
                                 
                                 var currentPosX by remember(textOverlay.id) { mutableFloatStateOf(textOverlay.posX) }
                                 var currentPosY by remember(textOverlay.id) { mutableFloatStateOf(textOverlay.posY) }
                                 var currentScale by remember(textOverlay.id) { mutableFloatStateOf(textOverlay.scale) }
                                 var currentRotation by remember(textOverlay.id) { mutableFloatStateOf(textOverlay.rotation) }
 
-                                val animPosX by animateFloatAsState(currentPosX)
-                                val animPosY by animateFloatAsState(currentPosY)
-                                val animScale by animateFloatAsState(currentScale)
-                                val animRot by animateFloatAsState(currentRotation)
+                                val animPosX by animateFloatAsState(renderProperties.transform.positionX)
+                                val animPosY by animateFloatAsState(renderProperties.transform.positionY)
+                                val animScale by animateFloatAsState(renderProperties.transform.scaleX)
+                                val animRot by animateFloatAsState(renderProperties.transform.rotationDegrees)
                                 
-                                val currentTextTimeMs = currentPositionMs - textOverlay.startTimeOnTimelineMs
+                                val currentTextTimeMs = renderLayer.localTimeMs
                                 
                                 var renderAlpha = 1f
                                 var renderScale = animScale
@@ -2851,7 +2883,7 @@ fun EditorScreen(
                                 Box(
                                     modifier = Modifier
                                         .fillMaxSize()
-                                        .zIndex((layerOrder.indexOf(textOverlay.id).takeIf { it >= 0 } ?: 0).toFloat())
+                                        .zIndex(renderLayer.layer.zIndex.toFloat())
                                         .pointerInput(textOverlay.id) {
                                             detectTransformGestures { centroid, pan, zoom, rotation ->
                                                 if (isSelected && !textOverlay.isLocked) {
@@ -2887,7 +2919,7 @@ fun EditorScreen(
                                             translationX = (renderPosX - 0.5f) * size.width
                                             translationY = (renderPosY - 0.5f) * size.height
                                             rotationZ = renderRot
-                                            alpha = renderAlpha * textOverlay.opacity
+                                            alpha = renderAlpha * renderProperties.opacity
                                         }
                                         .then(if (renderBlur > 0f) Modifier.blur(renderBlur.dp, androidx.compose.ui.draw.BlurredEdgeTreatment.Unbounded) else Modifier),
                                     contentAlignment = Alignment.Center
@@ -2960,26 +2992,25 @@ fun EditorScreen(
                                         )
                                     }
                                 }
-                            }
                         }
                         
                         // Sticker Overlays
-                        stickers.forEach { stickerOverlay ->
-                            if (!stickerOverlay.isVisible) return@forEach
-                            if (currentPositionMs >= stickerOverlay.startTimeOnTimelineMs && currentPositionMs < stickerOverlay.startTimeOnTimelineMs + stickerOverlay.durationMs) {
-                                val isSelected = stickerOverlay.id == selectedStickerId
+                        for (stickerOverlay in stickers) {
+                            val renderLayer = previewFrame.visualLayer(stickerOverlay.id) ?: continue
+                            val renderProperties = renderLayer.properties
+                            val isSelected = stickerOverlay.id == selectedStickerId
                                 
                                 var currentPosX by remember(stickerOverlay.id) { mutableFloatStateOf(stickerOverlay.posX) }
                                 var currentPosY by remember(stickerOverlay.id) { mutableFloatStateOf(stickerOverlay.posY) }
                                 var currentScale by remember(stickerOverlay.id) { mutableFloatStateOf(stickerOverlay.scale) }
                                 var currentRotation by remember(stickerOverlay.id) { mutableFloatStateOf(stickerOverlay.rotation) }
 
-                                val animPosX by animateFloatAsState(currentPosX)
-                                val animPosY by animateFloatAsState(currentPosY)
-                                val animScale by animateFloatAsState(currentScale)
-                                val animRot by animateFloatAsState(currentRotation)
+                                val animPosX by animateFloatAsState(renderProperties.transform.positionX)
+                                val animPosY by animateFloatAsState(renderProperties.transform.positionY)
+                                val animScale by animateFloatAsState(renderProperties.transform.scaleX)
+                                val animRot by animateFloatAsState(renderProperties.transform.rotationDegrees)
                                 
-                                val currentTextTimeMs = currentPositionMs - stickerOverlay.startTimeOnTimelineMs
+                                val currentTextTimeMs = renderLayer.localTimeMs
                                 
                                 var renderAlpha = 1f
                                 var renderScale = animScale
@@ -3072,7 +3103,7 @@ fun EditorScreen(
                                 Box(
                                     modifier = Modifier
                                         .fillMaxSize()
-                                        .zIndex((layerOrder.indexOf(stickerOverlay.id).takeIf { it >= 0 } ?: 0).toFloat())
+                                        .zIndex(renderLayer.layer.zIndex.toFloat())
                                         .pointerInput(stickerOverlay.id) {
                                             detectTransformGestures { centroid, pan, zoom, rotation ->
                                                 if (isSelected && !stickerOverlay.isLocked) {
@@ -3106,7 +3137,7 @@ fun EditorScreen(
                                             translationX = (renderPosX - 0.5f) * size.width
                                             translationY = (renderPosY - 0.5f) * size.height
                                             rotationZ = renderRot
-                                            alpha = renderAlpha * stickerOverlay.opacity
+                                            alpha = renderAlpha * renderProperties.opacity
                                         }
                                         .then(if (renderBlur > 0f) Modifier.blur(renderBlur.dp, androidx.compose.ui.draw.BlurredEdgeTreatment.Unbounded) else Modifier),
                                     contentAlignment = Alignment.Center
@@ -3147,17 +3178,19 @@ fun EditorScreen(
                                         }
                                     }
                                 }
-                            }
                         }
 
                         // Drawing Overlays
-                        drawings.forEach { drawOverlay ->
-                            if (!drawOverlay.isVisible) return@forEach
-                            if (currentPositionMs >= drawOverlay.startTimeOnTimelineMs && currentPositionMs < drawOverlay.startTimeOnTimelineMs + drawOverlay.durationMs) {
-                                val currentDrawTimeMs = currentPositionMs - drawOverlay.startTimeOnTimelineMs
-                                val progress = if (drawOverlay.isAnimated) currentDrawTimeMs.toFloat() / drawOverlay.durationMs else 1f
+                        for (drawOverlay in drawings) {
+                            val renderLayer = previewFrame.visualLayer(drawOverlay.id) ?: continue
+                            val currentDrawTimeMs = renderLayer.localTimeMs
+                            val progress = if (drawOverlay.isAnimated) {
+                                currentDrawTimeMs.toFloat() / renderLayer.layer.durationMs.coerceAtLeast(1L)
+                            } else {
+                                1f
+                            }
                                 
-                                Canvas(modifier = Modifier.fillMaxSize().zIndex((layerOrder.indexOf(drawOverlay.id).takeIf { it >= 0 } ?: 0).toFloat()).graphicsLayer { alpha = drawOverlay.opacity }) {
+                                Canvas(modifier = Modifier.fillMaxSize().zIndex(renderLayer.layer.zIndex.toFloat()).graphicsLayer { alpha = renderLayer.properties.opacity }) {
                                     drawOverlay.strokes.forEach { stroke ->
                                         if (stroke.path.size > 1) {
                                             val uiPath = androidx.compose.ui.graphics.Path()
@@ -3239,7 +3272,6 @@ fun EditorScreen(
                                         }
                                     }
                                 }
-                            }
                         }
 
                         // Drawing Interactions
