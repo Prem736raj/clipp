@@ -50,6 +50,7 @@ class ExampleUnitTest {
     assertEquals(96f, budget.timelineFrameWidthDp)
     assertEquals(48f, quality.timelineFrameWidthDp)
     assertTrue(budget.thumbnailOverscanPx < quality.thumbnailOverscanPx)
+    assertTrue(budget.timelineItemOverscanPx < quality.timelineItemOverscanPx)
   }
 
   @Test

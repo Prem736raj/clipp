@@ -3616,7 +3616,7 @@ fun EditorScreen(
                                     
                                     val viewportStartPx = currentScrollPx - (screenWidthPx / 2f)
                                     val viewportEndPx = currentScrollPx + (screenWidthPx / 2f)
-                                    val viewPad = 600f
+                                    val viewPad = performanceProfile.timelineItemOverscanPx
                                     if (overlayStartPx > viewportEndPx + viewPad || overlayStartPx + overlayWidthPx < viewportStartPx - viewPad) continue
                                     
                                     Box(
@@ -3837,7 +3837,7 @@ fun EditorScreen(
 
                                 val viewportStartPx = currentScrollPx - (screenWidthPx / 2f)
                                 val viewportEndPx = currentScrollPx + (screenWidthPx / 2f)
-                                val viewPad = 600f
+                                val viewPad = performanceProfile.timelineItemOverscanPx
 
                                 for ((clipIndex, clip) in clips.withIndex()) {
                                     val clipWidthPx = clipWidths[clip.id] ?: 0f
@@ -4654,7 +4654,7 @@ fun EditorScreen(
                                     
                                     val viewportStartPx = currentScrollPx - (screenWidthPx / 2f)
                                     val viewportEndPx = currentScrollPx + (screenWidthPx / 2f)
-                                    val viewPad = 600f
+                                    val viewPad = performanceProfile.timelineItemOverscanPx
                                     if (drawStartPx > viewportEndPx + viewPad || drawStartPx + drawWidthPx < viewportStartPx - viewPad) continue
                                     
                                     Box(

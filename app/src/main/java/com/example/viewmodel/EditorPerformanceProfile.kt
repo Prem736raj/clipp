@@ -13,7 +13,8 @@ data class EditorPerformanceProfile(
     val thumbnailMemoryCacheFraction: Double,
     val thumbnailDiskCacheFraction: Double,
     val timelineFrameWidthDp: Float,
-    val thumbnailOverscanPx: Float
+    val thumbnailOverscanPx: Float,
+    val timelineItemOverscanPx: Float
 ) {
     companion object {
         fun forMode(mode: PerformanceMode): EditorPerformanceProfile = when (mode) {
@@ -23,7 +24,8 @@ data class EditorPerformanceProfile(
                 thumbnailMemoryCacheFraction = 0.08,
                 thumbnailDiskCacheFraction = 0.01,
                 timelineFrameWidthDp = 96f,
-                thumbnailOverscanPx = 240f
+                thumbnailOverscanPx = 240f,
+                timelineItemOverscanPx = 240f
             )
             PerformanceMode.BALANCED -> EditorPerformanceProfile(
                 previewMaxWidth = 1280,
@@ -31,7 +33,8 @@ data class EditorPerformanceProfile(
                 thumbnailMemoryCacheFraction = 0.12,
                 thumbnailDiskCacheFraction = 0.02,
                 timelineFrameWidthDp = 64f,
-                thumbnailOverscanPx = 400f
+                thumbnailOverscanPx = 400f,
+                timelineItemOverscanPx = 400f
             )
             PerformanceMode.BEST_QUALITY -> EditorPerformanceProfile(
                 previewMaxWidth = 1920,
@@ -39,7 +42,8 @@ data class EditorPerformanceProfile(
                 thumbnailMemoryCacheFraction = 0.15,
                 thumbnailDiskCacheFraction = 0.03,
                 timelineFrameWidthDp = 48f,
-                thumbnailOverscanPx = 600f
+                thumbnailOverscanPx = 600f,
+                timelineItemOverscanPx = 600f
             )
         }
     }
