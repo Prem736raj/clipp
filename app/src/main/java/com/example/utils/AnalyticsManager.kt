@@ -67,8 +67,28 @@ object AnalyticsManager {
         return daily.getJSONObject(date)
     }
 
+    private fun analyticsEnabled(): Boolean =
+        ::privacyPrefs.isInitialized && privacyPrefs.getBoolean("analytics_enabled", false)
+
+    fun setAnalyticsEnabled(enabled: Boolean) {
+        if (!::privacyPrefs.isInitialized) return
+        privacyPrefs.edit().putBoolean("analytics_enabled", enabled).apply()
+        if (!enabled) {
+            clearLocalData()
+        } else {
+            updateDashboard()
+        }
+    }
+
+    fun clearLocalData() {
+        if (::prefs.isInitialized) prefs.edit().clear().commit()
+        _fullJson = JSONObject()
+        sessionStartMs = 0L
+        updateDashboard()
+    }
+
     fun trackVideoCreated() {
-        if (::privacyPrefs.isInitialized && !privacyPrefs.getBoolean("analytics_enabled", true)) return
+        if (!analyticsEnabled()) return
         val today = getTodayDate()
         val dayObj = getDailyObject(today)
         dayObj.put("created", dayObj.optInt("created", 0) + 1)
@@ -78,7 +98,7 @@ object AnalyticsManager {
     }
 
     fun trackVideoExported(durationMs: Long) {
-        if (::privacyPrefs.isInitialized && !privacyPrefs.getBoolean("analytics_enabled", true)) return
+        if (!analyticsEnabled()) return
         val today = getTodayDate()
         val dayObj = getDailyObject(today)
         dayObj.put("exported", dayObj.optInt("exported", 0) + 1)
@@ -98,24 +118,25 @@ object AnalyticsManager {
     fun endEditingSession() {
         if (sessionStartMs == 0L) return
         val elapsed = System.currentTimeMillis() - sessionStartMs
-        
-        if (::privacyPrefs.isInitialized && privacyPrefs.getBoolean("analytics_enabled", true)) {
+
+        if (analyticsEnabled()) {
             val today = getTodayDate()
             val dayObj = getDailyObject(today)
             dayObj.put("timeMs", dayObj.optLong("timeMs", 0L) + elapsed)
+            val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+            if (hour in 0..4) {
+                awardBadge("Night Owl Editor")
+            }
+            sessionStartMs = 0L
+            save()
+            return
         }
-        
-        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        if (hour in 0..4) {
-            awardBadge("Night Owl Editor")
-        }
-        
+
         sessionStartMs = 0L
-        save()
     }
 
     fun trackFeature(featureName: String) {
-        if (::privacyPrefs.isInitialized && !privacyPrefs.getBoolean("analytics_enabled", true)) return
+        if (!analyticsEnabled()) return
         val today = getTodayDate()
         val dayObj = getDailyObject(today)
         val features = dayObj.getJSONObject("features")
@@ -140,7 +161,6 @@ object AnalyticsManager {
     private fun checkBadges() {
         var totalExported = 0
         var totalCreated = 0
-        val allFeatures = mutableSetOf<String>()
         val daily = _fullJson.optJSONObject("daily") ?: JSONObject()
         val keys = daily.keys()
         while(keys.hasNext()) {
@@ -148,23 +168,12 @@ object AnalyticsManager {
             val day = daily.getJSONObject(key)
             totalCreated += day.optInt("created", 0)
             totalExported += day.optInt("exported", 0)
-            val features = day.optJSONObject("features") ?: JSONObject()
-            val fKeys = features.keys()
-            while(fKeys.hasNext()) {
-                allFeatures.add(fKeys.next())
-            }
         }
         
         if (totalExported >= 1 || totalCreated >= 1) awardBadge("First Video")
         if (totalExported >= 10) awardBadge("10 Videos")
         if (totalExported >= 100) awardBadge("100 Videos")
         
-        val aiFeatures = listOf("Auto Caption", "AI Enhance", "AI Object Remove", "AI Music", "AI Voice", "Smart Reframe")
-        var hasAllAI = true
-        for (f in aiFeatures) {
-            if (!allFeatures.contains(f)) hasAllAI = false
-        }
-        if (hasAllAI) awardBadge("AI Master")
     }
 
     private fun checkStreak() {

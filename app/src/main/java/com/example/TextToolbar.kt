@@ -91,8 +91,7 @@ val textStylePresets = listOf(
 @Composable
 fun ColorWheelPicker(
     color: Color,
-    onColorChanged: (Color) -> Unit,
-    onEyedropperClick: () -> Unit
+    onColorChanged: (Color) -> Unit
 ) {
     var hsv by remember { mutableStateOf(floatArrayOf(0f, 1f, 1f)) }
     
@@ -155,9 +154,6 @@ fun ColorWheelPicker(
                 )
             }
             
-            IconButton(onClick = onEyedropperClick) {
-                Icon(Icons.Filled.Colorize, contentDescription = "Eyedropper")
-            }
         }
         Spacer(Modifier.height(8.dp))
         // Saturation/Value block
@@ -317,7 +313,6 @@ fun TextToolbar(
     isEditing: Boolean,
     onCloseEditing: () -> Unit,
     onCloseToolbar: () -> Unit,
-    onEyedropperSelect: () -> Unit,
     onCopy: () -> Unit,
     onDuplicate: () -> Unit,
     onPasteStyle: () -> Unit,
@@ -526,8 +521,7 @@ fun TextToolbar(
             Text("Text Color", style = MaterialTheme.typography.labelMedium)
             ColorWheelPicker(
                 color = textOverlay.textColor,
-                onColorChanged = { onUpdate(textOverlay.copy(textColor = it)) },
-                onEyedropperClick = onEyedropperSelect
+                onColorChanged = { onUpdate(textOverlay.copy(textColor = it)) }
             )
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(presetColors.size) { i ->
@@ -600,9 +594,21 @@ fun TextToolbar(
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
+                val textDepthCapability = FeatureCapabilityRegistry.textDepth()
                 Text("Enable 3D Depth Effect", modifier = Modifier.weight(1f))
-                Switch(checked = textOverlay.is3D, onCheckedChange = { onUpdate(textOverlay.copy(is3D = it)) })
+                Switch(
+                    checked = textOverlay.is3D,
+                    enabled = textOverlay.is3D || textDepthCapability.isSelectable,
+                    onCheckedChange = { enabled ->
+                        if (!enabled) onUpdate(textOverlay.copy(is3D = false))
+                    }
+                )
             }
+            Text(
+                "3D text is ${FeatureCapabilityRegistry.textDepth().shortLabel.lowercase()} because the MP4 text renderer is currently 2D.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
 
             Text("Duration", style = MaterialTheme.typography.labelMedium)
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -629,13 +635,14 @@ fun TextToolbar(
                         val anims = TextAnimIn.values()
                         items(anims.size) { i ->
                             val anim = anims[i]
+                            val capability = FeatureCapabilityRegistry.textAnimation(anim)
                             val isSelected = textOverlay.animIn == anim
                             Box(
                                 modifier = Modifier
                                     .size(80.dp)
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant)
-                                    .clickable { onUpdate(textOverlay.copy(animIn = anim)) }
+                                    .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else if (capability.isSelectable) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                                    .clickable(enabled = capability.isSelectable) { onUpdate(textOverlay.copy(animIn = anim)) }
                                     .border(2.dp, if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent, RoundedCornerShape(8.dp)),
                                 contentAlignment = Alignment.Center
                             ) {
@@ -676,13 +683,14 @@ fun TextToolbar(
                         val anims = TextAnimLoop.values()
                         items(anims.size) { i ->
                             val anim = anims[i]
+                            val capability = FeatureCapabilityRegistry.textAnimation(anim)
                             val isSelected = textOverlay.animLoop == anim
                             Box(
                                 modifier = Modifier
                                     .size(80.dp)
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant)
-                                    .clickable { onUpdate(textOverlay.copy(animLoop = anim)) }
+                                    .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else if (capability.isSelectable) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                                    .clickable(enabled = capability.isSelectable) { onUpdate(textOverlay.copy(animLoop = anim)) }
                                     .border(2.dp, if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent, RoundedCornerShape(8.dp)),
                                 contentAlignment = Alignment.Center
                             ) {
@@ -717,13 +725,14 @@ fun TextToolbar(
                         val anims = TextAnimOut.values()
                         items(anims.size) { i ->
                             val anim = anims[i]
+                            val capability = FeatureCapabilityRegistry.textAnimation(anim)
                             val isSelected = textOverlay.animOut == anim
                             Box(
                                 modifier = Modifier
                                     .size(80.dp)
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant)
-                                    .clickable { onUpdate(textOverlay.copy(animOut = anim)) }
+                                    .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else if (capability.isSelectable) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                                    .clickable(enabled = capability.isSelectable) { onUpdate(textOverlay.copy(animOut = anim)) }
                                     .border(2.dp, if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent, RoundedCornerShape(8.dp)),
                                 contentAlignment = Alignment.Center
                             ) {

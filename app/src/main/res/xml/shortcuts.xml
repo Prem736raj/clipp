@@ -8,7 +8,7 @@
         android:shortcutLongLabel="@string/shortcut_new_project_long">
         <intent
             android:action="android.intent.action.VIEW"
-            android:targetPackage="com.example"
+            android:targetPackage="com.clipp.ai.video.editor.maker"
             android:targetClass="com.example.MainActivity"
             android:data="clipp://shortcut/new_project" />
         <categories android:name="android.shortcut.conversation" />
@@ -21,7 +21,7 @@
         android:shortcutLongLabel="@string/shortcut_quick_trim_long">
         <intent
             android:action="android.intent.action.VIEW"
-            android:targetPackage="com.example"
+            android:targetPackage="com.clipp.ai.video.editor.maker"
             android:targetClass="com.example.MainActivity"
             android:data="clipp://shortcut/quick_trim" />
         <categories android:name="android.shortcut.conversation" />
@@ -34,7 +34,7 @@
         android:shortcutLongLabel="@string/shortcut_continue_long">
         <intent
             android:action="android.intent.action.VIEW"
-            android:targetPackage="com.example"
+            android:targetPackage="com.clipp.ai.video.editor.maker"
             android:targetClass="com.example.MainActivity"
             android:data="clipp://shortcut/continue_last" />
         <categories android:name="android.shortcut.conversation" />

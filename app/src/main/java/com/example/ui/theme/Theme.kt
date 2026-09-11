@@ -42,8 +42,7 @@ private val LightColorScheme =
 
 @Composable
 fun MyApplicationTheme(
-  // Default to Dark Theme since video editors look best in dark mode
-  darkTheme: Boolean = true,
+  darkTheme: Boolean = isSystemInDarkTheme(),
   // We disable dynamic color to strictly keep the premium branding
   dynamicColor: Boolean = false,
   content: @Composable () -> Unit,

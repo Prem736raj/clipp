@@ -24,7 +24,7 @@ fun ContactSupportScreen(onClose: () -> Unit, isBugReport: Boolean = false) {
     var selectedCategory by remember { mutableStateOf(if (isBugReport) "Bug Report" else "General Inquiry") }
     var description by remember { mutableStateOf("") }
     
-    val categories = listOf("General Inquiry", "Billing/Subscription", "Feature Request", "Bug Report", "Other")
+    val categories = listOf("General Inquiry", "Feature Request", "Bug Report", "Other")
     
     // For Bug Report auto-inclusion
     val deviceInfo = "Device: ${Build.MANUFACTURER} ${Build.MODEL}\n" +

@@ -20,11 +20,15 @@ data class ProjectEntity(
     val projectState: String = "Draft",
     val isDirty: Boolean = false,
     val historyState: String = "", // For project versioning / undo history
-    val syncStatus: String = "not_backed_up", // not_backed_up, syncing, synced, offline, conflict
+    // Retained for database compatibility. It is always local-only until a
+    // verified sync backend exists; UI must not present it as cloud state.
+    val syncStatus: String = "local_only",
     val lastBackupTime: Long = 0L,
     val backupSize: Long = 0L,
     val folderId: String? = null,
     val tags: String = "", // Comma separated tag names
     val isArchived: Boolean = false,
-    val sizeBytes: Long = (5000000..50000000).random().toLong() // Mock size for sorting
+    // Recomputed from app-owned state by ProjectStorage. Original gallery
+    // media is deliberately excluded.
+    val sizeBytes: Long = 0L
 )

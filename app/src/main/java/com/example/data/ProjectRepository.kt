@@ -10,6 +10,10 @@ class ProjectRepository(private val projectDao: ProjectDao) {
         return projectDao.getProjectById(id)
     }
 
+    suspend fun getAllProjectsOnce(): List<ProjectEntity> {
+        return projectDao.getAllProjectsOnce()
+    }
+
     suspend fun insert(project: ProjectEntity) {
         projectDao.insertProject(project)
     }
@@ -26,11 +30,19 @@ class ProjectRepository(private val projectDao: ProjectDao) {
         projectDao.deleteProjectById(id)
     }
 
+    suspend fun deleteAllProjects() {
+        projectDao.deleteAllProjects()
+    }
+
     suspend fun insertFolder(folder: FolderEntity) {
         projectDao.insertFolder(folder)
     }
 
     suspend fun deleteFolder(folder: FolderEntity) {
         projectDao.deleteFolder(folder)
+    }
+
+    suspend fun deleteAllFolders() {
+        projectDao.deleteAllFolders()
     }
 }

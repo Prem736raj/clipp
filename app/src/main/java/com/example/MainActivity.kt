@@ -20,10 +20,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.MovieCreation
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PrivacyTip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -67,11 +70,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import com.example.ui.theme.MyApplicationTheme
-import kotlinx.coroutines.delay
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.viewmodel.ProjectViewModel
 import androidx.compose.runtime.collectAsState
@@ -80,7 +83,6 @@ class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     val splashScreen = installSplashScreen()
     super.onCreate(savedInstanceState)
-    val billingManager = com.example.billing.BillingManager(this)
     com.example.utils.AnalyticsManager.init(this)
     enableEdgeToEdge()
     
@@ -92,17 +94,16 @@ class MainActivity : ComponentActivity() {
     val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
     Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
         val prefs = getSharedPreferences("clipp_crash_prefs", android.content.Context.MODE_PRIVATE)
-        prefs.edit().putBoolean("has_crashed", true).putString("crash_log", throwable.message ?: "Unknown error").commit()
-        
-        val crashIntent = android.content.Intent(this, MainActivity::class.java).apply {
-            putExtra("from_crash", true)
-            putExtra("error_msg", throwable.localizedMessage)
-            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        if (getSharedPreferences("clipp_privacy", android.content.Context.MODE_PRIVATE)
+                .getBoolean("crash_reporting_enabled", true)) {
+            prefs.edit().putBoolean("has_crashed", true).putString("crash_log", throwable.message ?: "Unknown error").commit()
+        } else {
+            prefs.edit().clear().commit()
         }
-        startActivity(crashIntent)
-        
-        android.os.Process.killProcess(android.os.Process.myPid())
-        kotlin.system.exitProcess(1)
+
+        // Let Android's default handler terminate the crashed process. Relaunching
+        // MainActivity here can create an endless crash loop and hide the real stack.
+        defaultHandler?.uncaughtException(thread, throwable)
     }
 
     var shortcutAction: String? = null
@@ -124,19 +125,36 @@ class MainActivity : ComponentActivity() {
         // Handle both shortcuts and open-with
         if (intent.dataString?.startsWith("clipp://shortcut/") == true) {
              shortcutAction = intent.dataString?.removePrefix("clipp://shortcut/")
-        } else if (intent.dataString?.startsWith("clipp://project/") == true) {
-             shortcutAction = "open_" + intent.dataString?.removePrefix("clipp://project/")
+        } else if (intent.data?.scheme == "clipp") {
+             val routeHost = intent.data?.host
+             val routeValue = intent.data?.pathSegments?.firstOrNull()
+             shortcutAction = when (routeHost) {
+                 "project" -> routeValue?.let { "open_$it" }
+                 "new" -> "new_project"
+                 "quick-edit" -> "quick_trim"
+                 else -> null
+             }
         } else if (intent.type?.startsWith("video/") == true || intent.type?.startsWith("image/") == true || intent.dataString?.endsWith(".mp4") == true) {
              sharedVideoUri = intent.dataString
         }
     }
-    
-    createNotificationChannel(this)
+
+    // Shared/opened content grants are often temporary. Keep a persistable
+    // grant when the provider supports it; non-persistable providers simply
+    // continue through the normal error state in the editor.
+    sharedVideoUri?.let { value ->
+        runCatching {
+            contentResolver.takePersistableUriPermission(
+                android.net.Uri.parse(value),
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
+    }
     
     setContent {
       val isFromCrash = intent.getBooleanExtra("from_crash", false)
       if (isFromCrash) {
-          MyApplicationTheme {
+            MyApplicationTheme(darkTheme = isSystemInDarkTheme()) {
              com.example.CrashScreen(
                  errorMsg = intent.getStringExtra("error_msg") ?: "Unknown error",
                  onRestart = {
@@ -148,26 +166,11 @@ class MainActivity : ComponentActivity() {
              )
           }
       } else {
-          MyApplicationTheme {
-            ClippApp(sharedVideoUri, shortcutAction, billingManager)
-          }
+          ClippApp(sharedVideoUri, shortcutAction)
       }
     }
   }
 
-  private fun createNotificationChannel(context: android.content.Context) {
-      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-          val name = "Clipp Notifications"
-          val descriptionText = "Notifications for exports, auto-saves, and cloud sync"
-          val importance = android.app.NotificationManager.IMPORTANCE_DEFAULT
-          val channel = android.app.NotificationChannel("clipp_notifications", name, importance).apply {
-              description = descriptionText
-          }
-          val notificationManager: android.app.NotificationManager =
-              context.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-          notificationManager.createNotificationChannel(channel)
-      }
-  }
 }
 
 sealed class Screen(val route: String, val title: String, val icon: ImageVector, val isCreate: Boolean = false) {
@@ -187,22 +190,34 @@ val items = listOf(
 )
 
 @Composable
-fun ClippApp(sharedVideoUri: String? = null, shortcutAction: String? = null, billingManager: com.example.billing.BillingManager) {
+fun ClippApp(sharedVideoUri: String? = null, shortcutAction: String? = null) {
   val context = androidx.compose.ui.platform.LocalContext.current
   val sharedPrefs = remember { context.getSharedPreferences("clipp_prefs", android.content.Context.MODE_PRIVATE) }
   val hasCompletedOnboarding = remember { sharedPrefs.getBoolean("has_completed_onboarding", false) }
+  var themePreference by remember {
+    mutableStateOf(sharedPrefs.getString("theme_preference", "System") ?: "System")
+  }
+  val darkTheme = when (themePreference) {
+    "Dark" -> true
+    "Light" -> false
+    else -> isSystemInDarkTheme()
+  }
   val navController = rememberNavController()
+  val navBackStackEntry by navController.currentBackStackEntryAsState()
+  val currentDestination = navBackStackEntry?.destination?.route
   val projectViewModel: ProjectViewModel = viewModel()
   
   var showShareIntentDialog by remember { mutableStateOf(sharedVideoUri != null) }
+  var handledShortcutAction by remember { mutableStateOf<String?>(null) }
 
-  Scaffold(
-    modifier = Modifier.fillMaxSize(),
+  MyApplicationTheme(darkTheme = darkTheme) {
+    Scaffold(
+      modifier = Modifier.fillMaxSize(),
     bottomBar = {
-      val navBackStackEntry by navController.currentBackStackEntryAsState()
-      val currentDestination = navBackStackEntry?.destination?.route
-      
-      if (currentDestination !in listOf("splash", "onboarding", "permissions", Screen.Create.route, "editor", "quick_edit")) {
+      val isEditorSurface = currentDestination?.startsWith("editor/") == true
+      val isQuickEditSurface = currentDestination?.startsWith("quick_edit") == true
+      if (currentDestination !in listOf("splash", "onboarding", "permissions", Screen.Create.route) &&
+          !isEditorSurface && !isQuickEditSurface) {
         NavigationBar(
           containerColor = MaterialTheme.colorScheme.surface,
           contentColor = MaterialTheme.colorScheme.onSurface,
@@ -351,17 +366,28 @@ fun ClippApp(sharedVideoUri: String? = null, shortcutAction: String? = null, bil
         val projects by projectViewModel.uiState.collectAsState(initial = emptyList())
         ProjectsScreen(
             projects = projects,
-            onProjectClick = { id -> navController.navigate("editor/$id") }
+            onProjectClick = { id -> navController.navigate("editor/$id") },
+            onBatchExport = { navController.navigate("batch_export") }
         ) 
       }
-      composable(Screen.Profile.route) { ProfileScreen(billingManager) }
+      composable("batch_export") {
+        val projects by projectViewModel.uiState.collectAsState(initial = emptyList())
+        BatchExportScreen(
+            projects = projects,
+            onClose = { navController.popBackStack() }
+        )
+      }
+      composable(Screen.Profile.route) {
+        ProfileScreen(
+          onThemeChanged = { themePreference = it }
+        )
+      }
       composable("editor/{projectId}") { backStackEntry -> 
         val projectId = backStackEntry.arguments?.getString("projectId") ?: return@composable
         EditorScreen(
             projectId = projectId,
             onBack = { navController.popBackStack() },
-            projectViewModel = projectViewModel,
-            billingManager = billingManager
+            projectViewModel = projectViewModel
         ) 
       }
       composable("template/replace/{templateId}") { backStackEntry -> 
@@ -369,21 +395,13 @@ fun ClippApp(sharedVideoUri: String? = null, shortcutAction: String? = null, bil
         TemplateReplacementScreen(
             templateId = templateId,
             onBack = { navController.popBackStack() },
-            onCustomize = { template, medias, texts ->
-                val projectId = java.util.UUID.randomUUID().toString()
-                val newProject = com.example.data.ProjectEntity(
-                    id = projectId,
-                    name = "${template.title} Project",
-                    duration = template.duration,
-                    lastEdited = System.currentTimeMillis()
-                )
-                projectViewModel.addProject(newProject)
-                navController.navigate("editor/$projectId") {
+            projectViewModel = projectViewModel,
+            onCustomize = { newProject ->
+                projectViewModel.addProject(newProject) {
+                    navController.navigate("editor/${newProject.id}") {
                     popUpTo(Screen.Templates.route)
+                    }
                 }
-            },
-            onQuickExport = { template, medias, texts ->
-                // Quick export logic handled inside TemplateReplacementScreen
             }
         ) 
       }
@@ -399,27 +417,44 @@ fun ClippApp(sharedVideoUri: String? = null, shortcutAction: String? = null, bil
           )
       }
     }
+    }
   }
 
   // Shortcut handling
-  LaunchedEffect(shortcutAction) {
-      if (shortcutAction != null) {
-          delay(100) // Wait for navigation to settle
-          when (shortcutAction) {
-              "new_project" -> navController.navigate(Screen.Create.route)
-              "quick_trim" -> navController.navigate("quick_edit?uri=") // Starts empty Quick Edit
-              "continue_last" -> {
-                  // Wait for projects to load (could be improved in real app)
-                  val latestProject = projectViewModel.uiState.value.maxByOrNull { it.lastEdited }
-                  if (latestProject != null) {
-                      navController.navigate("editor/${latestProject.id}")
-                  }
+  LaunchedEffect(shortcutAction, currentDestination) {
+      val action = shortcutAction ?: return@LaunchedEffect
+      // Splash/onboarding/permission navigation must finish first. Otherwise a
+      // shortcut can race the launch flow and be replaced by its destination.
+      if (currentDestination != Screen.Home.route || handledShortcutAction == action) {
+          return@LaunchedEffect
+      }
+
+      handledShortcutAction = action
+      when {
+          action == "new_project" -> navController.navigate(Screen.Create.route)
+          action == "quick_trim" -> navController.navigate("quick_edit?uri=")
+          action == "continue_last" -> {
+              val latestProject = projectViewModel.getLatestProject()
+              if (latestProject != null) {
+                  navController.navigate("editor/${latestProject.id}")
+              } else {
+                  android.widget.Toast.makeText(
+                      context,
+                      "There is no saved project to continue",
+                      android.widget.Toast.LENGTH_SHORT
+                  ).show()
               }
-              else -> {
-                  if (shortcutAction!!.startsWith("open_")) {
-                      val projectId = shortcutAction!!.removePrefix("open_")
-                      navController.navigate("editor/$projectId")
-                  }
+          }
+          action.startsWith("open_") -> {
+              val projectId = action.removePrefix("open_")
+              if (projectId.isBlank() || projectViewModel.getProject(projectId) == null) {
+                  android.widget.Toast.makeText(
+                      context,
+                      "That project is no longer available",
+                      android.widget.Toast.LENGTH_SHORT
+                  ).show()
+              } else {
+                  navController.navigate("editor/$projectId")
               }
           }
       }
@@ -462,9 +497,14 @@ fun ClippApp(sharedVideoUri: String? = null, shortcutAction: String? = null, bil
   // Recovery Dialog
   val dirtyProject by projectViewModel.dirtyProject.collectAsState()
   var showRecoveryDialog by remember { mutableStateOf(false) }
+  var promptedRecoveryProjectId by remember { mutableStateOf<String?>(null) }
 
-  LaunchedEffect(dirtyProject) {
-      if (dirtyProject != null) {
+  LaunchedEffect(currentDestination, dirtyProject?.id) {
+      val isLaunchSurface = currentDestination == Screen.Home.route ||
+          currentDestination == Screen.Projects.route
+      val candidate = dirtyProject
+      if (isLaunchSurface && candidate != null && promptedRecoveryProjectId != candidate.id) {
+          promptedRecoveryProjectId = candidate.id
           showRecoveryDialog = true
       }
   }
@@ -589,10 +629,10 @@ data class OnboardingPage(val title: String, val description: String, val icon: 
 @Composable
 fun OnboardingScreen(onComplete: () -> Unit) {
   val pages = listOf(
-    OnboardingPage("Edit Like a Pro", "Unleash your creativity with professional-level video editing tools right in your pocket.", Icons.Filled.AutoAwesome),
-    OnboardingPage("AI Magic", "Remove backgrounds, auto-generate captions, and enhance visuals instantly with AI.", Icons.Filled.PlayArrow),
-    OnboardingPage("No Watermark, Free", "Export your masterpieces without any annoying watermarks, completely for free.", Icons.Filled.Folder),
-    OnboardingPage("Share Everywhere", "One tap share to Reels, Shorts, TikTok, and other platforms.", Icons.Filled.Person)
+    OnboardingPage("Edit Locally", "Choose photos and videos from the system picker and build a local project on your device.", Icons.Filled.Folder),
+    OnboardingPage("Core Editing", "Trim, split, and reorder source clips while keeping the project stored locally on your device.", Icons.Filled.ContentCut),
+    OnboardingPage("Verified MP4 Export", "Export a real MP4 without a watermark when the project uses the currently supported trim and mute edits.", Icons.Filled.MovieCreation),
+    OnboardingPage("Private by Default", "Clipp does not upload your media. Cloud sync, accounts, subscriptions, and AI tools are not active in this build.", Icons.Filled.PrivacyTip)
   )
 
   val pagerState = androidx.compose.foundation.pager.rememberPagerState(pageCount = { pages.size })
@@ -675,22 +715,6 @@ fun OnboardingScreen(onComplete: () -> Unit) {
 
 @Composable
 fun PermissionScreen(onPermissionGranted: () -> Unit) {
-  val permissionsToRequest = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-      arrayOf(
-          android.Manifest.permission.READ_MEDIA_IMAGES,
-          android.Manifest.permission.READ_MEDIA_VIDEO
-      )
-  } else {
-      arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
-  }
-
-  val permissionsLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-      contract = androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
-  ) { permissions ->
-      // If granted or not for prototype, we proceed
-      onPermissionGranted()
-  }
-
   Column(
     modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(32.dp),
     horizontalAlignment = Alignment.CenterHorizontally,
@@ -700,16 +724,15 @@ fun PermissionScreen(onPermissionGranted: () -> Unit) {
           Icon(Icons.Filled.Folder, contentDescription = null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.primary)
       }
       Spacer(modifier = Modifier.height(48.dp))
-      Text("Access your media", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+      Text("Choose media privately", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
       Spacer(modifier = Modifier.height(16.dp))
-      Text("Clipp needs access to your photos and videos so you can select and edit them.", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+      Text("Clipp uses Android's system picker when you import media. You choose exactly which videos and photos the app can read; no gallery permission is required.", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
       Spacer(modifier = Modifier.height(48.dp))
       androidx.compose.material3.Button(
-        onClick = { permissionsLauncher.launch(permissionsToRequest) },
+        onClick = onPermissionGranted,
         modifier = Modifier.fillMaxWidth().height(56.dp)
       ) {
           Text("Continue")
       }
   }
 }
-

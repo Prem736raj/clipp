@@ -1,68 +1,85 @@
 package com.example
 
 import android.content.Context
+import android.os.Build
+import android.os.Environment
+import android.os.StatFs
+import android.provider.MediaStore
 import android.widget.Toast
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.data.ProjectEntity
+import com.example.data.ProjectStorage
 import com.example.viewmodel.ProjectViewModel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import java.io.File
+
+private data class StorageBreakdown(
+    val appFiles: Long,
+    val cache: Long,
+    val exports: Long,
+    val deviceTotal: Long,
+    val deviceFree: Long
+) {
+    val appOwned: Long get() = appFiles + cache + exports
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StorageManagerScreen(onClose: () -> Unit) {
     val context = LocalContext.current
-    val sharedPrefs = remember { context.getSharedPreferences("clipp_settings", Context.MODE_PRIVATE) }
     val projectViewModel: ProjectViewModel = viewModel()
-    val projects by projectViewModel.uiState.collectAsState(initial = emptyList())
-    val scope = rememberCoroutineScope()
+    val projects by projectViewModel.uiState.collectAsState()
+    var isClearing by remember { mutableStateOf(false) }
+    var refreshToken by remember { mutableStateOf(0) }
 
-    var cacheSizeMB by remember { mutableStateOf(450) }
-    var exportsSizeMB by remember { mutableStateOf(850) }
-    var assetsSizeMB by remember { mutableStateOf(200) }
-    var isOptimizing by remember { mutableStateOf(false) }
-    var exportFolder by remember { mutableStateOf(sharedPrefs.getString("export_folder", "/Internal/Movies/Clipp") ?: "/Internal/Movies/Clipp") }
-
-    val projectsSizeMB = projects.size * 125 // 125 MB per project approx
-    val totalUsedMB = cacheSizeMB + exportsSizeMB + assetsSizeMB + projectsSizeMB
-    val totalDeviceStorageMB = 64000 // 64 GB
-    val availableStorageMB = totalDeviceStorageMB - totalUsedMB
-
-    val colors = listOf(
-        MaterialTheme.colorScheme.primary,
-        MaterialTheme.colorScheme.secondary,
-        Color(0xFFFFC107), // Amber for cache
-        Color(0xFF4CAF50)  // Green for assets
-    )
-    
-    // Check for low storage
-    LaunchedEffect(availableStorageMB) {
-        if (availableStorageMB < 5000) { // Less than 5GB free
-            Toast.makeText(context, "Storage space is running low", Toast.LENGTH_LONG).show()
-        }
+    val storage = remember(refreshToken, projects) { readStorageBreakdown(context) }
+    val projectSizes = remember(projects, refreshToken) {
+        projects.associate { it.id to ProjectStorage.calculateOwnedSizeBytes(context, it) }
     }
 
     Scaffold(
@@ -74,208 +91,149 @@ fun StorageManagerScreen(onClose: () -> Unit) {
                         Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background
+                )
             )
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
         LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
+            modifier = Modifier.fillMaxSize().padding(padding),
             contentPadding = PaddingValues(vertical = 16.dp)
         ) {
-            // Chart section
             item {
                 Column(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Box(modifier = Modifier.size(200.dp), contentAlignment = Alignment.Center) {
-                        Canvas(modifier = Modifier.size(160.dp)) {
-                            val strokeWidth = 32.dp.toPx()
-                            val radius = (size.minDimension - strokeWidth) / 2
-                            val center = Offset(size.width / 2, size.height / 2)
-                            
-                            val usedFractions = listOf(
-                                projectsSizeMB.toFloat() / totalUsedMB,
-                                exportsSizeMB.toFloat() / totalUsedMB,
-                                cacheSizeMB.toFloat() / totalUsedMB,
-                                assetsSizeMB.toFloat() / totalUsedMB
-                            )
-                            
-                            var startAngle = -90f
-                            usedFractions.forEachIndexed { index, fraction ->
-                                val sweepAngle = fraction * 360f
-                                drawArc(
-                                    color = colors[index],
-                                    startAngle = startAngle,
-                                    sweepAngle = sweepAngle,
-                                    useCenter = false,
-                                    topLeft = Offset(center.x - radius, center.y - radius),
-                                    size = Size(radius * 2, radius * 2),
-                                    style = Stroke(width = strokeWidth, cap = StrokeCap.Butt)
-                                )
-                                startAngle += sweepAngle
-                            }
-                        }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = "${totalUsedMB / 1000f} GB",
-                                style = MaterialTheme.typography.headlineMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onBackground
-                            )
-                            Text(
-                                text = "Used",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                    
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text("Available Device Storage: ${availableStorageMB / 1000f} GB / ${totalDeviceStorageMB / 1000f} GB")
-                    Spacer(modifier = Modifier.height(24.dp))
+                    Text(
+                        formatStorageSize(storage.appOwned),
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text("Clipp app-owned storage", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Device free: ${formatStorageSize(storage.deviceFree)} of ${formatStorageSize(storage.deviceTotal)}",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(Modifier.height(24.dp))
                 }
             }
-
-            // Legend
             item {
                 Column(modifier = Modifier.padding(horizontal = 24.dp)) {
-                    LegendItem("Project Files", "${projectsSizeMB} MB", colors[0])
-                    LegendItem("Exported Videos", "${exportsSizeMB} MB", colors[1])
-                    LegendItem("Cache & Thumbnails", "${cacheSizeMB} MB", colors[2])
-                    LegendItem("Downloaded Assets", "${assetsSizeMB} MB", colors[3])
+                    LegendItem("App files and database", formatStorageSize(storage.appFiles), MaterialTheme.colorScheme.primary)
+                    LegendItem("Cache", formatStorageSize(storage.cache), MaterialTheme.colorScheme.tertiary)
+                    LegendItem("Clipp exports", formatStorageSize(storage.exports), MaterialTheme.colorScheme.secondary)
                 }
-                Spacer(modifier = Modifier.height(32.dp))
+                Spacer(Modifier.height(24.dp))
             }
-
-            // Optimize Storage Button
             item {
                 Box(modifier = Modifier.padding(horizontal = 24.dp)) {
                     Button(
                         onClick = {
-                            if (!isOptimizing) {
-                                scope.launch {
-                                    isOptimizing = true
-                                    delay(1500)
-                                    val freed = cacheSizeMB / 2
-                                    cacheSizeMB -= freed
-                                    Toast.makeText(context, "Optimized! Freed ${freed} MB of space", Toast.LENGTH_SHORT).show()
-                                    isOptimizing = false
-                                }
+                            if (!isClearing) {
+                                isClearing = true
+                                val before = directorySize(context.cacheDir) +
+                                    directorySize(context.externalCacheDir)
+                                clearDirectoryContents(context.cacheDir)
+                                context.externalCacheDir?.let(::clearDirectoryContents)
+                                val after = directorySize(context.cacheDir) +
+                                    directorySize(context.externalCacheDir)
+                                isClearing = false
+                                refreshToken++
+                                Toast.makeText(
+                                    context,
+                                    "Cache cleared (${formatStorageSize((before - after).coerceAtLeast(0L))} freed)",
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             }
                         },
-                        modifier = Modifier.fillMaxWidth().height(56.dp),
-                        shape = RoundedCornerShape(28.dp),
-                        enabled = !isOptimizing
+                        modifier = Modifier.fillMaxWidth().height(52.dp),
+                        shape = RoundedCornerShape(26.dp),
+                        enabled = !isClearing
                     ) {
-                        if (isOptimizing) {
-                            CircularProgressIndicator(modifier = Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimary)
+                        if (isClearing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(22.dp),
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
                         } else {
-                            Icon(Icons.Filled.AutoFixHigh, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Optimize Storage", fontWeight = FontWeight.Bold)
+                            Icon(Icons.Filled.DeleteOutline, contentDescription = null)
+                            Spacer(Modifier.size(8.dp))
+                            Text("Clear cache", fontWeight = FontWeight.Bold)
                         }
                     }
                 }
                 Text(
-                    text = "Clears old cache, removes unused thumbnails, and compresses project files automatically.",
+                    "Only Clipp cache files are removed. Projects and source media stay intact.",
+                    modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    textAlign = TextAlign.Center
                 )
-                Spacer(modifier = Modifier.height(16.dp))
-                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.padding(horizontal = 24.dp))
-                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant
+                )
             }
-
+            item {
+                StorageActionItem(
+                    icon = Icons.Filled.Movie,
+                    title = "Clipp exports",
+                    subtitle = if (storage.exports == 0L) {
+                        "No Clipp exports found in Movies/Clipp"
+                    } else {
+                        "${formatStorageSize(storage.exports)} in Movies/Clipp; manage these files in Gallery"
+                    },
+                    onClick = {
+                        Toast.makeText(
+                            context,
+                            "Manage exported videos from your Gallery app",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                )
+            }
             item {
                 Text(
-                    text = "Storage Management",
+                    "Per-Project Storage Usage",
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)
                 )
             }
-
-            // Clear Cache
-            item {
-                StorageActionItem(
-                    icon = Icons.Filled.DeleteOutline,
-                    title = "Clear Cache",
-                    subtitle = "Free up ${cacheSizeMB} MB. Will not delete projects.",
-                    onClick = {
-                        Toast.makeText(context, "Cache cleared ($cacheSizeMB MB freed)", Toast.LENGTH_SHORT).show()
-                        cacheSizeMB = 0
-                    }
-                )
-            }
-
-            // Clean Exported Videos
-            item {
-                StorageActionItem(
-                    icon = Icons.Filled.VideoLibrary,
-                    title = "Clean Exported Videos",
-                    subtitle = "${exportsSizeMB} MB used by finalized videos.",
-                    onClick = {
-                        Toast.makeText(context, "Navigating to exported gallery (simulated)", Toast.LENGTH_SHORT).show()
-                    }
-                )
-            }
-
-            // Export Folder Location
-            item {
-                StorageActionItem(
-                    icon = Icons.Filled.Folder,
-                    title = "Export Folder Location",
-                    subtitle = exportFolder,
-                    onClick = {
-                        // Toggle for simulation
-                        val newFolder = if (exportFolder.contains("Internal")) "/SD Card/Movies/Clipp" else "/Internal/Movies/Clipp"
-                        exportFolder = newFolder
-                        sharedPrefs.edit().putString("export_folder", newFolder).apply()
-                    }
-                )
-            }
-            
-            item { Spacer(modifier = Modifier.height(24.dp)) }
-
-            // Per project listing
-            item {
-                Text(
-                    text = "Per-Project Storage Usage",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
-                )
-            }
-
             if (projects.isEmpty()) {
                 item {
                     Text(
-                        text = "No projects taking up disk space.",
+                        "No local projects.",
                         modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             } else {
-                items(projects) { project ->
+                items(projects, key = { it.id }) { project ->
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(Icons.Filled.Movie, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(modifier = Modifier.width(16.dp))
+                        Spacer(Modifier.size(16.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(project.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
-                            Text("Last edited ${android.text.format.DateFormat.format("MMM dd", java.util.Date(project.lastEdited))}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(project.name, style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "Last edited ${android.text.format.DateFormat.format("MMM dd", java.util.Date(project.lastEdited))}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
-                        Text("125 MB", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
+                        Text(
+                            formatStorageSize(projectSizes[project.id] ?: 0L),
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
             }
@@ -291,26 +249,80 @@ fun LegendItem(title: String, value: String, color: Color) {
     ) {
         Box(modifier = Modifier.size(12.dp).clip(CircleShape).background(color))
         Spacer(modifier = Modifier.width(12.dp))
-        Text(title, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.weight(1f))
-        Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
+        Text(title, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
     }
 }
 
 @Composable
-fun StorageActionItem(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
+fun StorageActionItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 24.dp, vertical = 16.dp),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 24.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(icon, contentDescription = title, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(24.dp))
         Spacer(modifier = Modifier.width(16.dp))
         Column {
-            Text(title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+            Text(title, style = MaterialTheme.typography.bodyLarge)
             Spacer(modifier = Modifier.height(2.dp))
             Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+}
+
+private fun readStorageBreakdown(context: Context): StorageBreakdown {
+    val stat = StatFs(context.filesDir.absolutePath)
+    val blockSize = stat.blockSizeLong
+    return StorageBreakdown(
+        appFiles = directorySize(context.filesDir) + directorySize(context.getExternalFilesDir(null)),
+        cache = directorySize(context.cacheDir) + directorySize(context.externalCacheDir),
+        exports = queryClippExportBytes(context),
+        deviceTotal = stat.blockCountLong * blockSize,
+        deviceFree = stat.availableBlocksLong * blockSize
+    )
+}
+
+private fun queryClippExportBytes(context: Context): Long {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return 0L
+    val projection = arrayOf(MediaStore.Video.Media.SIZE, MediaStore.Video.Media.RELATIVE_PATH)
+    val selection = "${MediaStore.Video.Media.RELATIVE_PATH} LIKE ?"
+    val args = arrayOf("${Environment.DIRECTORY_MOVIES}/Clipp/%")
+    return runCatching {
+        context.contentResolver.query(
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+            projection,
+            selection,
+            args,
+            null
+        )?.use { cursor ->
+            val sizeColumn = cursor.getColumnIndex(MediaStore.Video.Media.SIZE)
+            var total = 0L
+            while (cursor.moveToNext()) {
+                if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)) total += cursor.getLong(sizeColumn)
+            }
+            total
+        } ?: 0L
+    }.getOrDefault(0L)
+}
+
+private fun directorySize(file: File?): Long {
+    if (file == null || !file.exists()) return 0L
+    if (file.isFile) return file.length()
+    return file.listFiles()?.sumOf(::directorySize) ?: 0L
+}
+
+private fun clearDirectoryContents(directory: File) {
+    directory.listFiles()?.forEach { it.deleteRecursively() }
+}
+
+private fun formatStorageSize(bytes: Long): String = when {
+    bytes < 1024L -> "$bytes B"
+    bytes < 1024L * 1024L -> "${bytes / 1024L} KB"
+    bytes < 1024L * 1024L * 1024L -> "${bytes / (1024L * 1024L)} MB"
+    else -> "${bytes / (1024L * 1024L * 1024L)} GB"
 }

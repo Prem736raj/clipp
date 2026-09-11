@@ -1,6 +1,6 @@
 {
   "name": "Clipp",
-  "description": "Premium video editor",
+  "description": "Private local video editor with verified MP4 export",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": []
 }
