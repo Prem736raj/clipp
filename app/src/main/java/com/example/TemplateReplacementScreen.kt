@@ -1,296 +1,218 @@
 package com.example
 
-import androidx.compose.animation.*
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.VideoLibrary
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
-import kotlinx.coroutines.delay
+import com.example.data.ProjectEntity
+import com.example.viewmodel.ProjectViewModel
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TemplateReplacementScreen(
     templateId: String,
     onBack: () -> Unit,
-    onCustomize: (VideoTemplate, List<String>, List<String>) -> Unit,
-    onQuickExport: (VideoTemplate, List<String>, List<String>) -> Unit
+    projectViewModel: ProjectViewModel,
+    onCustomize: (ProjectEntity) -> Unit
 ) {
-    val template = TemplateRepo.templates.find { it.id == templateId }
+    val template = remember(templateId) { TemplateRepo.find(templateId) }
     if (template == null) {
-        onBack()
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("Template") },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    }
+                )
+            }
+        ) { padding ->
+            Column(
+                modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("Template not found", style = MaterialTheme.typography.titleLarge)
+                Text("Choose one of Clipp's built-in local templates.")
+            }
+        }
         return
     }
 
-    var selectedMedias by remember { mutableStateOf(MutableList<String?>(template.slots) { null }) }
-    var editedTexts by remember { mutableStateOf(template.textPlaceholders.toMutableList()) }
+    var selectedMedia by remember(templateId) { mutableStateOf<List<String>>(emptyList()) }
+    var titleText by remember(templateId) {
+        mutableStateOf(template.textPlaceholders.getOrNull(0) ?: "Title Here")
+    }
+    var subtitleText by remember(templateId) {
+        mutableStateOf(template.textPlaceholders.getOrNull(1) ?: "Subtitle Here")
+    }
+    var isCreating by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
-    var showingMediaPickerForSlot by remember { mutableStateOf<Int?>(null) }
-    
-    var showExportDialog by remember { mutableStateOf(false) }
-
-    if (showingMediaPickerForSlot != null) {
+    if (selectedMedia.isEmpty()) {
         MediaPickerScreen(
-            onClose = { showingMediaPickerForSlot = null },
-            onGoToEditor = { },
+            onClose = onBack,
+            onGoToEditor = {},
+            projectViewModel = projectViewModel,
             isSelectingForExisting = true,
             onMediaSelected = { uris ->
-                if (uris.isNotEmpty()) {
-                    val newMedias = selectedMedias.toMutableList()
-                    newMedias[showingMediaPickerForSlot!!] = uris.first()
-                    selectedMedias = newMedias
-                }
-                showingMediaPickerForSlot = null
+                selectedMedia = uris.distinct().take(template.slots.coerceAtLeast(1))
+                errorMessage = null
             }
         )
         return
     }
 
-    var showShareDialog by remember { mutableStateOf(false) }
-
+    val textValues = listOf(titleText, subtitleText)
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(template.title, style = MaterialTheme.typography.titleMedium, maxLines = 1) },
+                title = { Text(template.title) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, contentDescription = "Back") }
-                },
-                actions = {
-                    if (template.isCustom) {
-                        IconButton(onClick = { showShareDialog = true }) {
-                            Icon(androidx.compose.material.icons.Icons.Filled.Share, contentDescription = "Share Template")
-                        }
-                    }
-                    TextButton(onClick = { 
-                        onQuickExport(template, selectedMedias.filterNotNull(), editedTexts)
-                        showExportDialog = true
-                    }) {
-                        Text("Quick Export")
+                    IconButton(onClick = { selectedMedia = emptyList() }) {
+                        Icon(Icons.Filled.ArrowBack, contentDescription = "Choose different media")
                     }
                 }
             )
         },
         bottomBar = {
-            Surface(
-                color = MaterialTheme.colorScheme.surface,
-                shadowElevation = 8.dp
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    val filledSlots = selectedMedias.count { it != null }
-                    Text(
-                        text = "$filledSlots / ${template.slots} Media Added",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    
-                    Button(
-                        onClick = { 
-                            onCustomize(template, selectedMedias.filterNotNull(), editedTexts)
-                        },
-                        enabled = filledSlots > 0 // Or disable checking full
-                    ) {
-                        Text("Customize (Editor)")
+            Button(
+                onClick = {
+                    if (isCreating) return@Button
+                    isCreating = true
+                    errorMessage = null
+                    scope.launch {
+                        val project = TemplateProjectFactory.build(
+                            context = context,
+                            template = template,
+                            mediaUris = selectedMedia,
+                            textValues = textValues
+                        )
+                        if (project == null) {
+                            errorMessage = "The selected media could not be read. Choose supported photos or videos again."
+                            isCreating = false
+                        } else {
+                            onCustomize(project)
+                        }
                     }
+                },
+                enabled = !isCreating,
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                contentPadding = PaddingValues(vertical = 14.dp)
+            ) {
+                if (isCreating) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(Icons.Filled.Check, contentDescription = null)
+                    Text("Create local project", modifier = Modifier.padding(start = 8.dp))
                 }
             }
         }
-    ) { paddingValues ->
+    ) { padding ->
         LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(24.dp)
+            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+            contentPadding = PaddingValues(vertical = 16.dp)
         ) {
             item {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color.Black),
-                    contentAlignment = Alignment.Center
-                ) {
-                    // Show either original preview or selected user content
-                    val firstMedia = selectedMedias.firstOrNull { it != null }
-                    if (firstMedia != null) {
-                        AsyncImage(
-                            model = firstMedia,
-                            contentDescription = "Preview",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize().clickable { /* mock play preview */ }
-                        )
-                        Box(
-                            modifier = Modifier
-                                .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(percent = 50))
-                                .padding(12.dp)
-                        ) {
-                            Icon(Icons.Filled.PlayArrow, contentDescription = "Play", tint = Color.White)
-                        }
-                    } else {
-                        AsyncImage(
-                            model = template.imageUrl,
-                            contentDescription = "Template Preview",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                        Box(
-                            modifier = Modifier
-                                .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(percent = 50))
-                                .padding(12.dp)
-                        ) {
-                            Icon(Icons.Filled.PlayArrow, contentDescription = "Play", tint = Color.White)
-                        }
-                    }
-                }
-            }
-
-            item {
-                Text(
-                    text = "Replace Media",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            itemsIndexed(selectedMedias) { index, mediaUri ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(64.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.secondaryContainer)
-                            .clickable { showingMediaPickerForSlot = index },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (mediaUri != null) {
-                            AsyncImage(
-                                model = mediaUri,
-                                contentDescription = "Slot $index",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        } else {
-                            Icon(Icons.Filled.VideoLibrary, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
-                        }
-                    }
-                    
-                    Spacer(modifier = Modifier.width(16.dp))
-                    
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Slot ${index + 1}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                        Text(if (mediaUri == null) "Select media" else "Added", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    
-                    TextButton(onClick = { showingMediaPickerForSlot = index }) {
-                        Text(if (mediaUri == null) "Add" else "Replace")
-                    }
-                }
-            }
-            
-            if (template.textPlaceholders.isNotEmpty()) {
-                item {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(template.description, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
-                        text = "Edit Text",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(top = 8.dp)
+                        "Using ${selectedMedia.size} of ${template.slots} available media slot(s). All media stays on this device.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
-
-                itemsIndexed(editedTexts) { index, text ->
+            }
+            item {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(selectedMedia) { uri ->
+                        AsyncImage(
+                            model = uri,
+                            contentDescription = "Selected template media",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.size(92.dp).clip(RoundedCornerShape(10.dp))
+                        )
+                    }
+                }
+            }
+            item {
+                OutlinedButton(onClick = { selectedMedia = emptyList() }) {
+                    Text("Choose different media")
+                }
+            }
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Template text", style = MaterialTheme.typography.titleMedium)
                     OutlinedTextField(
-                        value = text,
-                        onValueChange = { newT -> 
-                            val mut = editedTexts.toMutableList()
-                            mut[index] = newT
-                            editedTexts = mut
-                        },
+                        value = titleText,
+                        onValueChange = { titleText = it },
+                        label = { Text("Title") },
                         modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Text ${index + 1}") },
-                        trailingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) }
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = subtitleText,
+                        onValueChange = { subtitleText = it },
+                        label = { Text("Subtitle") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
                     )
                 }
             }
-        }
-        
-        if (showExportDialog) {
-            var exportProgress by remember { mutableStateOf(0f) }
-            
-            LaunchedEffect(Unit) {
-                while(exportProgress < 1f) {
-                    delay(100)
-                    exportProgress += 0.05f
+            if (errorMessage != null) {
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+                        Icon(Icons.Filled.Info, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                        Text(errorMessage!!, color = MaterialTheme.colorScheme.error)
+                    }
                 }
-                showExportDialog = false    
             }
-            
-            AlertDialog(
-                onDismissRequest = { },
-                title = { Text("Quick Exporting...") },
-                text = {
-                    Column {
-                        Text("Applying template ${template.title} and exporting video...")
-                        Spacer(modifier = Modifier.height(16.dp))
-                        LinearProgressIndicator(progress = { exportProgress }, modifier = Modifier.fillMaxWidth())
-                    }
-                },
-                confirmButton = {
-                    if (exportProgress >= 1f) {
-                        TextButton(onClick = { showExportDialog = false }) {
-                            Text("Done")
-                        }
-                    }
-                }
-            )
-        }
-        
-        if (showShareDialog) {
-            AlertDialog(
-                onDismissRequest = { showShareDialog = false },
-                title = { Text("Share Template") },
-                text = { 
-                    Text("Generating a shareable template file for ${template.title}. Anyone with Clipp can import this template.")
-                },
-                confirmButton = {
-                    TextButton(onClick = { showShareDialog = false }) {
-                        Text("Share")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showShareDialog = false }) {
-                        Text("Cancel")
-                    }
-                }
-            )
         }
     }
 }

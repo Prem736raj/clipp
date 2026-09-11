@@ -32,7 +32,7 @@ fun CrashScreen(errorMsg: String, onRestart: () -> Unit) {
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                "Clipp encountered an unexpected error and had to close. Don't worry, your progress was auto-saved.",
+                "Clipp encountered an unexpected error and had to close. Your last saved project state may still be available.",
                 style = MaterialTheme.typography.bodyLarge,
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurfaceVariant

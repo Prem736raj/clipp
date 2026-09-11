@@ -18,9 +18,16 @@ import androidx.compose.ui.unit.dp
 data class ChangelogEntry(val version: String, val date: String, val changes: List<String>)
 
 val changelog = listOf(
-    ChangelogEntry("v1.0.0", "Today", listOf("Initial release!", "Core video editing features", "AI Auto Captions & Enhancer", "Pro subscriptions unlocked")),
-    ChangelogEntry("Beta 0.9", "Last Week", listOf("Performance improvements", "Fixed export crash on budget devices", "Added new audio effects")),
-    ChangelogEntry("Beta 0.8", "2 Weeks Ago", listOf("Added community transitions", "UI improvements for Editor", "Background removal beta"))
+    ChangelogEntry(
+        "Current build",
+        "September 2026",
+        listOf(
+            "Projects and media references stay local to the device.",
+            "MP4 export now renders clip positioning/transform/crop keyframes, crop, filters, shader distortion effects, blur, mirror, shake, comic-book/pencil-sketch/pop-art/film-grain/sparkle/anamorphic-flare/light-leak/lens-flare/bokeh style effects, static text, captions, stickers, drawings, frames, supported text/sticker/image/GIF/video-overlay animations, photo/video-overlay chroma key, image, GIF, and video overlays, simple photo/video-source transitions, EQ/pitch/delay/reverb/distortion audio processing, supported fades, separate audio tracks, and volume keyframes/fade envelopes.",
+            "Music import and microphone voiceover recording are available in the editor.",
+            "Three built-in local templates can now replace selected media and create restorable projects, and saved projects can be exported sequentially as a local batch; remote templates, AI, cloud, and subscription flows remain clearly disabled."
+        )
+    )
 )
 
 @OptIn(ExperimentalMaterial3Api::class)

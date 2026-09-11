@@ -1,5 +1,0 @@
-187:            } else if (time < 2f / d1) {
-190:            } else if (time < 2.5f / d1) {
-193:            } else {
-196:            }
-275:            } else {

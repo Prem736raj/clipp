@@ -21,15 +21,16 @@ import androidx.compose.ui.unit.dp
 data class FAQItem(val question: String, val answer: String, val category: String)
 
 val FAQs = listOf(
-    FAQItem("How do I export a video?", "Tap the export button in the top right corner of the editor. Choose your resolution and frame rate, then tap 'Export'.", "Exporting"),
-    FAQItem("How do I remove the watermark?", "Pro users can remove the watermark in the export settings before exporting their video.", "Exporting"),
-    FAQItem("How do I add music?", "Tap the 'Audio' tool in the bottom menu, then select 'Sound FX' or 'AI Music' to add an audio track.", "Editing"),
-    FAQItem("Can I use my own music?", "Yes! Tap 'Audio', select 'Local Files', and pick a track from your device.", "Editing"),
-    FAQItem("How does Auto Caption work?", "Auto Caption uses AI to analyze your video's audio and automatically generates text captions. Tap 'Captions' -> 'Auto Caption'.", "AI Features"),
-    FAQItem("Is AI Enhancer free to use?", "AI Enhancer is available to all users, but free users have a daily limit. Pro users get unlimited access.", "AI Features"),
+    FAQItem("How do I export a video?", "Open Export in the editor and tap Export MP4. The renderer supports source clips, trims, still-image durations, speed, crop, clip positioning and transform/crop keyframes, filters, shader distortion effects, rotation/flip, volume, EQ/pitch/delay/reverb/distortion, volume keyframes and fade envelopes, static text, captions, stickers, drawings, frames, fade/scale/rotate/pulse/wave/swing text and sticker animation, fade/scale image/GIF/video-overlay animation, image, GIF, and video overlays, photo/video-overlay chroma key, simple photo/video-source transitions, supported fades, and separate audio tracks. Complex transitions involving edited sources, partial-duration legacy effects, masks/blend modes, noise reduction, voice effects, ducking, and audio crossfade remain blocked.", "Exporting"),
+    FAQItem("Does Clipp add a watermark?", "The current basic renderer does not add a watermark. Subscriptions and paid tiers are not active in this build.", "Exporting"),
+    FAQItem("Can I add music?", "Yes. Use Music to select an audio file, or Voiceover to record from the microphone. The selected track is saved in the local project and mixed into MP4 export.", "Editing"),
+    FAQItem("How do local templates work?", "Choose one of the built-in templates, select the media from your device, customize the title and subtitle, and create the project. The template state is saved locally and can be edited before export. Remote template catalogs and AI-generated templates are not active in this build.", "Editing"),
+    FAQItem("Can I export multiple projects?", "Open Projects and tap the download icon to select saved local projects for sequential MP4 export. Each completed file is saved to Movies/Clipp; projects with unreadable media or unsupported edits are reported individually.", "Exporting"),
+    FAQItem("How do I add captions?", "Static caption segments are rendered into export. Automatic speech transcription is not active in this build, so captions must come from an existing project state.", "Editing"),
+    FAQItem("Are AI editing tools available?", "AI enhancement, object removal, background removal, smart reframe, and related processing are disabled until they can be implemented and validated locally.", "Editing"),
     FAQItem("How do I split a clip?", "Move the playhead to the desired position on the timeline and tap the 'Split' tool.", "Editing"),
-    FAQItem("Why did my export fail?", "Export failures can happen due to lack of storage space or memory. Try clearing cache in Settings or lowering export resolution.", "Troubleshooting"),
-    FAQItem("How do I cancel my subscription?", "Go to Profile -> Subscription -> Manage Subscription. It will redirect you to Google Play.", "Account"),
+    FAQItem("Why did my export fail?", "Check that each source URI is still readable, that there is enough free storage, and that the project contains no unsupported mask/blend animation, complex edited-source transition, or blocked audio automation. The export screen reports the exact limitation.", "Troubleshooting"),
+    FAQItem("Can I cancel a subscription?", "There is no active subscription catalog or billing flow in this build.", "Account"),
     FAQItem("Where are my projects saved?", "Projects are saved locally on your device. Ensure you have enough storage space.", "Account")
 )
 
@@ -85,19 +86,6 @@ fun HelpCenterScreen(onClose: () -> Unit, onOpenContact: () -> Unit, onOpenRepor
                 }
                 
                 item {
-                    Spacer(Modifier.height(16.dp))
-                    Text("Tutorials", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(8.dp))
-                    
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TutorialCard(modifier = Modifier.weight(1f), title = "Getting Started", icon = Icons.Filled.PlayCircle)
-                        TutorialCard(modifier = Modifier.weight(1f), title = "Advanced Editing", icon = Icons.Filled.PlayCircle)
-                        TutorialCard(modifier = Modifier.weight(1f), title = "AI Features", icon = Icons.Filled.AutoAwesome)
-                    }
-                    Spacer(Modifier.height(16.dp))
-                }
-                
-                item {
                     ScrollableTabRow(
                         selectedTabIndex = categories.indexOf(selectedCategory),
                         edgePadding = 0.dp,
@@ -127,25 +115,6 @@ fun HelpCenterScreen(onClose: () -> Unit, onOpenContact: () -> Unit, onOpenRepor
                 
                 item { Spacer(Modifier.height(32.dp)) }
             }
-        }
-    }
-}
-
-@Composable
-fun TutorialCard(modifier: Modifier = Modifier, title: String, icon: androidx.compose.ui.graphics.vector.ImageVector) {
-    Surface(
-        modifier = modifier.height(100.dp).clickable { },
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant
-    ) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(12.dp),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
-            Spacer(Modifier.height(8.dp))
-            Text(title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
         }
     }
 }

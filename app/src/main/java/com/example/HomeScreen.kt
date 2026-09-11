@@ -29,19 +29,29 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 import com.example.data.ProjectEntity
+import com.example.data.ProjectStorage
 import com.example.viewmodel.ProjectViewModel
+
+private fun durationLabelToMs(label: String): Long {
+    val parts = label.split(":")
+    if (parts.size != 2) return 0L
+    val minutes = parts[0].toLongOrNull() ?: return 0L
+    val seconds = parts[1].toLongOrNull() ?: return 0L
+    return (minutes * 60L + seconds.coerceIn(0L, 59L)) * 1000L
+}
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, onProjectClick: (String) -> Unit, projectViewModel: ProjectViewModel) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val actualProjectSizes = remember(projects) {
+        projects.associate { project ->
+            project.id to ProjectStorage.calculateOwnedSizeBytes(context, project)
+        }
+    }
     var searchQuery by remember { mutableStateOf("") }
     var selectedProject by remember { mutableStateOf<ProjectEntity?>(null) }
-    var conflictProject by remember { mutableStateOf<ProjectEntity?>(null) }
     var showBottomSheet by remember { mutableStateOf(false) }
-    
-    var showQrDialog by remember { mutableStateOf<ProjectEntity?>(null) }
-    var showImportMissingMedia by remember { mutableStateOf(false) }
 
     val folders by projectViewModel.foldersState.collectAsState(initial = emptyList())
     var currentFolderId by remember { mutableStateOf<String?>(null) }
@@ -93,7 +103,7 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
         AlertDialog(
             onDismissRequest = { showCrashRecovery = false },
             title = { Text("We recovered your last session") },
-            text = { Text("Clipp closed unexpectedly, but we auto-saved your progress. Would you like to return to your last edited project?") },
+            text = { Text("Clipp closed unexpectedly. The last saved project state may still be available. Would you like to open your most recently edited project?") },
             confirmButton = {
                 TextButton(onClick = { 
                     showCrashRecovery = false
@@ -124,7 +134,8 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
         when (sortBy) {
             "Name" -> p1.name.compareTo(p2.name)
             "Date Created" -> p2.creationDate.compareTo(p1.creationDate)
-            "Size" -> p2.sizeBytes.compareTo(p1.sizeBytes)
+            "Size" -> (actualProjectSizes[p2.id] ?: p2.sizeBytes).compareTo(actualProjectSizes[p1.id] ?: p1.sizeBytes)
+            "Duration" -> durationLabelToMs(p2.duration).compareTo(durationLabelToMs(p1.duration))
             // Default "Last Edited"
             else -> p2.lastEdited.compareTo(p1.lastEdited)
         }
@@ -181,110 +192,6 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
                     )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    val tasks by com.example.viewmodel.BackgroundTaskManager.tasks.collectAsState()
-                    val activeTasks = tasks.count { it.status == com.example.viewmodel.TaskStatus.RUNNING || it.status == com.example.viewmodel.TaskStatus.QUEUED }
-                    
-                    var showTaskManager by remember { mutableStateOf(false) }
-                    
-                    IconButton(onClick = { showTaskManager = true }) {
-                        BadgedBox(
-                            badge = {
-                                if (activeTasks > 0) {
-                                    Badge { Text("$activeTasks") }
-                                }
-                            }
-                        ) {
-                            Icon(Icons.Filled.ListAlt, contentDescription = "Task Manager", tint = MaterialTheme.colorScheme.onBackground)
-                        }
-                    }
-                    
-                    if (showTaskManager) {
-                        ModalBottomSheet(
-                            onDismissRequest = { showTaskManager = false }
-                        ) {
-                            Column(modifier = Modifier.padding(16.dp).fillMaxWidth()) {
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                    Text("Background Tasks", style = MaterialTheme.typography.titleLarge)
-                                    TextButton(onClick = { com.example.viewmodel.BackgroundTaskManager.clearCompleted() }) {
-                                        Text("Clear Completed")
-                                    }
-                                }
-                                
-                                if (tasks.isEmpty()) {
-                                    Text("No background tasks.", modifier = Modifier.padding(vertical = 32.dp).align(Alignment.CenterHorizontally))
-                                } else {
-                                    androidx.compose.foundation.lazy.LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
-                                        items(tasks) { task ->
-                                            Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                                                Row(modifier = Modifier.padding(12.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                                    Column(modifier = Modifier.weight(1f)) {
-                                                        Text(task.title, fontWeight = FontWeight.Bold)
-                                                        Text("Status: ${task.status.name}", style = MaterialTheme.typography.bodySmall)
-                                                        if (task.message != null) Text(task.message!!, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                                                        
-                                                        Spacer(Modifier.height(4.dp))
-                                                        if (task.status == com.example.viewmodel.TaskStatus.RUNNING) {
-                                                            LinearProgressIndicator(progress = { task.progress }, modifier = Modifier.fillMaxWidth())
-                                                        }
-                                                    }
-                                                    
-                                                    Row {
-                                                        if (task.status == com.example.viewmodel.TaskStatus.RUNNING) {
-                                                            IconButton(onClick = { com.example.viewmodel.BackgroundTaskManager.pauseTask(task.id) }) {
-                                                                Icon(Icons.Filled.Pause, "Pause")
-                                                            }
-                                                        } else if (task.status == com.example.viewmodel.TaskStatus.PAUSED) {
-                                                            IconButton(onClick = { com.example.viewmodel.BackgroundTaskManager.resumeTask(task.id) }) {
-                                                                Icon(Icons.Filled.PlayArrow, "Resume")
-                                                            }
-                                                        } else if (task.status == com.example.viewmodel.TaskStatus.FAILED) {
-                                                            var showErr by remember { mutableStateOf(false) }
-                                                            IconButton(onClick = { showErr = true }) {
-                                                                Icon(Icons.Filled.Warning, "View Error", tint = MaterialTheme.colorScheme.error)
-                                                            }
-                                                            if (showErr) {
-                                                                com.example.OperationsErrorDialog(
-                                                                    title = "Task Failed: ${task.title}",
-                                                                    errorMessage = "The operation failed due to an unexpected system issue.",
-                                                                    suggestedFix = "Try clearing some storage space or rebooting the app. If exporting, try a lower resolution.",
-                                                                    onDismiss = { showErr = false },
-                                                                    onRetry = {
-                                                                        showErr = false
-                                                                        com.example.viewmodel.BackgroundTaskManager.updateStatus(task.id, com.example.viewmodel.TaskStatus.QUEUED)
-                                                                    },
-                                                                    onReportIssue = {
-                                                                        showErr = false
-                                                                        android.widget.Toast.makeText(context, "Issue reported. Thank you!", android.widget.Toast.LENGTH_SHORT).show()
-                                                                    }
-                                                                )
-                                                            }
-                                                        }
-                                                        
-                                                        if (task.status == com.example.viewmodel.TaskStatus.QUEUED || task.status == com.example.viewmodel.TaskStatus.RUNNING || task.status == com.example.viewmodel.TaskStatus.PAUSED) {
-                                                            IconButton(onClick = { com.example.viewmodel.BackgroundTaskManager.cancelTask(task.id) }) {
-                                                                Icon(Icons.Filled.Close, "Cancel")
-                                                            }
-                                                        }
-                                                        if (task.status == com.example.viewmodel.TaskStatus.QUEUED && !task.isHighPriority) {
-                                                            IconButton(onClick = { com.example.viewmodel.BackgroundTaskManager.prioritizeTask(task.id) }) {
-                                                                Icon(Icons.Filled.KeyboardDoubleArrowUp, "Prioritize")
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                Spacer(Modifier.height(32.dp))
-                            }
-                        }
-                    }
-
-                    IconButton(onClick = { showImportMissingMedia = true }) {
-                        Icon(imageVector = Icons.Filled.QrCodeScanner, contentDescription = "Import Project", tint = MaterialTheme.colorScheme.onBackground)
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
                     Box(
                         modifier = Modifier
                             .size(40.dp)
@@ -300,38 +207,8 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
                 }
             }
 
-            // Recent Exports
-            Column(modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
-                Text(
-                    text = "Recent Exports",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                androidx.compose.foundation.lazy.LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(5) { index ->
-                        Box(
-                            modifier = Modifier
-                                .width(120.dp)
-                                .aspectRatio(9f/16f)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Color.DarkGray)
-                                .clickable { },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(Icons.Filled.PlayArrow, contentDescription = "Play", modifier = Modifier.size(32.dp), tint = Color.White.copy(alpha = 0.7f))
-                        }
-                    }
-                }
-            }
-
             Spacer(modifier = Modifier.height(16.dp))
-            
+
             // Search Bar
             OutlinedTextField(
                 value = searchQuery,
@@ -464,13 +341,7 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
                         items(displayedProjects) { project ->
                             ProjectCard(
                                 project = project,
-                                onClick = { 
-                                    if (project.syncStatus == "conflict") {
-                                        conflictProject = project
-                                    } else {
-                                        onProjectClick(project.id) 
-                                    }
-                                },
+                                onClick = { onProjectClick(project.id) },
                                 onLongPress = {
                                     selectedProject = project
                                     showBottomSheet = true
@@ -487,14 +358,8 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
                     ) {
                         items(displayedProjects) { project ->
                             ProjectListItem(
-                                project = project,
-                                onClick = { 
-                                    if (project.syncStatus == "conflict") {
-                                        conflictProject = project
-                                    } else {
-                                        onProjectClick(project.id) 
-                                    }
-                                },
+                                project = project.copy(sizeBytes = actualProjectSizes[project.id] ?: project.sizeBytes),
+                                onClick = { onProjectClick(project.id) },
                                 onLongPress = {
                                     selectedProject = project
                                     showBottomSheet = true
@@ -507,81 +372,6 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
             }
         }
         
-        if (conflictProject != null) {
-            AlertDialog(
-                onDismissRequest = { conflictProject = null },
-                title = { Text("Sync Conflict") },
-                text = { Text("This project was edited on another device. Which version would you like to keep?") },
-                confirmButton = {
-                    TextButton(onClick = { 
-                        projectViewModel.updateProject(conflictProject!!.copy(syncStatus = "synced"))
-                        conflictProject = null 
-                    }) {
-                        Text("Keep Local Version")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { 
-                        projectViewModel.updateProject(conflictProject!!.copy(syncStatus = "synced"))
-                        conflictProject = null 
-                    }) {
-                        Text("Keep Cloud Version")
-                    }
-                }
-            )
-        }
-
-        if (showQrDialog != null) {
-            AlertDialog(
-                onDismissRequest = { showQrDialog = null },
-                title = { Text("Transfer Project") },
-                text = { 
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                        Text("Scan this QR code from another device to import \"${showQrDialog!!.name}\".")
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Box(modifier = Modifier.size(200.dp).background(Color.White), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Filled.QrCode, contentDescription = null, modifier = Modifier.size(180.dp), tint = Color.Black)
-                        }
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = { showQrDialog = null }) {
-                        Text("Done")
-                    }
-                }
-            )
-        }
-
-        if (showImportMissingMedia) {
-            AlertDialog(
-                onDismissRequest = { showImportMissingMedia = false },
-                title = { Text("Importing Project") },
-                text = { 
-                    Column {
-                        Text("Project data imported successfully.")
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("Missing Source Media:", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
-                        Text("• IMG_0024.mp4\n• AudioTrack.mp3")
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text("Please re-link these files from your local gallery to restore the project completely.")
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = { 
-                        showImportMissingMedia = false 
-                        android.widget.Toast.makeText(context, "Media items re-linked!", android.widget.Toast.LENGTH_SHORT).show()
-                    }) {
-                        Text("Re-link Media")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showImportMissingMedia = false }) {
-                        Text("Cancel")
-                    }
-                }
-            )
-        }
-
         if (showCreateFolderDialog) {
             var newFolderName by remember { mutableStateOf("") }
             AlertDialog(
@@ -630,34 +420,8 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
                             modifier = Modifier.padding(16.dp)
                         )
                     }
-                    if (selectedProject!!.lastBackupTime > 0) {
-                        item {
-                            Text(
-                                text = "Backed up at: ${android.text.format.DateFormat.format("MMM dd, yyyy h:mm a", java.util.Date(selectedProject!!.lastBackupTime))} (${selectedProject!!.backupSize / 1024} KB)",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
                     item { HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant) }
-                    
-                    if (selectedProject?.syncStatus == "not_backed_up") {
-                        item { 
-                            BottomSheetItem(icon = Icons.Filled.CloudUpload, text = "Backup to Cloud") {
-                                projectViewModel.syncProjectToCloud(selectedProject!!)
-                                showBottomSheet = false
-                            }
-                        }
-                    } else if (selectedProject?.syncStatus == "synced") {
-                        item {
-                            BottomSheetItem(icon = Icons.Filled.Warning, text = "Simulate Sync Conflict") {
-                                projectViewModel.updateProject(selectedProject!!.copy(syncStatus = "conflict"))
-                                showBottomSheet = false
-                            }
-                        }
-                    }
-                    
+
                     item {
                         var moveExpanded by remember { mutableStateOf(false) }
                         Box {
@@ -719,33 +483,6 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
                         }
                     }
 
-                    item {
-                        BottomSheetItem(icon = Icons.Filled.Edit, text = "Rename") {
-                            showBottomSheet = false
-                        }
-                    }
-                    item {
-                        BottomSheetItem(icon = Icons.Filled.ContentCopy, text = "Duplicate") {
-                            showBottomSheet = false
-                        }
-                    }
-                    item {
-                        BottomSheetItem(icon = Icons.Filled.Share, text = "Share") {
-                            showBottomSheet = false
-                        }
-                    }
-                    item {
-                        BottomSheetItem(icon = Icons.Filled.QrCode, text = "Transfer Project") {
-                            showQrDialog = selectedProject
-                            showBottomSheet = false
-                        }
-                    }
-                    item {
-                        BottomSheetItem(icon = Icons.Filled.IosShare, text = "Export Project File (.clipp)") {
-                            android.widget.Toast.makeText(context, "Exported successfully. You can now share ${selectedProject!!.name}.clipp", android.widget.Toast.LENGTH_LONG).show()
-                            showBottomSheet = false
-                        }
-                    }
                     item {
                         BottomSheetItem(icon = Icons.Filled.Delete, text = "Delete", isDestructive = true) {
                             projectViewModel.deleteProject(selectedProject!!)
@@ -907,29 +644,6 @@ fun ProjectCard(project: ProjectEntity, onClick: () -> Unit, onLongPress: () -> 
                     )
                 }
 
-                if (project.syncStatus == "synced") {
-                    Icon(
-                        imageVector = Icons.Filled.CloudDone,
-                        contentDescription = "Synced",
-                        modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).size(20.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                } else if (project.syncStatus == "syncing") {
-                    Icon(
-                        imageVector = Icons.Filled.CloudSync,
-                        contentDescription = "Syncing",
-                        modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).size(20.dp),
-                        tint = MaterialTheme.colorScheme.secondary
-                    )
-                } else if (project.syncStatus == "conflict") {
-                    Icon(
-                        imageVector = Icons.Filled.Error,
-                        contentDescription = "Conflict",
-                        modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).size(20.dp),
-                        tint = MaterialTheme.colorScheme.error
-                    )
-                }
-                
                 // Duration badge
                 Box(
                     modifier = Modifier
