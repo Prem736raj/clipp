@@ -7031,7 +7031,7 @@ fun EditorScreen(
                         }
 
                         Text(
-                            "Export supports crossfade, slide, zoom, spin, and flip between adjacent simple photo/video sources, plus wipe transitions for simple photos. Complex transitions involving edited sources stay gated until both composited frames can be rendered.",
+                            "Export supports crossfade, slide, zoom, spin, flip, and photo wipe transitions between adjacent clips with export-ready trim, speed, crop, transform, filter, and supported effect edits. Unsupported effects remain gated.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

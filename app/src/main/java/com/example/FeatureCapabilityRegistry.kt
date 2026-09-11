@@ -137,8 +137,8 @@ internal object FeatureCapabilityRegistry {
         FeatureCapabilityStatus(
             id = "complex-transitions",
             label = "Transitions between edited sources",
-            capability = FeatureCapability.PREVIEW_ONLY_EXPERIMENTAL,
-            detail = "Advanced transitions are export-ready only for compatible simple adjacent sources."
+            capability = FeatureCapability.PREVIEW_AND_EXPORT_SUPPORTED,
+            detail = "Crossfade, slide, zoom, spin, flip, and photo wipe transitions render export-ready edits on both adjacent sources."
         ),
         FeatureCapabilityStatus(
             id = "masks-and-blends",
@@ -258,17 +258,13 @@ internal object FeatureCapabilityRegistry {
         val sourceCompatible = if (outgoing == null || incoming == null) {
             true
         } else {
-            val outgoingSimple = if (outgoing.isPhoto) {
-                outgoing.canRenderPhotoTransitionSource()
-            } else {
-                outgoing.canRenderVideoTransitionSource()
-            }
+            val outgoingCompatible = outgoing.canRenderTransitionBaseSource()
             val incomingSimple = if (incoming.isPhoto) {
                 incoming.canRenderPhotoTransitionSource()
             } else {
                 type in exportVideoTransitions && incoming.canRenderVideoTransitionSource()
             }
-            outgoingSimple && incomingSimple
+            outgoingCompatible && incomingSimple
         }
 
         return if (sourceCompatible) {

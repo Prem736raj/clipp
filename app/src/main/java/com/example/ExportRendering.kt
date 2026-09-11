@@ -31,8 +31,10 @@ import androidx.media3.effect.RgbMatrix
 import androidx.media3.effect.ScaleAndRotateTransformation
 import androidx.media3.effect.TextureOverlay
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.random.Random
 
@@ -48,6 +50,20 @@ private val EXPORT_PHOTO_TRANSITIONS = FeatureCapabilityRegistry.exportPhotoTran
 private val EXPORT_SUPPORTED_TEXT_ANIM_IN = FeatureCapabilityRegistry.exportSupportedTextAnimIn
 private val EXPORT_SUPPORTED_TEXT_ANIM_LOOP = FeatureCapabilityRegistry.exportSupportedTextAnimLoop
 private val EXPORT_SUPPORTED_TEXT_ANIM_OUT = FeatureCapabilityRegistry.exportSupportedTextAnimOut
+private val EXPORT_TRANSITION_SOURCE_EFFECTS = setOf(
+    EffectType.MIRROR,
+    EffectType.SHAKE,
+    EffectType.COMIC_BOOK,
+    EffectType.PENCIL_SKETCH,
+    EffectType.POP_ART,
+    EffectType.LETTERBOX,
+    EffectType.FILM_GRAIN,
+    EffectType.ANAMORPHIC_FLARE,
+    EffectType.SPARKLE,
+    EffectType.LIGHT_LEAK,
+    EffectType.LENS_FLARE,
+    EffectType.BOKEH
+)
 
 /** A small, deterministic overlay implementation used by the Media3 renderer. */
 private class TimedBitmapOverlay(
@@ -66,13 +82,18 @@ private class TimedBitmapOverlay(
 }
 
 /**
- * Renders a still-image transition over the tail of a photo clip. The next
- * photo is already the first frame after the cut, so this avoids duplicating
- * or shortening the timeline while still producing a real transition.
+ * Samples the incoming source and renders the same export-ready clip edits
+ * before applying the transition. The old implementation placed a raw frame
+ * from the incoming source above the outgoing clip, which made trim/speed,
+ * crop, transforms, filters, and supported clip effects disappear during the
+ * transition. This overlay keeps the transition non-destructive: the primary
+ * sequence still owns the outgoing clip and the next clip still starts at the
+ * original cut point.
  */
-private class PhotoTransitionBitmapOverlay(
+private class TransitionSourceBitmapOverlay(
+    context: Context,
+    private val clip: MediaClip,
     private val type: TransitionType,
-    private val sourceBitmap: Bitmap,
     private val blankBitmap: Bitmap,
     private val windowStartMs: Long,
     private val windowEndMs: Long
@@ -81,74 +102,68 @@ private class PhotoTransitionBitmapOverlay(
         const val SAMPLE_INTERVAL_MS = 33L
     }
 
+    private val sourceBitmap = if (clip.isPhoto) loadBitmap(context, clip.sourceUri) else null
+    private val retriever = if (clip.isPhoto) {
+        null
+    } else {
+        MediaMetadataRetriever().also { it.setDataSource(context, Uri.parse(clip.sourceUri)) }
+    }
     private var cachedSampleTimeMs = Long.MIN_VALUE
-    private var cachedBitmap: Bitmap? = null
+    private var cachedFrame: Bitmap? = null
     private var released = false
 
     override fun getBitmap(presentationTimeUs: Long): Bitmap {
         val localTimeMs = presentationTimeUs / 1_000L
         if (localTimeMs < windowStartMs || localTimeMs >= windowEndMs) return blankBitmap
-        if (type != TransitionType.WIPE_LEFT &&
-            type != TransitionType.WIPE_RIGHT &&
-            type != TransitionType.CLOCK_WIPE
-        ) return sourceBitmap
 
-        val sampleTimeMs = (localTimeMs / SAMPLE_INTERVAL_MS) * SAMPLE_INTERVAL_MS
+        val incomingTimeMs = (localTimeMs - windowStartMs).coerceAtLeast(0L)
+        val sampleTimeMs = (incomingTimeMs / SAMPLE_INTERVAL_MS) * SAMPLE_INTERVAL_MS
         synchronized(this) {
             if (released) return blankBitmap
-            if (sampleTimeMs == cachedSampleTimeMs) return cachedBitmap ?: blankBitmap
-            val progress = transitionProgress(localTimeMs)
-            val next = Bitmap.createBitmap(
-                sourceBitmap.width.coerceAtLeast(1),
-                sourceBitmap.height.coerceAtLeast(1),
-                Bitmap.Config.ARGB_8888
-            )
-            val canvas = Canvas(next)
-            canvas.drawColor(android.graphics.Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
-            canvas.save()
-            when (type) {
-                TransitionType.WIPE_LEFT -> canvas.clipRect(
-                    0f,
-                    0f,
-                    sourceBitmap.width * progress,
-                    sourceBitmap.height.toFloat()
+            if (sampleTimeMs == cachedSampleTimeMs) return cachedFrame ?: blankBitmap
+
+            val sourceTimeMs = if (clip.isPhoto) {
+                0L
+            } else {
+                val sourceDurationMs = (clip.effectiveTrimEndMs - clip.effectiveTrimStartMs).coerceAtLeast(1L)
+                val sourceOffsetMs = (sampleTimeMs.toDouble() * clip.playbackSpeed).toLong()
+                (clip.effectiveTrimStartMs + sourceOffsetMs).coerceIn(
+                    clip.effectiveTrimStartMs,
+                    clip.effectiveTrimStartMs + sourceDurationMs - 1L
                 )
-                TransitionType.WIPE_RIGHT -> canvas.clipRect(
-                    sourceBitmap.width * (1f - progress),
-                    0f,
-                    sourceBitmap.width.toFloat(),
-                    sourceBitmap.height.toFloat()
-                )
-                TransitionType.CLOCK_WIPE -> {
-                    val centerX = sourceBitmap.width / 2f
-                    val centerY = sourceBitmap.height / 2f
-                    val radius = max(sourceBitmap.width, sourceBitmap.height).toFloat()
-                    val path = Path().apply {
-                        moveTo(centerX, centerY)
-                        lineTo(centerX, centerY - radius)
-                        arcTo(
-                            RectF(centerX - radius, centerY - radius, centerX + radius, centerY + radius),
-                            -90f,
-                            360f * progress,
-                            false
-                        )
-                        close()
-                    }
-                    canvas.clipPath(path)
-                }
-                else -> Unit
             }
-            canvas.drawBitmap(sourceBitmap, 0f, 0f, null)
-            canvas.restore()
-            cachedBitmap?.takeIf { !it.isRecycled }?.recycle()
-            cachedBitmap = next
-            cachedSampleTimeMs = sampleTimeMs
-            return next
+            val decoded = if (clip.isPhoto) {
+                sourceBitmap
+            } else {
+                runCatching {
+                    retriever?.getFrameAtTime(
+                        sourceTimeMs * 1_000L,
+                        MediaMetadataRetriever.OPTION_CLOSEST
+                    )
+                }.getOrNull()
+            }
+            val rendered = decoded?.let {
+                renderTransitionSourceFrame(
+                    source = it,
+                    clip = clip,
+                    localTimeMs = sampleTimeMs,
+                    transitionType = type,
+                    transitionProgress = transitionProgress(localTimeMs, windowStartMs, windowEndMs)
+                )
+            }
+            if (!clip.isPhoto) decoded?.takeIf { it !== rendered }?.recycle()
+            if (rendered != null) {
+                cachedFrame?.takeIf { it !== rendered && !it.isRecycled }?.recycle()
+                cachedFrame = rendered
+                cachedSampleTimeMs = sampleTimeMs
+            }
+            return cachedFrame ?: blankBitmap
         }
     }
 
     override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings {
-        return transitionOverlaySettings(
+        return transitionSourceOverlaySettings(
+            clip = clip,
             type = type,
             localTimeMs = presentationTimeUs / 1_000L,
             windowStartMs = windowStartMs,
@@ -160,15 +175,12 @@ private class PhotoTransitionBitmapOverlay(
         synchronized(this) {
             if (released) return
             released = true
-            cachedBitmap?.takeIf { !it.isRecycled && it !== sourceBitmap }?.recycle()
-            cachedBitmap = null
-            sourceBitmap.takeIf { !it.isRecycled }?.recycle()
+            cachedFrame?.takeIf { !it.isRecycled }?.recycle()
+            cachedFrame = null
+            sourceBitmap?.takeIf { !it.isRecycled }?.recycle()
+            runCatching { retriever?.release() }
         }
         super.release()
-    }
-
-    private fun transitionProgress(localTimeMs: Long): Float {
-        return transitionProgress(localTimeMs, windowStartMs, windowEndMs)
     }
 }
 
@@ -214,17 +226,82 @@ private fun transitionOverlaySettings(
     }
 }
 
+private fun transitionSourceOverlaySettings(
+    clip: MediaClip,
+    type: TransitionType,
+    localTimeMs: Long,
+    windowStartMs: Long,
+    windowEndMs: Long
+): OverlaySettings {
+    val incomingTimeMs = (localTimeMs - windowStartMs).coerceAtLeast(0L)
+    val eased = easedProgress(transitionProgress(localTimeMs, windowStartMs, windowEndMs))
+    val scale = clip.keyframes.getValueAtTime("scale", incomingTimeMs, clip.scale)
+        .coerceIn(0.05f, 10f)
+    val posX = clip.keyframes.getValueAtTime("posX", incomingTimeMs, clip.posX)
+        .coerceIn(-4f, 4f)
+    val posY = clip.keyframes.getValueAtTime("posY", incomingTimeMs, clip.posY)
+        .coerceIn(-4f, 4f)
+    var targetX = posX
+    var targetY = posY
+    var transitionScale = 1f
+    var transitionRotation = 0f
+    var alpha = 1f
+
+    when (type) {
+        TransitionType.CROSSFADE -> alpha = eased
+        TransitionType.SLIDE_LEFT -> targetX += 1f - eased
+        TransitionType.SLIDE_RIGHT -> targetX -= 1f - eased
+        TransitionType.SLIDE_UP -> targetY += 1f - eased
+        TransitionType.SLIDE_DOWN -> targetY -= 1f - eased
+        TransitionType.ZOOM_IN -> {
+            transitionScale = 0.55f + 0.45f * eased
+            alpha = eased
+        }
+        TransitionType.ZOOM_OUT -> {
+            transitionScale = 1.45f - 0.45f * eased
+            alpha = eased
+        }
+        TransitionType.SPIN -> {
+            transitionRotation = (1f - eased) * 180f
+            alpha = eased
+        }
+        TransitionType.FLIP -> {
+            transitionScale = eased.coerceAtLeast(0.02f)
+            alpha = eased
+        }
+        else -> Unit
+    }
+
+    val shakeIntensity = clip.effects
+        .filter { it.type == EffectType.SHAKE && it.isActiveAt(incomingTimeMs, clip.durationMs) }
+        .maxOfOrNull { it.intensity.coerceIn(0f, 1f) }
+        ?: 0f
+    if (shakeIntensity > 0f) {
+        targetX += sin(incomingTimeMs / 1_000f * 31f) * 0.025f * shakeIntensity / 2f
+        targetY -= sin(incomingTimeMs / 1_000f * 43f + 0.7f) * 0.025f * shakeIntensity / 2f
+    }
+
+    return overlaySettings(
+        posX = targetX,
+        posY = targetY,
+        scaleX = scale * transitionScale,
+        scaleY = scale * transitionScale,
+        rotation = clip.keyframes.getValueAtTime("rotation", incomingTimeMs, clip.rotation) + transitionRotation,
+        alpha = alpha,
+        allowOffscreen = type == TransitionType.SLIDE_LEFT ||
+            type == TransitionType.SLIDE_RIGHT ||
+            type == TransitionType.SLIDE_UP ||
+            type == TransitionType.SLIDE_DOWN
+    )
+}
+
 private data class BitmapWindow(
     val startMs: Long,
     val endMs: Long,
     val bitmap: Bitmap
 )
 
-/**
- * Samples a secondary video on the export timeline and exposes the decoded
- * frame as a Media3 texture overlay. The small time bucket keeps repeated
- * texture-size and bitmap requests from decoding the same frame twice.
- */
+/** Samples an ordinary video overlay without applying primary-clip edits. */
 private class VideoFrameBitmapOverlay(
     context: Context,
     private val sourceUri: String,
@@ -425,6 +502,9 @@ private class ProceduralEffectBitmapOverlay(
         }
         super.release()
     }
+
+    /** Creates one deterministic texture for a composed transition frame. */
+    internal fun renderBitmapAt(sampleTimeMs: Long): Bitmap = render(sampleTimeMs)
 
     private fun render(sampleTimeMs: Long): Bitmap {
         val bitmap = Bitmap.createBitmap(BITMAP_SIZE, BITMAP_SIZE, Bitmap.Config.ARGB_8888)
@@ -953,6 +1033,240 @@ private fun renderOverlayClipBitmap(context: Context, overlay: OverlayClip): Bit
     }
 }
 
+private const val TRANSITION_SOURCE_MAX_FRAME_DIMENSION = 1600
+
+private fun renderTransitionSourceFrame(
+    source: Bitmap,
+    clip: MediaClip,
+    localTimeMs: Long,
+    transitionType: TransitionType,
+    transitionProgress: Float
+): Bitmap? {
+    var current = source.copy(Bitmap.Config.ARGB_8888, true) ?: return null
+    val largestDimension = max(current.width, current.height)
+    if (largestDimension > TRANSITION_SOURCE_MAX_FRAME_DIMENSION) {
+        val scale = TRANSITION_SOURCE_MAX_FRAME_DIMENSION.toFloat() / largestDimension.toFloat()
+        val scaled = Bitmap.createScaledBitmap(
+            current,
+            (current.width * scale).roundToInt().coerceAtLeast(1),
+            (current.height * scale).roundToInt().coerceAtLeast(1),
+            true
+        )
+        current.recycle()
+        current = scaled
+    }
+
+    val cropLeft = clip.keyframes
+        .getValueAtTime("cropLeft", localTimeMs, clip.cropRect.left)
+        .coerceIn(0f, 1f)
+    val cropTop = clip.keyframes
+        .getValueAtTime("cropTop", localTimeMs, clip.cropRect.top)
+        .coerceIn(0f, 1f)
+    val cropRight = clip.keyframes
+        .getValueAtTime("cropRight", localTimeMs, clip.cropRect.right)
+        .coerceIn(cropLeft + 0.001f, 1f)
+    val cropBottom = clip.keyframes
+        .getValueAtTime("cropBottom", localTimeMs, clip.cropRect.bottom)
+        .coerceIn(cropTop + 0.001f, 1f)
+    if (cropLeft > 0f || cropTop > 0f || cropRight < 1f || cropBottom < 1f) {
+        val left = (current.width * cropLeft).roundToInt().coerceIn(0, current.width - 1)
+        val top = (current.height * cropTop).roundToInt().coerceIn(0, current.height - 1)
+        val right = (current.width * cropRight).roundToInt().coerceIn(left + 1, current.width)
+        val bottom = (current.height * cropBottom).roundToInt().coerceIn(top + 1, current.height)
+        val cropped = Bitmap.createBitmap(current, left, top, right - left, bottom - top)
+        current.recycle()
+        current = cropped
+    }
+
+    val colorMatrix = ColorMatrix().apply {
+        timesAssign(getColorMatrixForFilter(clip.filterType, clip.filterIntensity))
+        timesAssign(getColorMatrixForAdjustments(clip.adjustments))
+    }
+    if (!isIdentityColorMatrix(colorMatrix)) {
+        val colorCorrected = applyBitmapColorMatrix(current, colorMatrix)
+        current.recycle()
+        current = colorCorrected
+    }
+
+    if (clip.flipHorizontal || clip.flipVertical) {
+        val flipped = flipBitmap(current, clip.flipHorizontal, clip.flipVertical)
+        current.recycle()
+        current = flipped
+    }
+
+    clip.effects
+        .filter { it.type in EXPORT_TRANSITION_SOURCE_EFFECTS && it.isActiveAt(localTimeMs, clip.durationMs) }
+        .forEach { effect ->
+            val effected = applyTransitionSourceEffect(current, effect, localTimeMs)
+            if (effected !== current) {
+                current.recycle()
+                current = effected
+            }
+        }
+
+    if (transitionType == TransitionType.WIPE_LEFT ||
+        transitionType == TransitionType.WIPE_RIGHT ||
+        transitionType == TransitionType.CLOCK_WIPE
+    ) {
+        val masked = applyTransitionMask(current, transitionType, transitionProgress)
+        current.recycle()
+        current = masked
+    }
+    return current
+}
+
+private fun AppliedEffect.isActiveAt(localTimeMs: Long, clipDurationMs: Long): Boolean {
+    val start = startTimeMs.coerceAtLeast(0L)
+    val end = if (endTimeMs == -1L) clipDurationMs else endTimeMs.coerceAtLeast(start)
+    return localTimeMs >= start && localTimeMs < end
+}
+
+private fun isIdentityColorMatrix(matrix: ColorMatrix): Boolean {
+    val identity = floatArrayOf(
+        1f, 0f, 0f, 0f, 0f,
+        0f, 1f, 0f, 0f, 0f,
+        0f, 0f, 1f, 0f, 0f,
+        0f, 0f, 0f, 1f, 0f
+    )
+    return matrix.values.indices.all { index ->
+        abs(matrix.values[index] - identity[index]) < 0.001f
+    }
+}
+
+private fun applyBitmapColorMatrix(source: Bitmap, matrix: ColorMatrix): Bitmap {
+    val output = Bitmap.createBitmap(
+        source.width.coerceAtLeast(1),
+        source.height.coerceAtLeast(1),
+        Bitmap.Config.ARGB_8888
+    )
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        colorFilter = android.graphics.ColorMatrixColorFilter(matrix.values.copyOf())
+    }
+    Canvas(output).drawBitmap(source, 0f, 0f, paint)
+    return output
+}
+
+private fun flipBitmap(source: Bitmap, horizontal: Boolean, vertical: Boolean): Bitmap {
+    val output = Bitmap.createBitmap(
+        source.width.coerceAtLeast(1),
+        source.height.coerceAtLeast(1),
+        Bitmap.Config.ARGB_8888
+    )
+    val canvas = Canvas(output)
+    canvas.scale(
+        if (horizontal) -1f else 1f,
+        if (vertical) -1f else 1f,
+        source.width / 2f,
+        source.height / 2f
+    )
+    canvas.drawBitmap(source, 0f, 0f, null)
+    return output
+}
+
+private fun applyTransitionSourceEffect(
+    source: Bitmap,
+    effect: AppliedEffect,
+    localTimeMs: Long
+): Bitmap {
+    return when (effect.type) {
+        EffectType.MIRROR -> flipBitmap(source, horizontal = true, vertical = false)
+        EffectType.COMIC_BOOK -> applyBitmapColorMatrix(source, ColorMatrix().apply {
+            setToSaturation(1f + 1.5f * effect.intensity.coerceIn(0f, 1f))
+        })
+        EffectType.PENCIL_SKETCH -> applyBitmapColorMatrix(source, ColorMatrix().apply {
+            setToSaturation(1f - effect.intensity.coerceIn(0f, 1f))
+        })
+        EffectType.POP_ART -> applyBitmapColorMatrix(source, ColorMatrix().apply {
+            setToSaturation(1f + 2f * effect.intensity.coerceIn(0f, 1f))
+        })
+        EffectType.LETTERBOX -> {
+            val output = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(output)
+            canvas.drawBitmap(source, 0f, 0f, null)
+            val barHeight = source.height * 0.15f * effect.intensity.coerceIn(0f, 1f)
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.BLACK }
+            canvas.drawRect(0f, 0f, source.width.toFloat(), barHeight, paint)
+            canvas.drawRect(0f, source.height - barHeight, source.width.toFloat(), source.height.toFloat(), paint)
+            output
+        }
+        EffectType.FILM_GRAIN,
+        EffectType.ANAMORPHIC_FLARE,
+        EffectType.SPARKLE,
+        EffectType.LIGHT_LEAK,
+        EffectType.LENS_FLARE,
+        EffectType.BOKEH -> {
+            val output = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(output)
+            canvas.drawBitmap(source, 0f, 0f, null)
+            val blank = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+            val texture = ProceduralEffectBitmapOverlay(
+                type = effect.type,
+                intensity = effect.intensity,
+                blankBitmap = blank,
+                windowStartMs = 0L,
+                windowEndMs = Long.MAX_VALUE
+            ).renderBitmapAt(localTimeMs)
+            canvas.drawBitmap(
+                texture,
+                null,
+                RectF(0f, 0f, source.width.toFloat(), source.height.toFloat()),
+                null
+            )
+            texture.recycle()
+            blank.recycle()
+            output
+        }
+        EffectType.SHAKE -> source
+        else -> source
+    }
+}
+
+private fun applyTransitionMask(
+    source: Bitmap,
+    type: TransitionType,
+    progress: Float
+): Bitmap {
+    val output = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(output)
+    canvas.drawColor(android.graphics.Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
+    canvas.save()
+    when (type) {
+        TransitionType.WIPE_LEFT -> canvas.clipRect(
+            0f,
+            0f,
+            source.width * progress,
+            source.height.toFloat()
+        )
+        TransitionType.WIPE_RIGHT -> canvas.clipRect(
+            source.width * (1f - progress),
+            0f,
+            source.width.toFloat(),
+            source.height.toFloat()
+        )
+        TransitionType.CLOCK_WIPE -> {
+            val centerX = source.width / 2f
+            val centerY = source.height / 2f
+            val radius = max(source.width, source.height).toFloat()
+            val path = Path().apply {
+                moveTo(centerX, centerY)
+                lineTo(centerX, centerY - radius)
+                arcTo(
+                    RectF(centerX - radius, centerY - radius, centerX + radius, centerY + radius),
+                    -90f,
+                    360f * progress,
+                    false
+                )
+                close()
+            }
+            canvas.clipPath(path)
+        }
+        else -> Unit
+    }
+    canvas.drawBitmap(source, 0f, 0f, null)
+    canvas.restore()
+    return output
+}
+
 private fun buildTextSettings(text: TextOverlay, globalTimeMs: Long): OverlaySettings {
     val relative = (globalTimeMs - text.startTimeOnTimelineMs).coerceAtLeast(0L)
     val motion = textLayerMotion(
@@ -1256,39 +1570,23 @@ internal fun buildExportOverlays(
         val nextClip = state.clips.getOrNull(clipIndex + 1)
         val duration = transition.durationMs.coerceIn(1L, clipDurationMs)
         val start = clipDurationMs - duration
-        if (clip.canRenderTransitionSource() && nextClip?.canRenderTransitionSource() == true) {
-            if (nextClip.isPhoto) {
-                loadBitmap(context, nextClip.sourceUri)?.let { nextBitmap ->
-                    overlays += PhotoTransitionBitmapOverlay(
-                        type = transition.type,
-                        sourceBitmap = nextBitmap,
-                        blankBitmap = blank,
-                        windowStartMs = start,
-                        windowEndMs = clipDurationMs
-                    )
-                }
-            } else if (transition.type in EXPORT_VIDEO_TRANSITIONS && nextClip.canRenderVideoTransitionSource()) {
-                runCatching {
-                    VideoFrameBitmapOverlay(
-                        context = context,
-                        sourceUri = nextClip.sourceUri,
-                        sourceTrimStartMs = nextClip.effectiveTrimStartMs,
-                        sourceTrimEndMs = nextClip.effectiveTrimEndMs,
-                        windowStartMs = start,
-                        windowEndMs = clipDurationMs,
-                        blankBitmap = blank,
-                        chromaKey = ChromaKeySettings(),
-                        settingsAt = { localTime ->
-                            transitionOverlaySettings(
-                                type = transition.type,
-                                localTimeMs = localTime,
-                                windowStartMs = start,
-                                windowEndMs = clipDurationMs
-                            )
-                        }
-                    )
-                }.onSuccess { overlays += it }
-            }
+        val incomingCanRender = when {
+            nextClip == null -> false
+            nextClip.isPhoto -> nextClip.canRenderPhotoTransitionSource()
+            transition.type in EXPORT_VIDEO_TRANSITIONS -> nextClip.canRenderVideoTransitionSource()
+            else -> false
+        }
+        if (clip.canRenderTransitionBaseSource() && incomingCanRender) {
+            runCatching {
+                TransitionSourceBitmapOverlay(
+                    context = context,
+                    clip = nextClip!!,
+                    type = transition.type,
+                    blankBitmap = blank,
+                    windowStartMs = start,
+                    windowEndMs = clipDurationMs
+                )
+            }.onSuccess { overlays += it }
         }
     }
 
@@ -1300,24 +1598,45 @@ internal fun MediaClip.canRenderPhotoTransitionSource(): Boolean {
 }
 
 internal fun MediaClip.canRenderVideoTransitionSource(): Boolean {
-    return !isPhoto && playbackSpeed == 1f && canRenderTransitionSource()
+    return !isPhoto && canRenderTransitionSource()
 }
 
 private fun MediaClip.canRenderTransitionSource(): Boolean {
-    return sourceUri.isNotBlank() &&
-        effectiveTrimEndMs > effectiveTrimStartMs &&
-        rotation == 0f &&
-        !flipHorizontal &&
-        !flipVertical &&
-        cropRect == EXPORT_DEFAULT_CROP &&
-        scale == 1f &&
-        posX == 0.5f &&
-        posY == 0.5f &&
-        filterType == FilterType.NONE &&
-        adjustments == ColorAdjustments() &&
-        effects.isEmpty() &&
-        photoAnimationSettings.type == PhotoAnimationType.NONE &&
-        keyframes.isEmpty()
+    val normalized = normalized()
+    return normalized.canRenderTransitionBaseSource() &&
+        normalized.effects.all { it.type in EXPORT_TRANSITION_SOURCE_EFFECTS }
+}
+
+internal fun MediaClip.canRenderTransitionBaseSource(): Boolean {
+    val normalized = normalized()
+    val durationMs = normalized.durationMs
+    return normalized.sourceUri.isNotBlank() &&
+        normalized.effectiveTrimEndMs > normalized.effectiveTrimStartMs &&
+        normalized.playbackSpeed.isFinite() &&
+        normalized.playbackSpeed in 0.1f..10f &&
+        normalized.speedCurve == null &&
+        normalized.photoAnimationSettings.type == PhotoAnimationType.NONE &&
+        normalized.keyframes.keys.all {
+            it in EXPORT_SUPPORTED_CLIP_KEYFRAMES || it in EXPORT_SUPPORTED_AUDIO_KEYFRAMES
+        } &&
+        !normalized.hasInvalidCropKeyframes() &&
+        !normalized.keyframes.hasInvalidExportKeyframes(durationMs) &&
+        normalized.effects.all { it.isRenderableTransitionEffect(EXPORT_SUPPORTED_EFFECTS, durationMs) }
+}
+
+private fun AppliedEffect.isRenderableTransitionEffect(
+    allowedEffects: Set<EffectType>,
+    clipDurationMs: Long
+): Boolean {
+    val endMs = if (endTimeMs == -1L) clipDurationMs else endTimeMs
+    return type in allowedEffects &&
+        startTimeMs >= 0L &&
+        endTimeMs >= -1L &&
+        endMs >= startTimeMs &&
+        intensity.isFinite() &&
+        intensity in 0f..1f &&
+        (startTimeMs == 0L || type in EXPORT_TIMED_OVERLAY_EFFECTS) &&
+        (endTimeMs == -1L || endTimeMs >= clipDurationMs || type in EXPORT_TIMED_OVERLAY_EFFECTS)
 }
 
 internal fun buildExportVideoEffects(
