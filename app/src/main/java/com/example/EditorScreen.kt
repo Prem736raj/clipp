@@ -167,7 +167,8 @@ enum class TransitionType(val label: String) {
 
 data class Transition(
     val type: TransitionType = TransitionType.NONE,
-    val durationMs: Long = 500L
+    val durationMs: Long = 500L,
+    val easing: EasingType = EasingType.EASE_IN_OUT
 )
 
 enum class EasingType {
@@ -439,6 +440,7 @@ data class MediaClip(
         trimEndMs = effectiveTrimEndMs,
         playbackSpeed = playbackSpeed.coerceIn(0.1f, 10f),
         volume = volume.coerceIn(0f, 1f),
+        transitionNext = transitionNext.normalized(),
         speedCurve = speedCurve?.normalized()
     )
 
@@ -508,6 +510,55 @@ enum class OverlayAnim {
 
 enum class OverlayBlendModeType {
     NORMAL, MULTIPLY, SCREEN, OVERLAY, SOFT_LIGHT, HARD_LIGHT, DIFFERENCE, ADD
+}
+
+/** The preview shape used for the non-rectangular overlay masks. */
+private class OverlayMaskShape(
+    private val mask: MaskShape
+) : androidx.compose.ui.graphics.Shape {
+    override fun createOutline(
+        size: androidx.compose.ui.geometry.Size,
+        layoutDirection: androidx.compose.ui.unit.LayoutDirection,
+        density: androidx.compose.ui.unit.Density
+    ): androidx.compose.ui.graphics.Outline {
+        val width = size.width
+        val height = size.height
+        val path = androidx.compose.ui.graphics.Path()
+        when (mask) {
+            MaskShape.HEART -> {
+                path.moveTo(width * 0.5f, height * 0.88f)
+                path.cubicTo(width * 0.34f, height * 0.74f, width * 0.08f, height * 0.56f, width * 0.08f, height * 0.31f)
+                path.cubicTo(width * 0.08f, height * 0.08f, width * 0.38f, height * 0.04f, width * 0.5f, height * 0.24f)
+                path.cubicTo(width * 0.62f, height * 0.04f, width * 0.92f, height * 0.08f, width * 0.92f, height * 0.31f)
+                path.cubicTo(width * 0.92f, height * 0.56f, width * 0.66f, height * 0.74f, width * 0.5f, height * 0.88f)
+                path.close()
+            }
+            MaskShape.STAR -> {
+                val centerX = width / 2f
+                val centerY = height / 2f
+                val outerRadius = minOf(width, height) * 0.48f
+                val innerRadius = outerRadius * 0.44f
+                for (index in 0 until 10) {
+                    val radius = if (index % 2 == 0) outerRadius else innerRadius
+                    val angle = -Math.PI.toFloat() / 2f + index * Math.PI.toFloat() / 5f
+                    val x = centerX + kotlin.math.cos(angle) * radius
+                    val y = centerY + kotlin.math.sin(angle) * radius
+                    if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                }
+                path.close()
+            }
+            else -> path.addRect(androidx.compose.ui.geometry.Rect(0f, 0f, width, height))
+        }
+        return androidx.compose.ui.graphics.Outline.Generic(path)
+    }
+}
+
+private fun overlayMaskComposeShape(mask: MaskShape): androidx.compose.ui.graphics.Shape = when (mask) {
+    MaskShape.CIRCLE -> CircleShape
+    MaskShape.RECTANGLE,
+    MaskShape.NONE -> androidx.compose.ui.graphics.RectangleShape
+    MaskShape.HEART,
+    MaskShape.STAR -> OverlayMaskShape(mask)
 }
 
 enum class TextAlignmentType { Left, Center, Right }
@@ -2138,24 +2189,27 @@ fun EditorScreen(
                         
                         var activeTransitionType by remember { mutableStateOf<TransitionType?>(null) }
                         var activeTransitionClipIndex by remember { mutableStateOf<Int?>(null) }
+                        var activeTransitionEasing by remember { mutableStateOf(EasingType.EASE_IN_OUT) }
                         var transitionProgress by remember { mutableStateOf(0f) } // -1f to 1f
                         
                         LaunchedEffect(currentPositionMs, clips) {
                             var accum = 0L
                             var foundTransition: TransitionType? = null
                             var foundClipIndex: Int? = null
+                            var foundEasing = EasingType.EASE_IN_OUT
                             var foundProgress = 0f
                             for (i in 0 until clips.lastIndex) {
                                 val clip = clips[i]
-                                val trans = clip.transitionNext
+                                val trans = clip.transitionNext.normalized()
                                 val cutPoint = accum + clip.durationMs
                                 if (trans.type != TransitionType.NONE) {
-                                    val tHalf = trans.durationMs / 2L
+                                    val tHalf = (transitionDurationForClip(trans, clip.durationMs) / 2L).coerceAtLeast(1L)
                                     val tStart = cutPoint - tHalf
                                     val tEnd = cutPoint + tHalf
                                     if (currentPositionMs in tStart..tEnd) {
                                         foundTransition = trans.type
                                         foundClipIndex = i
+                                        foundEasing = trans.easing
                                         foundProgress = (currentPositionMs - cutPoint).toFloat() / tHalf.toFloat()
                                         break
                                     }
@@ -2164,6 +2218,7 @@ fun EditorScreen(
                             }
                             activeTransitionType = foundTransition
                             activeTransitionClipIndex = foundClipIndex
+                            activeTransitionEasing = foundEasing
                             transitionProgress = foundProgress
                         }
 
@@ -2179,6 +2234,8 @@ fun EditorScreen(
                                 TransitionType.SLIDE_DOWN,
                                 TransitionType.ZOOM_IN,
                                 TransitionType.ZOOM_OUT,
+                                TransitionType.PUSH_LEFT,
+                                TransitionType.PUSH_RIGHT,
                                 TransitionType.WIPE_LEFT,
                                 TransitionType.WIPE_RIGHT,
                                 TransitionType.CLOCK_WIPE,
@@ -2306,7 +2363,7 @@ fun EditorScreen(
                                         
                                         if (activeTransitionType != null && !isPhotoTransitionPreview) {
                                             val tType = if (isBudgetMode) TransitionType.CROSSFADE else activeTransitionType
-                                            val p = transitionProgress
+                                            val p = signedTransitionProgress(transitionProgress, activeTransitionEasing)
                                             val isOld = p < 0f
                                             
                                             when (tType) {
@@ -2366,7 +2423,10 @@ fun EditorScreen(
                         )
 
                         if (isPhotoTransitionPreview && transitionProgress < 0f && transitionNextPhoto != null) {
-                            val incomingProgress = (transitionProgress + 1f).coerceIn(0f, 1f)
+                            val incomingProgress = easedTransitionProgress(
+                                transitionProgress + 1f,
+                                activeTransitionEasing
+                            )
                             val transitionModifier = Modifier
                                 .fillMaxSize()
                                 .graphicsLayer {
@@ -2381,6 +2441,8 @@ fun EditorScreen(
                                     when (activeTransitionType) {
                                         TransitionType.SLIDE_LEFT -> translationX = (1f - incomingProgress) * size.width
                                         TransitionType.SLIDE_RIGHT -> translationX = (incomingProgress - 1f) * size.width
+                                        TransitionType.PUSH_LEFT -> translationX = (1f - incomingProgress) * size.width
+                                        TransitionType.PUSH_RIGHT -> translationX = (incomingProgress - 1f) * size.width
                                         TransitionType.SLIDE_UP -> translationY = (1f - incomingProgress) * size.height
                                         TransitionType.SLIDE_DOWN -> translationY = (incomingProgress - 1f) * size.height
                                         TransitionType.ZOOM_IN -> {
@@ -2563,13 +2625,7 @@ fun EditorScreen(
                                     else -> androidx.compose.ui.graphics.BlendMode.SrcOver
                                 }
                                 
-                                val cMaskShape = when (overlay.maskShape) {
-                                    MaskShape.CIRCLE -> CircleShape
-                                    MaskShape.RECTANGLE -> RoundedCornerShape(0.dp) // Wait, just no cut or rect
-                                    MaskShape.HEART -> RoundedCornerShape(0.dp) // placeholder
-                                    MaskShape.STAR -> RoundedCornerShape(0.dp) // placeholder
-                                    else -> androidx.compose.ui.graphics.RectangleShape
-                                }
+                                val cMaskShape = overlayMaskComposeShape(overlay.maskShape)
 
                                 Box(
                                     modifier = Modifier
@@ -2668,7 +2724,21 @@ fun EditorScreen(
                                             color = overlay.borderColor,
                                             shape = cMaskShape
                                         )
-                                        .clip(cMaskShape),
+                                        .clip(cMaskShape)
+                                        .drawWithContent {
+                                            if (cBlendMode == androidx.compose.ui.graphics.BlendMode.SrcOver) {
+                                                drawContent()
+                                            } else {
+                                                drawContext.canvas.saveLayer(
+                                                    androidx.compose.ui.geometry.Rect(0f, 0f, size.width, size.height),
+                                                    androidx.compose.ui.graphics.Paint().apply {
+                                                        blendMode = cBlendMode
+                                                    }
+                                                )
+                                                drawContent()
+                                                drawContext.canvas.restore()
+                                            }
+                                        },
                                     contentAlignment = Alignment.Center
                                 ) {
                                     if (overlay.isPhoto || overlay.isGif) {
@@ -7025,7 +7095,7 @@ fun EditorScreen(
                         }
 
                         Text(
-                            "Export supports crossfade, slide, zoom, spin, flip, and photo wipe transitions between adjacent clips with export-ready trim, speed, crop, transform, filter, and supported effect edits. Unsupported effects remain gated.",
+                            "Export supports crossfade, slide, push, zoom, spin, flip, and photo wipe transitions between adjacent clips with bounded duration and selectable easing. Unsupported source edits remain gated.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -7058,7 +7128,9 @@ fun EditorScreen(
                                                     enabled = capability.isSelectable,
                                                     onClick = { 
                                                         val newClips = clips.toMutableList()
-                                                        newClips[clipIndex] = clip.copy(transitionNext = clip.transitionNext.copy(type = tType))
+                                                        newClips[clipIndex] = clip.copy(
+                                                            transitionNext = clip.transitionNext.copy(type = tType).normalized()
+                                                        )
                                                         saveState(newClips, canvasSettings, "Change transition")
                                                     }
                                                 )
@@ -7076,10 +7148,14 @@ fun EditorScreen(
                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                                 Text("0.3s", style = MaterialTheme.typography.bodySmall)
                                 Slider(
-                                    value = clip.transitionNext.durationMs.toFloat() / 1000f,
+                                    value = transitionDurationForClip(clip.transitionNext, clip.durationMs).toFloat() / 1000f,
                                     onValueChange = { newVal ->
                                         val newClips = clips.toMutableList()
-                                        newClips[clipIndex] = clip.copy(transitionNext = clip.transitionNext.copy(durationMs = (newVal * 1000).toLong()))
+                                        newClips[clipIndex] = clip.copy(
+                                            transitionNext = clip.transitionNext.copy(
+                                                durationMs = (newVal * 1000).toLong()
+                                            ).normalized()
+                                        )
                                         clips = newClips
                                     },
                                     onValueChangeFinished = {
@@ -7090,7 +7166,32 @@ fun EditorScreen(
                                 )
                                 Text("2.0s", style = MaterialTheme.typography.bodySmall)
                             }
-                            Text("${clip.transitionNext.durationMs} ms", modifier = Modifier.align(Alignment.CenterHorizontally), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                            Text(
+                                "${transitionDurationForClip(clip.transitionNext, clip.durationMs)} ms",
+                                modifier = Modifier.align(Alignment.CenterHorizontally),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text("Timing", style = MaterialTheme.typography.labelMedium)
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                val easings = EasingType.values()
+                                items(easings.size) { easingIndex ->
+                                    val easing = easings[easingIndex]
+                                    FilterChip(
+                                        selected = clip.transitionNext.easing == easing,
+                                        onClick = {
+                                            val newClips = clips.toMutableList()
+                                            newClips[clipIndex] = clip.copy(
+                                                transitionNext = clip.transitionNext.copy(easing = easing).normalized()
+                                            )
+                                            saveState(newClips, canvasSettings, "Change transition timing")
+                                        },
+                                        label = {
+                                            Text(easing.name.lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() })
+                                        }
+                                    )
+                                }
+                            }
                         }
                     }
                 }

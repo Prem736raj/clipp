@@ -420,14 +420,14 @@ class ExampleUnitTest {
   }
 
   @Test
-  fun capabilityRegistryKeepsPreviewOnlyControlsOutOfNewEdits() {
+  fun capabilityRegistryExposesSharedOverlayAndTransitionRendering() {
     assertTrue(FeatureCapabilityRegistry.effect(EffectType.MIRROR).isSelectable)
     assertFalse(FeatureCapabilityRegistry.effect(EffectType.OIL_PAINTING).isSelectable)
     assertTrue(FeatureCapabilityRegistry.speedCurve().isSelectable)
-    assertFalse(FeatureCapabilityRegistry.overlayAnimation(OverlayAnim.SLIDE).isSelectable)
-    assertFalse(FeatureCapabilityRegistry.blendMode(OverlayBlendModeType.SCREEN).isSelectable)
-    assertFalse(FeatureCapabilityRegistry.maskShape(MaskShape.CIRCLE).isSelectable)
-    assertFalse(FeatureCapabilityRegistry.transition(TransitionType.PUSH_LEFT).isSelectable)
+    assertTrue(FeatureCapabilityRegistry.overlayAnimation(OverlayAnim.SLIDE).isSelectable)
+    assertTrue(FeatureCapabilityRegistry.blendMode(OverlayBlendModeType.SCREEN).isSelectable)
+    assertTrue(FeatureCapabilityRegistry.maskShape(MaskShape.CIRCLE).isSelectable)
+    assertTrue(FeatureCapabilityRegistry.transition(TransitionType.PUSH_LEFT).isSelectable)
 
     val photo = MediaClip(
       sourceUri = "content://media/image/1",

@@ -72,6 +72,8 @@ internal object FeatureCapabilityRegistry {
         TransitionType.SLIDE_RIGHT,
         TransitionType.SLIDE_UP,
         TransitionType.SLIDE_DOWN,
+        TransitionType.PUSH_LEFT,
+        TransitionType.PUSH_RIGHT,
         TransitionType.ZOOM_IN,
         TransitionType.ZOOM_OUT,
         TransitionType.SPIN,
@@ -138,13 +140,13 @@ internal object FeatureCapabilityRegistry {
             id = "complex-transitions",
             label = "Transitions between edited sources",
             capability = FeatureCapability.PREVIEW_AND_EXPORT_SUPPORTED,
-            detail = "Crossfade, slide, zoom, spin, flip, and photo wipe transitions render export-ready edits on both adjacent sources."
+            detail = "Crossfade, slide, push, zoom, spin, flip, and photo wipe transitions render with bounded duration and selectable easing."
         ),
         FeatureCapabilityStatus(
             id = "masks-and-blends",
             label = "Overlay masks, blend modes, and slide animations",
-            capability = FeatureCapability.COMING_LATER,
-            detail = "These preview paths are not reproduced by the current exporter."
+            capability = FeatureCapability.PREVIEW_AND_EXPORT_SUPPORTED,
+            detail = "Shape masks, blend modes, and vertical slide animations share the bitmap and GLES export compositor."
         ),
         FeatureCapabilityStatus(
             id = "unsupported-audio-dsp",
@@ -190,7 +192,7 @@ internal object FeatureCapabilityRegistry {
     )
 
     fun overlayAnimation(animation: OverlayAnim): FeatureCapabilityStatus = if (
-        animation == OverlayAnim.NONE || animation == OverlayAnim.FADE || animation == OverlayAnim.SCALE
+        animation == OverlayAnim.NONE || animation == OverlayAnim.FADE || animation == OverlayAnim.SCALE || animation == OverlayAnim.SLIDE
     ) {
         exportReady("overlay-animation:${animation.name}", "Overlay ${animation.name}", "The animation is rendered by preview and export.")
     } else {
@@ -198,31 +200,21 @@ internal object FeatureCapabilityRegistry {
             id = "overlay-animation:${animation.name}",
             label = "Overlay ${animation.name}",
             capability = FeatureCapability.PREVIEW_ONLY_EXPERIMENTAL,
-            detail = "Slide animation is preview-only until the exporter has matching motion semantics."
+            detail = "This overlay animation is preview-only until the exporter has matching motion semantics."
         )
     }
 
-    fun blendMode(mode: OverlayBlendModeType): FeatureCapabilityStatus = if (mode == OverlayBlendModeType.NORMAL) {
-        exportReady("overlay-blend:${mode.name}", "Overlay blend: ${mode.name}", "Normal compositing is shared by preview and export.")
-    } else {
-        FeatureCapabilityStatus(
-            id = "overlay-blend:${mode.name}",
-            label = "Overlay blend: ${mode.name}",
-            capability = FeatureCapability.COMING_LATER,
-            detail = "This blend mode is not reproduced by the current export compositor."
-        )
-    }
+    fun blendMode(mode: OverlayBlendModeType): FeatureCapabilityStatus = exportReady(
+        "overlay-blend:${mode.name}",
+        "Overlay blend: ${mode.name}",
+        "The blend mode is rendered by preview and the export GLES compositor."
+    )
 
-    fun maskShape(shape: MaskShape): FeatureCapabilityStatus = if (shape == MaskShape.NONE) {
-        exportReady("overlay-mask:${shape.name}", "Overlay mask: none", "No mask is shared by preview and export.")
-    } else {
-        FeatureCapabilityStatus(
-            id = "overlay-mask:${shape.name}",
-            label = "Overlay mask: ${shape.name}",
-            capability = FeatureCapability.COMING_LATER,
-            detail = "This mask is preview-only until it is rendered by the export compositor."
-        )
-    }
+    fun maskShape(shape: MaskShape): FeatureCapabilityStatus = exportReady(
+        "overlay-mask:${shape.name}",
+        "Overlay mask: ${shape.name}",
+        "The shape mask is rendered by preview and the export bitmap compositor."
+    )
 
     fun overlayDecoration(): FeatureCapabilityStatus = FeatureCapabilityStatus(
         id = "overlay-decoration",
