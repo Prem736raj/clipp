@@ -22,14 +22,21 @@ class TimelineMapper(clips: List<MediaClip>) {
         val clipIndex: Int,
         val clip: MediaClip,
         val startMs: Long,
-        val durationMs: Long
+        val durationMs: Long,
+        val speedTimeline: SpeedCurveTimeline?
     )
 
     private val segments = buildList {
         var startMs = 0L
         clips.forEachIndexed { index, clip ->
-            val durationMs = clip.durationMs.coerceAtLeast(0L)
-            add(Segment(index, clip, startMs, durationMs))
+            val normalizedClip = clip.normalized()
+            val sourceDurationMs = normalizedClip.effectiveTrimEndMs - normalizedClip.effectiveTrimStartMs
+            val speedTimeline = normalizedClip.speedCurve
+                ?.takeIf { it.points.isNotEmpty() && sourceDurationMs > 0L }
+                ?.let { SpeedCurveTimeline(sourceDurationMs, it) }
+            val durationMs = (speedTimeline?.durationMs ?: normalizedClip.durationMs)
+                .coerceAtLeast(0L)
+            add(Segment(index, normalizedClip, startMs, durationMs, speedTimeline))
             startMs += durationMs
         }
     }
@@ -44,7 +51,7 @@ class TimelineMapper(clips: List<MediaClip>) {
             clipIndex = segment.clipIndex,
             timelineStartMs = segment.startMs,
             timelineOffsetMs = timelineOffsetMs,
-            sourcePositionMs = sourcePositionForTimelineOffset(segment.clip, timelineOffsetMs)
+            sourcePositionMs = sourcePositionForTimelineOffset(segment, timelineOffsetMs)
         )
     }
 
@@ -59,7 +66,7 @@ class TimelineMapper(clips: List<MediaClip>) {
     fun globalPositionForPlayer(clipIndex: Int, positionInClippedSourceMs: Long): Long {
         val segment = segments.getOrNull(clipIndex) ?: return 0L
         val sourceOffsetMs = positionInClippedSourceMs.coerceIn(0L, sourceDurationMs(segment.clip))
-        val timelineOffsetMs = timelineOffsetForSourceOffset(segment.clip, sourceOffsetMs)
+        val timelineOffsetMs = timelineOffsetForSourceOffset(segment, sourceOffsetMs)
         return (segment.startMs + timelineOffsetMs).coerceIn(0L, totalDurationMs)
     }
 
@@ -84,15 +91,12 @@ class TimelineMapper(clips: List<MediaClip>) {
         } ?: segments.lastOrNull()
     }
 
-    private fun sourcePositionForTimelineOffset(clip: MediaClip, timelineOffsetMs: Long): Long {
+    private fun sourcePositionForTimelineOffset(segment: Segment, timelineOffsetMs: Long): Long {
+        val clip = segment.clip
         val sourceDurationMs = sourceDurationMs(clip)
         if (sourceDurationMs <= 0L) return clip.trimStartMs
-        val sourceOffsetMs = if (clip.speedCurve != null && clip.speedCurve.points.isNotEmpty()) {
-            val fraction = mapPlaybackTimeToOriginalFraction(
-                timelineOffsetMs,
-                sourceDurationMs,
-                clip.speedCurve
-            )
+        val sourceOffsetMs = if (segment.speedTimeline != null) {
+            val fraction = segment.speedTimeline.sourceFractionAtPlaybackTime(timelineOffsetMs)
             (fraction * sourceDurationMs).toLong()
         } else {
             (timelineOffsetMs * clip.playbackSpeed.coerceIn(0.1f, 10f)).toLong()
@@ -100,14 +104,17 @@ class TimelineMapper(clips: List<MediaClip>) {
         return clip.effectiveTrimStartMs + sourceOffsetMs.coerceIn(0L, sourceDurationMs)
     }
 
-    private fun timelineOffsetForSourceOffset(clip: MediaClip, sourceOffsetMs: Long): Long {
+    private fun timelineOffsetForSourceOffset(segment: Segment, sourceOffsetMs: Long): Long {
+        val clip = segment.clip
         val safeSourceDurationMs = sourceDurationMs(clip)
         val safeSourceOffsetMs = sourceOffsetMs.coerceIn(0L, safeSourceDurationMs)
-        return if (clip.speedCurve != null && clip.speedCurve.points.isNotEmpty()) {
-            calculateDurationUpTo(safeSourceOffsetMs, safeSourceDurationMs, clip.speedCurve)
+        return if (segment.speedTimeline != null) {
+            segment.speedTimeline.playbackTimeAtSourceFraction(
+                safeSourceOffsetMs.toFloat() / safeSourceDurationMs.coerceAtLeast(1L).toFloat()
+            )
         } else {
             (safeSourceOffsetMs / clip.playbackSpeed.coerceIn(0.1f, 10f)).toLong()
-        }.coerceIn(0L, clip.durationMs.coerceAtLeast(0L))
+        }.coerceIn(0L, segment.durationMs.coerceAtLeast(0L))
     }
 
     private fun sourceDurationMs(clip: MediaClip): Long =

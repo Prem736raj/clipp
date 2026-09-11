@@ -1738,7 +1738,12 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
         }
         if (clip.audioEffects.hasUnsupportedExportAutomation()) reasons += "advanced clip audio automation"
         val transitionType = clip.transitionNext.type
-        val isSupportedSourceTransition = transitionType in EXPORT_PHOTO_TRANSITIONS &&
+        val transitionBlockedByCurve = clip.speedCurve != null && transitionType != TransitionType.NONE
+        if (transitionBlockedByCurve) {
+            reasons += "transitions on curved clips"
+        }
+        val isSupportedSourceTransition = !transitionBlockedByCurve &&
+            transitionType in EXPORT_PHOTO_TRANSITIONS &&
             index < clips.lastIndex &&
             clip.canRenderTransitionSource() &&
             ((clips[index + 1].isPhoto && clips[index + 1].canRenderPhotoTransitionSource()) ||
@@ -1748,7 +1753,7 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
         val isColorFade = transitionType == TransitionType.NONE ||
             transitionType == TransitionType.FADE_TO_BLACK ||
             transitionType == TransitionType.FADE_TO_WHITE
-        if (!isColorFade && !isSupportedSourceTransition) {
+        if (!isColorFade && !transitionBlockedByCurve && !isSupportedSourceTransition) {
             reasons += "this transition type"
         }
         if (clip.effects.any { it.type !in EXPORT_SUPPORTED_EFFECTS }) {

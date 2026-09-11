@@ -114,7 +114,7 @@ internal object FeatureCapabilityRegistry {
             id = "constant-speed",
             label = "Constant speed and pitch-preserving audio",
             capability = FeatureCapability.PREVIEW_AND_EXPORT_SUPPORTED,
-            detail = "Speed curves are intentionally excluded from this launch set."
+            detail = "Constant speed is rendered by Media3 with optional pitch preservation."
         ),
         FeatureCapabilityStatus(
             id = "visual-layers",
@@ -130,9 +130,9 @@ internal object FeatureCapabilityRegistry {
         ),
         FeatureCapabilityStatus(
             id = "speed-curves",
-            label = "Speed curves",
-            capability = FeatureCapability.COMING_LATER,
-            detail = "The current preview can model them, but the exporter does not yet map curve time safely."
+            label = "Speed curves and speed automation",
+            capability = FeatureCapability.PREVIEW_AND_EXPORT_SUPPORTED,
+            detail = "Variable curves use a shared source-time map and bounded export segments with pitch preservation per segment."
         ),
         FeatureCapabilityStatus(
             id = "complex-transitions",
@@ -286,8 +286,8 @@ internal object FeatureCapabilityRegistry {
     fun speedCurve(): FeatureCapabilityStatus = FeatureCapabilityStatus(
         id = "speed-curves",
         label = "Speed curves",
-        capability = FeatureCapability.COMING_LATER,
-        detail = "Curve time mapping is not export-ready."
+        capability = FeatureCapability.PREVIEW_AND_EXPORT_SUPPORTED,
+        detail = "Curve timing is shared by preview, seeking, thumbnails, and sampled MP4 export."
     )
 
     private fun animationStatus(id: String, label: String, supported: Boolean): FeatureCapabilityStatus = if (supported) {

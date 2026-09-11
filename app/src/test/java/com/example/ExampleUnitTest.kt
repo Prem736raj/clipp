@@ -423,7 +423,7 @@ class ExampleUnitTest {
   fun capabilityRegistryKeepsPreviewOnlyControlsOutOfNewEdits() {
     assertTrue(FeatureCapabilityRegistry.effect(EffectType.MIRROR).isSelectable)
     assertFalse(FeatureCapabilityRegistry.effect(EffectType.OIL_PAINTING).isSelectable)
-    assertFalse(FeatureCapabilityRegistry.speedCurve().isSelectable)
+    assertTrue(FeatureCapabilityRegistry.speedCurve().isSelectable)
     assertFalse(FeatureCapabilityRegistry.overlayAnimation(OverlayAnim.SLIDE).isSelectable)
     assertFalse(FeatureCapabilityRegistry.blendMode(OverlayBlendModeType.SCREEN).isSelectable)
     assertFalse(FeatureCapabilityRegistry.maskShape(MaskShape.CIRCLE).isSelectable)

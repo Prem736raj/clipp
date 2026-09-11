@@ -438,7 +438,8 @@ data class MediaClip(
         trimStartMs = effectiveTrimStartMs,
         trimEndMs = effectiveTrimEndMs,
         playbackSpeed = playbackSpeed.coerceIn(0.1f, 10f),
-        volume = volume.coerceIn(0f, 1f)
+        volume = volume.coerceIn(0f, 1f),
+        speedCurve = speedCurve?.normalized()
     )
 
     val durationMs: Long get() {
@@ -5013,7 +5014,7 @@ fun EditorScreen(
                         }
                         
                         if (isCurveMode) {
-                            val currentCurve = selectedClip.speedCurve ?: SpeedCurve()
+                            val currentCurve = (selectedClip.speedCurve ?: SpeedCurve()).normalized()
                             var activePtIndex by remember { mutableStateOf<Int?>(null) }
                             
                             // Presets
@@ -5196,7 +5197,7 @@ fun EditorScreen(
                         } else {
                             if (selectedClip.speedCurve != null) {
                                 Surface(
-                                    color = MaterialTheme.colorScheme.errorContainer,
+                                    color = MaterialTheme.colorScheme.primaryContainer,
                                     shape = RoundedCornerShape(8.dp),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
@@ -5205,22 +5206,15 @@ fun EditorScreen(
                                         verticalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
                                         Text(
-                                            "This saved speed curve is preview-only and will block MP4 export.",
+                                            "Speed curve active. MP4 export samples the curve into bounded speed segments and preserves pitch per segment.",
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onErrorContainer
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
                                         )
-                                        OutlinedButton(
-                                            onClick = {
-                                                val newClips = clips.toMutableList()
-                                                val idx = newClips.indexOfFirst { it.id == selectedClip.id }
-                                                if (idx >= 0) {
-                                                    newClips[idx] = selectedClip.copy(speedCurve = null, playbackSpeed = 1f)
-                                                    saveState(newClips, canvasSettings, "Remove preview-only speed curve")
-                                                }
-                                            }
-                                        ) {
-                                            Text("Reset to export-ready speed")
-                                        }
+                                        Text(
+                                            "Transitions on a curved clip remain unavailable until their multi-segment timing is supported.",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
                                     }
                                 }
                             }
@@ -5280,7 +5274,7 @@ fun EditorScreen(
                                     onClick = { isCurveMode = true },
                                     enabled = FeatureCapabilityRegistry.speedCurve().isSelectable
                                 ) {
-                                    Text("Curve · Coming later")
+                                    Text("Edit curve")
                                 }
                             }
                         }
