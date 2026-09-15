@@ -167,7 +167,8 @@ enum class TransitionType(val label: String) {
 
 data class Transition(
     val type: TransitionType = TransitionType.NONE,
-    val durationMs: Long = 500L
+    val durationMs: Long = 500L,
+    val easing: EasingType = EasingType.EASE_IN_OUT
 )
 
 enum class EasingType {
@@ -258,7 +259,13 @@ fun AudioPlayerComponent(
         if (actualUri == null) return@LaunchedEffect
         
         val relativeTimeMs = currentPositionMs - clip.startTimeOnTimelineMs
-        if (relativeTimeMs >= 0 && relativeTimeMs < clip.durationMs) {
+        val projectDurationMs = clips.sumOf { it.durationMs }
+        val activeDurationMs = if (clip.isLooped) {
+            (projectDurationMs - clip.startTimeOnTimelineMs).coerceAtLeast(0L)
+        } else {
+            clip.durationMs
+        }
+        if (relativeTimeMs >= 0 && relativeTimeMs < activeDurationMs) {
             val srcPos = if (clip.isLooped) {
                 val cycleLength = if (clip.trimEndMs > clip.trimStartMs) clip.trimEndMs - clip.trimStartMs else 1L
                 clip.trimStartMs + (relativeTimeMs % cycleLength)
@@ -317,43 +324,149 @@ fun VUMeter(
 @Composable
 fun AudioWaveform(
     clipId: String,
-    durationMs: Long,
+    sourceUri: String?,
+    sourceDurationMs: Long,
     trimStartMs: Long,
     trimEndMs: Long,
+    displayDurationMs: Long,
     pixelsPerMs: Float,
+    isLooped: Boolean = false,
+    playbackSpeed: Float = 1f,
+    speedCurve: SpeedCurve? = null,
     keyframes: Map<String, List<Keyframe>> = emptyMap(),
     audioEffects: AudioEffects = AudioEffects(),
     modifier: Modifier = Modifier,
     color: Color = MaterialTheme.colorScheme.primary
 ) {
-    Canvas(modifier = modifier) {
-        val totalWidth = size.width
-        val height = size.height
-        if (durationMs <= 0L || totalWidth <= 0f) return@Canvas
-
-        // A measured waveform is not available yet. Keep a neutral reference line
-        // instead of presenting synthetic amplitudes as audio analysis.
-        drawLine(
-            color = color.copy(alpha = 0.55f),
-            start = androidx.compose.ui.geometry.Offset(0f, height / 2f),
-            end = androidx.compose.ui.geometry.Offset(totalWidth, height / 2f),
-            strokeWidth = 1.dp.toPx()
-        )
-
-        val totalTrimMs = (trimEndMs - trimStartMs).coerceAtLeast(0L)
-        val fadeInPx = (audioEffects.fadeInMs.coerceAtMost(totalTrimMs) * pixelsPerMs).coerceIn(0f, totalWidth)
-        val fadeOutPx = (audioEffects.fadeOutMs.coerceAtMost(totalTrimMs) * pixelsPerMs).coerceIn(0f, totalWidth)
-        if (fadeInPx > 0f) {
-            drawLine(color = color, start = androidx.compose.ui.geometry.Offset(0f, height), end = androidx.compose.ui.geometry.Offset(fadeInPx, 0f), strokeWidth = 2.dp.toPx())
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val repository = remember(context.applicationContext) { WaveformRepository.get(context.applicationContext) }
+    val waveform by produceState<WaveformData?>(
+        initialValue = null,
+        key1 = clipId,
+        key2 = sourceUri,
+        key3 = sourceDurationMs
+    ) {
+        value = if (sourceUri.isNullOrBlank() || sourceDurationMs <= 0L) {
+            null
+        } else {
+            runCatching { repository.load(sourceUri, sourceDurationMs) }.getOrNull()
         }
-        if (fadeOutPx > 0f) {
+    }
+
+    val measured = waveform
+    val sampler = remember(
+        measured,
+        trimStartMs,
+        trimEndMs,
+        displayDurationMs,
+        isLooped,
+        playbackSpeed,
+        speedCurve
+    ) {
+        measured?.takeIf { it.hasMeasuredAudio }?.let {
+            WaveformTimelineSampler(
+                waveform = it,
+                trimStartMs = trimStartMs,
+                trimEndMs = trimEndMs,
+                displayDurationMs = displayDurationMs,
+                isLooped = isLooped,
+                playbackSpeed = playbackSpeed,
+                speedCurve = speedCurve
+            )
+        }
+    }
+
+    BoxWithConstraints(modifier = modifier) {
+        val totalWidthPx = with(density) { maxWidth.toPx() }
+        val barSpacingPx = with(density) { 3.dp.toPx() }.coerceAtLeast(2f)
+        val barCount = if (totalWidthPx > 0f) {
+            (totalWidthPx / barSpacingPx).toInt().coerceIn(1, 1_024)
+        } else {
+            0
+        }
+        val renderPeaks = remember(sampler, barCount) {
+            if (barCount > 0) sampler?.peaks(barCount) ?: FloatArray(0) else FloatArray(0)
+        }
+        val totalTrimMs = (trimEndMs - trimStartMs).coerceAtLeast(0L)
+        val volumeMarkerFractions = remember(
+            sampler,
+            keyframes,
+            trimStartMs,
+            totalTrimMs,
+            displayDurationMs,
+            isLooped
+        ) {
+            if (displayDurationMs <= 0L || totalTrimMs <= 0L) {
+                FloatArray(0)
+            } else {
+                val markers = ArrayList<Float>()
+                keyframes["volume"].orEmpty().forEach { keyframe ->
+                    val localSourceMs = (keyframe.timeMs - trimStartMs).coerceIn(0L, totalTrimMs)
+                    if (isLooped) {
+                        var displayTimeMs = localSourceMs
+                        while (displayTimeMs <= displayDurationMs && markers.size < 1_024) {
+                            markers += (displayTimeMs.toFloat() / displayDurationMs.toFloat()).coerceIn(0f, 1f)
+                            displayTimeMs += totalTrimMs
+                        }
+                    } else {
+                        val displayTimeMs = sampler?.playbackTimeForSourceOffset(localSourceMs)
+                            ?: (localSourceMs / playbackSpeed.coerceIn(0.1f, 10f)).toLong()
+                        markers += (displayTimeMs.toFloat() / displayDurationMs.toFloat()).coerceIn(0f, 1f)
+                    }
+                }
+                markers.toFloatArray()
+            }
+        }
+
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val totalWidth = size.width
+            val height = size.height
+            if (sourceDurationMs <= 0L || displayDurationMs <= 0L || totalWidth <= 0f) return@Canvas
+
+            if (renderPeaks.isNotEmpty()) {
+            val centerY = height / 2f
+            val halfHeight = (height * 0.44f).coerceAtLeast(1f)
+                renderPeaks.forEachIndexed { index, peak ->
+                    val x = ((index + 0.5f) / renderPeaks.size) * totalWidth
+                val amplitude = (peak.coerceIn(0f, 1f) * halfHeight).coerceAtLeast(0.5f)
+                drawLine(
+                    color = color,
+                    start = androidx.compose.ui.geometry.Offset(x, centerY - amplitude),
+                    end = androidx.compose.ui.geometry.Offset(x, centerY + amplitude),
+                    strokeWidth = 1.5.dp.toPx(),
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round
+                )
+                }
+            } else {
+            // Honest loading/no-audio state: never synthesize random amplitudes.
+            drawLine(
+                color = color.copy(alpha = 0.35f),
+                start = androidx.compose.ui.geometry.Offset(0f, height / 2f),
+                end = androidx.compose.ui.geometry.Offset(totalWidth, height / 2f),
+                strokeWidth = 1.dp.toPx()
+            )
+            }
+
+            val displayPixelsPerMs = if (displayDurationMs > 0L) totalWidth / displayDurationMs.toFloat() else pixelsPerMs
+            val fadeInPx = (audioEffects.fadeInMs.coerceAtMost(totalTrimMs) * displayPixelsPerMs).coerceIn(0f, totalWidth)
+            val fadeOutPx = (audioEffects.fadeOutMs.coerceAtMost(totalTrimMs) * displayPixelsPerMs).coerceIn(0f, totalWidth)
+            if (fadeInPx > 0f) {
+            drawLine(color = color, start = androidx.compose.ui.geometry.Offset(0f, height), end = androidx.compose.ui.geometry.Offset(fadeInPx, 0f), strokeWidth = 2.dp.toPx())
+            }
+            if (fadeOutPx > 0f) {
             val startPx = (totalWidth - fadeOutPx).coerceAtLeast(0f)
             drawLine(color = color, start = androidx.compose.ui.geometry.Offset(startPx, 0f), end = androidx.compose.ui.geometry.Offset(totalWidth, height), strokeWidth = 2.dp.toPx())
-        }
+            }
 
-        keyframes["volume"]?.forEach { keyframe ->
-            val kpx = ((keyframe.timeMs - trimStartMs) * pixelsPerMs).coerceIn(0f, totalWidth)
-            drawCircle(color = Color.Red, radius = 4.dp.toPx(), center = androidx.compose.ui.geometry.Offset(kpx, height / 2f))
+            volumeMarkerFractions.forEach { fraction ->
+                val kpx = (fraction * totalWidth).coerceIn(0f, totalWidth)
+                drawCircle(
+                    color = Color.Red,
+                    radius = if (isLooped) 3.dp.toPx() else 4.dp.toPx(),
+                    center = androidx.compose.ui.geometry.Offset(kpx, height / 2f)
+                )
+            }
         }
     }
 }
@@ -438,7 +551,9 @@ data class MediaClip(
         trimStartMs = effectiveTrimStartMs,
         trimEndMs = effectiveTrimEndMs,
         playbackSpeed = playbackSpeed.coerceIn(0.1f, 10f),
-        volume = volume.coerceIn(0f, 1f)
+        volume = volume.coerceIn(0f, 1f),
+        transitionNext = transitionNext.normalized(),
+        speedCurve = speedCurve?.normalized()
     )
 
     val durationMs: Long get() {
@@ -507,6 +622,55 @@ enum class OverlayAnim {
 
 enum class OverlayBlendModeType {
     NORMAL, MULTIPLY, SCREEN, OVERLAY, SOFT_LIGHT, HARD_LIGHT, DIFFERENCE, ADD
+}
+
+/** The preview shape used for the non-rectangular overlay masks. */
+private class OverlayMaskShape(
+    private val mask: MaskShape
+) : androidx.compose.ui.graphics.Shape {
+    override fun createOutline(
+        size: androidx.compose.ui.geometry.Size,
+        layoutDirection: androidx.compose.ui.unit.LayoutDirection,
+        density: androidx.compose.ui.unit.Density
+    ): androidx.compose.ui.graphics.Outline {
+        val width = size.width
+        val height = size.height
+        val path = androidx.compose.ui.graphics.Path()
+        when (mask) {
+            MaskShape.HEART -> {
+                path.moveTo(width * 0.5f, height * 0.88f)
+                path.cubicTo(width * 0.34f, height * 0.74f, width * 0.08f, height * 0.56f, width * 0.08f, height * 0.31f)
+                path.cubicTo(width * 0.08f, height * 0.08f, width * 0.38f, height * 0.04f, width * 0.5f, height * 0.24f)
+                path.cubicTo(width * 0.62f, height * 0.04f, width * 0.92f, height * 0.08f, width * 0.92f, height * 0.31f)
+                path.cubicTo(width * 0.92f, height * 0.56f, width * 0.66f, height * 0.74f, width * 0.5f, height * 0.88f)
+                path.close()
+            }
+            MaskShape.STAR -> {
+                val centerX = width / 2f
+                val centerY = height / 2f
+                val outerRadius = minOf(width, height) * 0.48f
+                val innerRadius = outerRadius * 0.44f
+                for (index in 0 until 10) {
+                    val radius = if (index % 2 == 0) outerRadius else innerRadius
+                    val angle = -Math.PI.toFloat() / 2f + index * Math.PI.toFloat() / 5f
+                    val x = centerX + kotlin.math.cos(angle) * radius
+                    val y = centerY + kotlin.math.sin(angle) * radius
+                    if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                }
+                path.close()
+            }
+            else -> path.addRect(androidx.compose.ui.geometry.Rect(0f, 0f, width, height))
+        }
+        return androidx.compose.ui.graphics.Outline.Generic(path)
+    }
+}
+
+private fun overlayMaskComposeShape(mask: MaskShape): androidx.compose.ui.graphics.Shape = when (mask) {
+    MaskShape.CIRCLE -> CircleShape
+    MaskShape.RECTANGLE,
+    MaskShape.NONE -> androidx.compose.ui.graphics.RectangleShape
+    MaskShape.HEART,
+    MaskShape.STAR -> OverlayMaskShape(mask)
 }
 
 enum class TextAlignmentType { Left, Center, Right }
@@ -2137,24 +2301,27 @@ fun EditorScreen(
                         
                         var activeTransitionType by remember { mutableStateOf<TransitionType?>(null) }
                         var activeTransitionClipIndex by remember { mutableStateOf<Int?>(null) }
+                        var activeTransitionEasing by remember { mutableStateOf(EasingType.EASE_IN_OUT) }
                         var transitionProgress by remember { mutableStateOf(0f) } // -1f to 1f
                         
                         LaunchedEffect(currentPositionMs, clips) {
                             var accum = 0L
                             var foundTransition: TransitionType? = null
                             var foundClipIndex: Int? = null
+                            var foundEasing = EasingType.EASE_IN_OUT
                             var foundProgress = 0f
                             for (i in 0 until clips.lastIndex) {
                                 val clip = clips[i]
-                                val trans = clip.transitionNext
+                                val trans = clip.transitionNext.normalized()
                                 val cutPoint = accum + clip.durationMs
                                 if (trans.type != TransitionType.NONE) {
-                                    val tHalf = trans.durationMs / 2L
+                                    val tHalf = (transitionDurationForClip(trans, clip.durationMs) / 2L).coerceAtLeast(1L)
                                     val tStart = cutPoint - tHalf
                                     val tEnd = cutPoint + tHalf
                                     if (currentPositionMs in tStart..tEnd) {
                                         foundTransition = trans.type
                                         foundClipIndex = i
+                                        foundEasing = trans.easing
                                         foundProgress = (currentPositionMs - cutPoint).toFloat() / tHalf.toFloat()
                                         break
                                     }
@@ -2163,6 +2330,7 @@ fun EditorScreen(
                             }
                             activeTransitionType = foundTransition
                             activeTransitionClipIndex = foundClipIndex
+                            activeTransitionEasing = foundEasing
                             transitionProgress = foundProgress
                         }
 
@@ -2178,6 +2346,8 @@ fun EditorScreen(
                                 TransitionType.SLIDE_DOWN,
                                 TransitionType.ZOOM_IN,
                                 TransitionType.ZOOM_OUT,
+                                TransitionType.PUSH_LEFT,
+                                TransitionType.PUSH_RIGHT,
                                 TransitionType.WIPE_LEFT,
                                 TransitionType.WIPE_RIGHT,
                                 TransitionType.CLOCK_WIPE,
@@ -2305,7 +2475,7 @@ fun EditorScreen(
                                         
                                         if (activeTransitionType != null && !isPhotoTransitionPreview) {
                                             val tType = if (isBudgetMode) TransitionType.CROSSFADE else activeTransitionType
-                                            val p = transitionProgress
+                                            val p = signedTransitionProgress(transitionProgress, activeTransitionEasing)
                                             val isOld = p < 0f
                                             
                                             when (tType) {
@@ -2365,7 +2535,10 @@ fun EditorScreen(
                         )
 
                         if (isPhotoTransitionPreview && transitionProgress < 0f && transitionNextPhoto != null) {
-                            val incomingProgress = (transitionProgress + 1f).coerceIn(0f, 1f)
+                            val incomingProgress = easedTransitionProgress(
+                                transitionProgress + 1f,
+                                activeTransitionEasing
+                            )
                             val transitionModifier = Modifier
                                 .fillMaxSize()
                                 .graphicsLayer {
@@ -2380,6 +2553,8 @@ fun EditorScreen(
                                     when (activeTransitionType) {
                                         TransitionType.SLIDE_LEFT -> translationX = (1f - incomingProgress) * size.width
                                         TransitionType.SLIDE_RIGHT -> translationX = (incomingProgress - 1f) * size.width
+                                        TransitionType.PUSH_LEFT -> translationX = (1f - incomingProgress) * size.width
+                                        TransitionType.PUSH_RIGHT -> translationX = (incomingProgress - 1f) * size.width
                                         TransitionType.SLIDE_UP -> translationY = (1f - incomingProgress) * size.height
                                         TransitionType.SLIDE_DOWN -> translationY = (incomingProgress - 1f) * size.height
                                         TransitionType.ZOOM_IN -> {
@@ -2562,13 +2737,7 @@ fun EditorScreen(
                                     else -> androidx.compose.ui.graphics.BlendMode.SrcOver
                                 }
                                 
-                                val cMaskShape = when (overlay.maskShape) {
-                                    MaskShape.CIRCLE -> CircleShape
-                                    MaskShape.RECTANGLE -> RoundedCornerShape(0.dp) // Wait, just no cut or rect
-                                    MaskShape.HEART -> RoundedCornerShape(0.dp) // placeholder
-                                    MaskShape.STAR -> RoundedCornerShape(0.dp) // placeholder
-                                    else -> androidx.compose.ui.graphics.RectangleShape
-                                }
+                                val cMaskShape = overlayMaskComposeShape(overlay.maskShape)
 
                                 Box(
                                     modifier = Modifier
@@ -2667,7 +2836,21 @@ fun EditorScreen(
                                             color = overlay.borderColor,
                                             shape = cMaskShape
                                         )
-                                        .clip(cMaskShape),
+                                        .clip(cMaskShape)
+                                        .drawWithContent {
+                                            if (cBlendMode == androidx.compose.ui.graphics.BlendMode.SrcOver) {
+                                                drawContent()
+                                            } else {
+                                                drawContext.canvas.saveLayer(
+                                                    androidx.compose.ui.geometry.Rect(0f, 0f, size.width, size.height),
+                                                    androidx.compose.ui.graphics.Paint().apply {
+                                                        blendMode = cBlendMode
+                                                    }
+                                                )
+                                                drawContent()
+                                                drawContext.canvas.restore()
+                                            }
+                                        },
                                     contentAlignment = Alignment.Center
                                 ) {
                                     if (overlay.isPhoto || overlay.isGif) {
@@ -3971,10 +4154,14 @@ fun EditorScreen(
                                         if (isSelected && !clip.isPhoto) {
                                             AudioWaveform(
                                                 clipId = clip.id,
-                                                durationMs = clip.originalDurationMs,
+                                                sourceUri = clip.sourceUri,
+                                                sourceDurationMs = clip.originalDurationMs,
                                                 trimStartMs = clip.trimStartMs,
                                                 trimEndMs = clip.trimEndMs,
+                                                displayDurationMs = clip.durationMs,
                                                 pixelsPerMs = pixelsPerSecond / 1000f,
+                                                playbackSpeed = clip.playbackSpeed,
+                                                speedCurve = clip.speedCurve,
                                                 keyframes = clip.keyframes,
                                                 audioEffects = clip.audioEffects,
                                                 modifier = Modifier.fillMaxSize().padding(top = 16.dp),
@@ -4226,9 +4413,18 @@ fun EditorScreen(
                                     .width(with(density) { totalWidthPx.toDp() })
                             ) {
                                 for (audioClip in audioClips) {
-                                    val drawWidthPx = (audioClip.durationMs / 1000f) * pixelsPerSecond
+                                    val audioTimelineDurationMs = if (audioClip.isLooped) {
+                                        (videoDurationMs - audioClip.startTimeOnTimelineMs).coerceAtLeast(0L)
+                                    } else {
+                                        audioClip.durationMs.coerceAtMost(
+                                            (videoDurationMs - audioClip.startTimeOnTimelineMs).coerceAtLeast(0L)
+                                        )
+                                    }
+                                    val drawWidthPx = (audioTimelineDurationMs / 1000f) * pixelsPerSecond
                                     val startPx = (audioClip.startTimeOnTimelineMs / 1000f) * pixelsPerSecond
                                     val isSelected = selectedAudioId == audioClip.id
+                                    val resolvedAudioUri = audioClip.sourceUri
+                                        ?: audioClip.sourceClipId?.let { sourceId -> clips.find { it.id == sourceId }?.sourceUri }
                                     
                                     Box(
                                         modifier = Modifier
@@ -4259,7 +4455,13 @@ fun EditorScreen(
                                                             val newAudios = audioClips.toMutableList()
                                                             val idx = newAudios.indexOfFirst { it.id == audioClip.id }
                                                             if (idx != -1) {
-                                                                val oStart = (newAudios[idx].startTimeOnTimelineMs + shiftMs).coerceIn(0L, (videoDurationMs - newAudios[idx].durationMs).coerceAtLeast(0L))
+                                                                val movingClip = newAudios[idx]
+                                                                val latestStartMs = if (movingClip.isLooped) {
+                                                                    (videoDurationMs - 100L).coerceAtLeast(0L)
+                                                                } else {
+                                                                    (videoDurationMs - movingClip.durationMs).coerceAtLeast(0L)
+                                                                }
+                                                                val oStart = (movingClip.startTimeOnTimelineMs + shiftMs).coerceIn(0L, latestStartMs)
                                                                 newAudios[idx] = newAudios[idx].copy(startTimeOnTimelineMs = oStart)
                                                                 audioClips = newAudios
                                                                 accDrag = 0f
@@ -4272,17 +4474,20 @@ fun EditorScreen(
                                     ) {
                                         AudioWaveform(
                                             clipId = audioClip.id,
-                                            durationMs = audioClip.sourceDurationMs,
+                                            sourceUri = resolvedAudioUri,
+                                            sourceDurationMs = audioClip.sourceDurationMs,
                                             trimStartMs = audioClip.trimStartMs,
                                             trimEndMs = audioClip.trimEndMs,
+                                            displayDurationMs = audioTimelineDurationMs,
                                             pixelsPerMs = pixelsPerSecond / 1000f,
+                                            isLooped = audioClip.isLooped,
                                             keyframes = audioClip.keyframes,
                                             audioEffects = audioClip.audioEffects,
                                             modifier = Modifier.fillMaxSize(),
                                             color = Color(0xFF00BFFF).copy(alpha = 0.5f)
                                         )
                                         
-                                        if (audioClip.displayName != null && audioClip.durationMs > 500) {
+                                        if (audioClip.displayName != null && audioTimelineDurationMs > 500) {
                                             Text(
                                                 text = audioClip.displayName,
                                                 color = Color.White,
@@ -5013,7 +5218,7 @@ fun EditorScreen(
                         }
                         
                         if (isCurveMode) {
-                            val currentCurve = selectedClip.speedCurve ?: SpeedCurve()
+                            val currentCurve = (selectedClip.speedCurve ?: SpeedCurve()).normalized()
                             var activePtIndex by remember { mutableStateOf<Int?>(null) }
                             
                             // Presets
@@ -5196,7 +5401,7 @@ fun EditorScreen(
                         } else {
                             if (selectedClip.speedCurve != null) {
                                 Surface(
-                                    color = MaterialTheme.colorScheme.errorContainer,
+                                    color = MaterialTheme.colorScheme.primaryContainer,
                                     shape = RoundedCornerShape(8.dp),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
@@ -5205,22 +5410,15 @@ fun EditorScreen(
                                         verticalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
                                         Text(
-                                            "This saved speed curve is preview-only and will block MP4 export.",
+                                            "Speed curve active. MP4 export samples the curve into bounded speed segments and preserves pitch per segment.",
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onErrorContainer
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
                                         )
-                                        OutlinedButton(
-                                            onClick = {
-                                                val newClips = clips.toMutableList()
-                                                val idx = newClips.indexOfFirst { it.id == selectedClip.id }
-                                                if (idx >= 0) {
-                                                    newClips[idx] = selectedClip.copy(speedCurve = null, playbackSpeed = 1f)
-                                                    saveState(newClips, canvasSettings, "Remove preview-only speed curve")
-                                                }
-                                            }
-                                        ) {
-                                            Text("Reset to export-ready speed")
-                                        }
+                                        Text(
+                                            "Transitions on a curved clip remain unavailable until their multi-segment timing is supported.",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
                                     }
                                 }
                             }
@@ -5280,7 +5478,7 @@ fun EditorScreen(
                                     onClick = { isCurveMode = true },
                                     enabled = FeatureCapabilityRegistry.speedCurve().isSelectable
                                 ) {
-                                    Text("Curve · Coming later")
+                                    Text("Edit curve")
                                 }
                             }
                         }
@@ -5374,6 +5572,28 @@ fun EditorScreen(
                             onValueChangeFinished = { persistHistory() },
                             valueRange = 0f..1f
                         )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                Text("Loop audio", style = MaterialTheme.typography.labelLarge)
+                                Text(
+                                    "Repeat the selected trimmed region until the video ends.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = selectedAudio.isLooped,
+                                onCheckedChange = { enabled ->
+                                    updateSelectedAudio(selectedAudio.copy(isLooped = enabled))
+                                    persistHistory()
+                                }
+                            )
+                        }
 
                         Text("Volume at playhead: ${(volumeAtCursor * 100).toInt()}%", style = MaterialTheme.typography.labelMedium)
                         Slider(
@@ -5551,7 +5771,7 @@ fun EditorScreen(
                         )
 
                         Text(
-                            "Export applies EQ, pitch, bounded delay/reverb, distortion, volume keyframes, and fades. Preview playback currently uses the source track until export.",
+                            "Export applies looping, EQ, pitch, bounded delay/reverb, distortion, volume keyframes, and fades. Preview uses the trimmed source and repeats it when Loop audio is enabled.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -7031,7 +7251,7 @@ fun EditorScreen(
                         }
 
                         Text(
-                            "Export supports crossfade, slide, zoom, spin, flip, and photo wipe transitions between adjacent clips with export-ready trim, speed, crop, transform, filter, and supported effect edits. Unsupported effects remain gated.",
+                            "Export supports crossfade, slide, push, zoom, spin, flip, and photo wipe transitions between adjacent clips with bounded duration and selectable easing. Unsupported source edits remain gated.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -7064,7 +7284,9 @@ fun EditorScreen(
                                                     enabled = capability.isSelectable,
                                                     onClick = { 
                                                         val newClips = clips.toMutableList()
-                                                        newClips[clipIndex] = clip.copy(transitionNext = clip.transitionNext.copy(type = tType))
+                                                        newClips[clipIndex] = clip.copy(
+                                                            transitionNext = clip.transitionNext.copy(type = tType).normalized()
+                                                        )
                                                         saveState(newClips, canvasSettings, "Change transition")
                                                     }
                                                 )
@@ -7082,10 +7304,14 @@ fun EditorScreen(
                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                                 Text("0.3s", style = MaterialTheme.typography.bodySmall)
                                 Slider(
-                                    value = clip.transitionNext.durationMs.toFloat() / 1000f,
+                                    value = transitionDurationForClip(clip.transitionNext, clip.durationMs).toFloat() / 1000f,
                                     onValueChange = { newVal ->
                                         val newClips = clips.toMutableList()
-                                        newClips[clipIndex] = clip.copy(transitionNext = clip.transitionNext.copy(durationMs = (newVal * 1000).toLong()))
+                                        newClips[clipIndex] = clip.copy(
+                                            transitionNext = clip.transitionNext.copy(
+                                                durationMs = (newVal * 1000).toLong()
+                                            ).normalized()
+                                        )
                                         clips = newClips
                                     },
                                     onValueChangeFinished = {
@@ -7096,7 +7322,32 @@ fun EditorScreen(
                                 )
                                 Text("2.0s", style = MaterialTheme.typography.bodySmall)
                             }
-                            Text("${clip.transitionNext.durationMs} ms", modifier = Modifier.align(Alignment.CenterHorizontally), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                            Text(
+                                "${transitionDurationForClip(clip.transitionNext, clip.durationMs)} ms",
+                                modifier = Modifier.align(Alignment.CenterHorizontally),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text("Timing", style = MaterialTheme.typography.labelMedium)
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                val easings = EasingType.values()
+                                items(easings.size) { easingIndex ->
+                                    val easing = easings[easingIndex]
+                                    FilterChip(
+                                        selected = clip.transitionNext.easing == easing,
+                                        onClick = {
+                                            val newClips = clips.toMutableList()
+                                            newClips[clipIndex] = clip.copy(
+                                                transitionNext = clip.transitionNext.copy(easing = easing).normalized()
+                                            )
+                                            saveState(newClips, canvasSettings, "Change transition timing")
+                                        },
+                                        label = {
+                                            Text(easing.name.lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() })
+                                        }
+                                    )
+                                }
+                            }
                         }
                     }
                 }

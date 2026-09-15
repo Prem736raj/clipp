@@ -39,6 +39,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.PI
 import kotlin.math.pow
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 import kotlin.math.tanh
 
 data class ExportMetadata(
@@ -73,6 +74,70 @@ internal val EXPORT_REVERB_PRESETS = listOf("None", "Room", "Hall")
 internal const val MAX_EXPORT_DELAY_MS = 1_000L
 internal const val MAX_EXPORT_DELAY_FEEDBACK = 0.95f
 internal const val MAX_EXPORT_PITCH_SEMITONES = 12f
+internal const val MAX_AUDIO_LOOP_EXPORT_SEGMENTS = 4_096L
+
+internal data class AudioExportSegment(
+    val sourceStartMs: Long,
+    val sourceEndMs: Long,
+    val timelineOffsetMs: Long
+) {
+    val durationMs: Long get() = (sourceEndMs - sourceStartMs).coerceAtLeast(0L)
+}
+
+private fun AudioClip.exportSourceWindow(): LongRange? {
+    val safeSourceDurationMs = sourceDurationMs.coerceAtLeast(0L)
+    if (safeSourceDurationMs <= 0L) return null
+    val sourceStartMs = trimStartMs.coerceIn(0L, safeSourceDurationMs)
+    val sourceEndMs = trimEndMs.coerceIn(sourceStartMs, safeSourceDurationMs)
+    if (sourceEndMs <= sourceStartMs) return null
+    return sourceStartMs until sourceEndMs
+}
+
+internal fun AudioClip.requiredExportSegmentCount(videoDurationMs: Long): Long {
+    val window = exportSourceWindow() ?: return 0L
+    val timelineStartMs = startTimeOnTimelineMs.coerceAtLeast(0L)
+    val availableTimelineMs = (videoDurationMs - timelineStartMs).coerceAtLeast(0L)
+    if (availableTimelineMs <= 0L) return 0L
+    if (!isLooped) return 1L
+
+    val cycleDurationMs = (window.last + 1L - window.first).coerceAtLeast(1L)
+    val fullCycles = availableTimelineMs / cycleDurationMs
+    return fullCycles + if (availableTimelineMs % cycleDurationMs == 0L) 0L else 1L
+}
+
+internal fun AudioClip.buildExportSegments(videoDurationMs: Long): List<AudioExportSegment> {
+    val window = exportSourceWindow() ?: return emptyList()
+    val sourceStartMs = window.first
+    val sourceEndMs = window.last + 1L
+    val cycleDurationMs = sourceEndMs - sourceStartMs
+    val timelineStartMs = startTimeOnTimelineMs.coerceAtLeast(0L)
+    var remainingMs = (videoDurationMs - timelineStartMs).coerceAtLeast(0L)
+    if (remainingMs <= 0L) return emptyList()
+
+    if (!isLooped) {
+        val durationMs = minOf(cycleDurationMs, remainingMs)
+        return listOf(AudioExportSegment(sourceStartMs, sourceStartMs + durationMs, 0L))
+    }
+
+    val requiredSegments = requiredExportSegmentCount(videoDurationMs)
+    if (requiredSegments > MAX_AUDIO_LOOP_EXPORT_SEGMENTS) return emptyList()
+
+    return buildList(requiredSegments.toInt()) {
+        var timelineOffsetMs = 0L
+        while (remainingMs > 0L) {
+            val durationMs = minOf(cycleDurationMs, remainingMs)
+            add(
+                AudioExportSegment(
+                    sourceStartMs = sourceStartMs,
+                    sourceEndMs = sourceStartMs + durationMs,
+                    timelineOffsetMs = timelineOffsetMs
+                )
+            )
+            timelineOffsetMs += durationMs
+            remainingMs -= durationMs
+        }
+    }
+}
 
 /**
  * Renders the base timeline into a real MP4. Trims, still-image durations, and
@@ -107,16 +172,25 @@ class VideoExporter(context: Context) {
             .copy(clips = clips)
             .toTimelineProject()
             .toEditorState()
+        val unsupportedReasons = canonicalState.exportUnsupportedReasons()
+        if (unsupportedReasons.isNotEmpty()) {
+            onError("Export blocked: ${unsupportedReasons.joinToString(", ")}")
+            return ExportHandle { canceled.set(true) }
+        }
         val exportClips = canonicalState.clips
         val editedItems = mutableListOf<EditedMediaItem>()
         var clipStartMs = 0L
         exportClips.forEachIndexed { index, clip ->
-            clip.toEditedMediaItem(
-                state = canonicalState,
-                clipIndex = index,
-                clipStartMs = clipStartMs
-            )?.let { editedItems += it }
-            clipStartMs += clip.durationMs
+            clip.toExportSpeedSegments().forEach { segment ->
+                segment.toEditedMediaItem(
+                    state = canonicalState,
+                    clipIndex = index,
+                    clipStartMs = clipStartMs
+                )?.let {
+                    editedItems += it
+                    clipStartMs += segment.durationMs
+                }
+            }
         }
         if (editedItems.isEmpty()) {
             onError("There are no exportable clips in this project")
@@ -306,59 +380,73 @@ class VideoExporter(context: Context) {
             val sourceUri = audioClip.sourceUri
                 ?: audioClip.sourceClipId?.let { id -> clips.find { it.id == id }?.sourceUri }
                 ?: return@mapNotNull null
-            val sourceStart = audioClip.trimStartMs.coerceAtLeast(0L)
             val timelineStartMs = audioClip.startTimeOnTimelineMs.coerceIn(0L, (videoDurationMs - 1L).coerceAtLeast(0L))
-            val availableTimelineMs = (videoDurationMs - timelineStartMs).coerceAtLeast(1L)
-            val safeSourceDurationMs = audioClip.sourceDurationMs.coerceAtLeast(sourceStart + 1L)
-            val sourceEnd = audioClip.trimEndMs
-                .coerceAtLeast(sourceStart + 1L)
-                .coerceAtMost(safeSourceDurationMs)
-                .coerceAtMost(sourceStart + availableTimelineMs)
-            val durationMs = (sourceEnd - sourceStart).coerceAtLeast(1L)
-            val mediaItem = MediaItem.Builder()
-                .setUri(Uri.parse(sourceUri))
-                .setClippingConfiguration(
-                    MediaItem.ClippingConfiguration.Builder()
-                        .setStartPositionMs(sourceStart)
-                        .setEndPositionMs(sourceEnd)
-                        .build()
-                )
-                .build()
-            val processors = mutableListOf<AudioProcessor>()
-            val effectiveVolume = (audioClip.volume * state.canvasSettings.masterVolume).coerceIn(0f, 1f)
-            val audioEffects = audioClip.audioEffects
-            val volumeKeyframes = audioClip.keyframes["volume"].orEmpty().map { keyframe ->
-                keyframe.copy(
-                    timeMs = (keyframe.timeMs - sourceStart).coerceAtLeast(0L),
-                    value = keyframe.value.coerceIn(0f, 1f) * state.canvasSettings.masterVolume
-                )
-            }
-            val hasAudioAutomation = volumeKeyframes.isNotEmpty() ||
-                audioEffects.fadeInMs > 0L || audioEffects.fadeOutMs > 0L
-            if (!audioClip.isMuted && hasAudioAutomation) {
-                processors += KeyframedVolumeAudioProcessor(
-                    baseGain = effectiveVolume,
-                    durationMs = durationMs,
-                    fadeInMs = audioEffects.fadeInMs,
-                    fadeOutMs = audioEffects.fadeOutMs,
-                    volumeKeyframes = volumeKeyframes
-                )
-            } else if (!audioClip.isMuted && effectiveVolume != 1f) {
-                processors += VolumeAudioProcessor(effectiveVolume)
-            }
-            if (!audioClip.isMuted) {
-                processors.addAdvancedAudioProcessors(audioEffects)
-            }
-            val item = EditedMediaItem.Builder(mediaItem)
-                .setRemoveVideo(true)
-                .setRemoveAudio(audioClip.isMuted)
-                .setEffects(Effects(processors, emptyList()))
-                .build()
+            val segments = audioClip.buildExportSegments(videoDurationMs)
+            if (segments.isEmpty()) return@mapNotNull null
             val sequenceBuilder = EditedMediaItemSequence.Builder()
             val startTimeUs = timelineStartMs * 1_000L
             if (startTimeUs > 0L) sequenceBuilder.addGap(startTimeUs)
-            sequenceBuilder.addItem(item).build()
+            segments.forEach { segment ->
+                sequenceBuilder.addItem(
+                    buildAudioEditedItem(
+                        audioClip = audioClip,
+                        sourceUri = sourceUri,
+                        segment = segment,
+                        masterVolume = state.canvasSettings.masterVolume
+                    )
+                )
+            }
+            sequenceBuilder.build()
         }
+    }
+
+    private fun buildAudioEditedItem(
+        audioClip: AudioClip,
+        sourceUri: String,
+        segment: AudioExportSegment,
+        masterVolume: Float
+    ): EditedMediaItem {
+        val mediaItem = MediaItem.Builder()
+            .setUri(Uri.parse(sourceUri))
+            .setClippingConfiguration(
+                MediaItem.ClippingConfiguration.Builder()
+                    .setStartPositionMs(segment.sourceStartMs)
+                    .setEndPositionMs(segment.sourceEndMs)
+                    .build()
+            )
+            .build()
+        val processors = mutableListOf<AudioProcessor>()
+        val effectiveVolume = (audioClip.volume * masterVolume).coerceIn(0f, 1f)
+        val audioEffects = audioClip.audioEffects
+        val volumeKeyframes = audioClip.keyframes["volume"].orEmpty()
+            .filter { it.timeMs in segment.sourceStartMs..segment.sourceEndMs }
+            .map { keyframe ->
+                keyframe.copy(
+                    timeMs = (keyframe.timeMs - segment.sourceStartMs).coerceIn(0L, segment.durationMs),
+                    value = keyframe.value.coerceIn(0f, 1f) * masterVolume
+                )
+            }
+        val hasAudioAutomation = volumeKeyframes.isNotEmpty() ||
+            audioEffects.fadeInMs > 0L || audioEffects.fadeOutMs > 0L
+        if (!audioClip.isMuted && hasAudioAutomation) {
+            processors += KeyframedVolumeAudioProcessor(
+                baseGain = effectiveVolume,
+                durationMs = segment.durationMs,
+                fadeInMs = audioEffects.fadeInMs,
+                fadeOutMs = audioEffects.fadeOutMs,
+                volumeKeyframes = volumeKeyframes
+            )
+        } else if (!audioClip.isMuted && effectiveVolume != 1f) {
+            processors += VolumeAudioProcessor(effectiveVolume)
+        }
+        if (!audioClip.isMuted) {
+            processors.addAdvancedAudioProcessors(audioEffects)
+        }
+        return EditedMediaItem.Builder(mediaItem)
+            .setRemoveVideo(true)
+            .setRemoveAudio(audioClip.isMuted)
+            .setEffects(Effects(processors, emptyList()))
+            .build()
     }
 
     private fun publishAndValidate(
@@ -461,6 +549,210 @@ class VideoExporter(context: Context) {
     }
 }
 
+/**
+ * Media3 exposes a constant-speed effect, so variable curves are rendered as
+ * bounded source windows. Each window uses the curve's average speed for that
+ * interval; the visual/audio edits are remapped to the window's local clock.
+ */
+private fun MediaClip.toExportSpeedSegments(): List<MediaClip> {
+    val normalized = normalized()
+    val curve = normalized.speedCurve ?: return listOf(normalized)
+    val sourceDurationMs = normalized.effectiveTrimEndMs - normalized.effectiveTrimStartMs
+    if (sourceDurationMs <= 0L) return listOf(normalized.copy(speedCurve = null))
+
+    val timeline = SpeedCurveTimeline(sourceDurationMs, curve)
+    if (curve.isEffectivelyConstant()) {
+        return listOf(
+            normalized.copy(
+                playbackSpeed = curve.getSpeedAt(0.5f),
+                speedCurve = null
+            )
+        )
+    }
+
+    val windows = timeline.sampledWindows()
+    if (windows.isEmpty()) return listOf(normalized.copy(speedCurve = null))
+
+    return windows.mapIndexedNotNull { index, window ->
+        val sourceDeltaMs = window.sourceEndMs - window.sourceStartMs
+        if (sourceDeltaMs <= 0L) return@mapIndexedNotNull null
+        val speed = (sourceDeltaMs.toDouble() / window.playbackDurationMs.toDouble())
+            .toFloat()
+            .coerceIn(0.1f, 10f)
+        val segmentStartMs = window.playbackStartMs
+        val segmentEndMs = window.playbackEndMs.coerceAtLeast(segmentStartMs + 1L)
+        val segmentDurationMs = (segmentEndMs - segmentStartMs).coerceAtLeast(1L)
+        val startSourceMs = normalized.effectiveTrimStartMs + window.sourceStartMs
+        val endSourceMs = normalized.effectiveTrimStartMs + window.sourceEndMs
+
+        normalized.copy(
+            trimStartMs = startSourceMs,
+            trimEndMs = endSourceMs,
+            playbackSpeed = speed,
+            speedCurve = null,
+            effects = normalized.effects.mapNotNull {
+                it.remappedForSpeedSegment(
+                    segmentStartMs,
+                    segmentEndMs,
+                    segmentDurationMs
+                )
+            },
+            keyframes = normalized.keyframes.remappedForSpeedSegment(
+                clip = normalized,
+                segmentStartMs = segmentStartMs,
+                segmentEndMs = segmentEndMs,
+                segmentDurationMs = segmentDurationMs
+            ),
+            audioEffects = normalized.audioEffects.copy(fadeInMs = 0L, fadeOutMs = 0L),
+            transitionNext = if (index == windows.lastIndex) normalized.transitionNext else Transition()
+        )
+    }
+}
+
+private fun AppliedEffect.remappedForSpeedSegment(
+    segmentStartMs: Long,
+    segmentEndMs: Long,
+    segmentDurationMs: Long
+): AppliedEffect? {
+    val effectEndMs = if (endTimeMs == -1L) segmentEndMs else endTimeMs
+    val overlapStartMs = maxOf(startTimeMs, segmentStartMs)
+    val overlapEndMs = minOf(effectEndMs, segmentEndMs)
+    if (overlapEndMs < overlapStartMs) return null
+    val sourceSpanMs = (segmentEndMs - segmentStartMs).coerceAtLeast(1L)
+    fun localTime(timeMs: Long): Long = (
+        (timeMs - segmentStartMs).toDouble() / sourceSpanMs.toDouble() * segmentDurationMs
+        ).roundToLong().coerceIn(0L, segmentDurationMs)
+
+    return copy(
+        startTimeMs = localTime(overlapStartMs),
+        endTimeMs = if (endTimeMs == -1L) -1L else localTime(overlapEndMs)
+    )
+}
+
+private fun Map<String, List<Keyframe>>.remappedForSpeedSegment(
+    clip: MediaClip,
+    segmentStartMs: Long,
+    segmentEndMs: Long,
+    segmentDurationMs: Long
+): Map<String, List<Keyframe>> {
+    val remapped = mapValues { (property, values) ->
+        if (values.isEmpty()) {
+            values
+        } else {
+            remapKeyframeList(
+                property = property,
+                values = values,
+                clip = clip,
+                segmentStartMs = segmentStartMs,
+                segmentEndMs = segmentEndMs,
+                segmentDurationMs = segmentDurationMs
+            )
+        }
+    }.toMutableMap()
+
+    val audioEffects = clip.audioEffects
+    val volumeKeyframes = this["volume"].orEmpty()
+    if (volumeKeyframes.isNotEmpty() || audioEffects.fadeInMs > 0L || audioEffects.fadeOutMs > 0L) {
+        remapped["volume"] = remapVolumeKeyframesForSpeedSegment(
+            clip = clip,
+            segmentStartMs = segmentStartMs,
+            segmentEndMs = segmentEndMs,
+            segmentDurationMs = segmentDurationMs
+        )
+    }
+    return remapped
+}
+
+private fun Map<String, List<Keyframe>>.remapKeyframeList(
+    property: String,
+    values: List<Keyframe>,
+    clip: MediaClip,
+    segmentStartMs: Long,
+    segmentEndMs: Long,
+    segmentDurationMs: Long
+): List<Keyframe> {
+    val segmentSourceSpanMs = (segmentEndMs - segmentStartMs).coerceAtLeast(1L)
+    val sourceTimes = buildList {
+        add(segmentStartMs)
+        add(segmentEndMs)
+        values.filter { it.timeMs in segmentStartMs..segmentEndMs }
+            .forEach { add(it.timeMs) }
+    }.distinct().sorted()
+
+    return sourceTimes.map { sourceTimeMs ->
+        val localTimeMs = (
+            (sourceTimeMs - segmentStartMs).toDouble() / segmentSourceSpanMs.toDouble() * segmentDurationMs
+            ).roundToLong().coerceIn(0L, segmentDurationMs)
+        Keyframe(
+            id = "speed-segment-$property-$segmentStartMs-$localTimeMs",
+            timeMs = localTimeMs,
+            value = getValueAtTime(property, sourceTimeMs, clip.defaultKeyframeValue(property)),
+            easing = values.lastOrNull { it.timeMs <= sourceTimeMs }?.easing
+                ?: values.first().easing
+        )
+    }.distinctBy { it.timeMs }
+}
+
+private fun Map<String, List<Keyframe>>.remapVolumeKeyframesForSpeedSegment(
+    clip: MediaClip,
+    segmentStartMs: Long,
+    segmentEndMs: Long,
+    segmentDurationMs: Long
+): List<Keyframe> {
+    val values = this["volume"].orEmpty()
+    val segmentSourceSpanMs = (segmentEndMs - segmentStartMs).coerceAtLeast(1L)
+    val sourceTimes = buildList {
+        add(segmentStartMs)
+        add(segmentEndMs)
+        values.filter { it.timeMs in segmentStartMs..segmentEndMs }
+            .forEach { add(it.timeMs) }
+    }.distinct().sorted()
+    val originalDurationMs = clip.durationMs.coerceAtLeast(1L)
+
+    fun fadeGainAt(timeMs: Long): Float {
+        val fadeInGain = if (clip.audioEffects.fadeInMs > 0L) {
+            (timeMs.toFloat() / clip.audioEffects.fadeInMs).coerceIn(0f, 1f)
+        } else {
+            1f
+        }
+        val fadeOutGain = if (clip.audioEffects.fadeOutMs > 0L) {
+            ((originalDurationMs - timeMs).toFloat() / clip.audioEffects.fadeOutMs).coerceIn(0f, 1f)
+        } else {
+            1f
+        }
+        return fadeInGain * fadeOutGain
+    }
+
+    return sourceTimes.map { sourceTimeMs ->
+        val localTimeMs = (
+            (sourceTimeMs - segmentStartMs).toDouble() / segmentSourceSpanMs.toDouble() * segmentDurationMs
+            ).roundToLong().coerceIn(0L, segmentDurationMs)
+        Keyframe(
+            id = "speed-segment-volume-$segmentStartMs-$localTimeMs",
+            timeMs = localTimeMs,
+            value = (
+                getValueAtTime("volume", sourceTimeMs, clip.volume) * fadeGainAt(sourceTimeMs)
+                ).coerceIn(0f, 1f),
+            easing = values.lastOrNull { it.timeMs <= sourceTimeMs }?.easing
+                ?: values.firstOrNull()?.easing
+                ?: EasingType.LINEAR
+        )
+    }.distinctBy { it.timeMs }
+}
+
+private fun MediaClip.defaultKeyframeValue(property: String): Float = when (property) {
+    "posX" -> posX
+    "posY" -> posY
+    "scale" -> scale
+    "rotation" -> rotation
+    "cropLeft" -> cropRect.left
+    "cropTop" -> cropRect.top
+    "cropRight" -> cropRect.right
+    "cropBottom" -> cropRect.bottom
+    "volume" -> volume
+    else -> 0f
+}
+
 fun MediaClip.hasUnsupportedExportEdits(): Boolean {
     return !playbackSpeed.isFinite() || playbackSpeed !in 0.1f..10f ||
         !volume.isFinite() || volume !in 0f..1f ||
@@ -469,7 +761,7 @@ fun MediaClip.hasUnsupportedExportEdits(): Boolean {
         cropRect.right <= cropRect.left || cropRect.bottom <= cropRect.top ||
         scale <= 0f ||
         photoAnimationSettings.type != PhotoAnimationType.NONE ||
-        speedCurve != null
+        speedCurve?.isExportSafe() == false
 }
 
 private fun MutableList<AudioProcessor>.addAdvancedAudioProcessors(

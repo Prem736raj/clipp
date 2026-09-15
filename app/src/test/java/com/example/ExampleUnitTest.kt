@@ -8,10 +8,12 @@ import com.example.viewmodel.PerformanceMode
 import com.example.viewmodel.EditorPerformanceProfile
 import com.example.viewmodel.EditorDocumentState
 import com.example.viewmodel.PlaybackUiCadence
+import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -420,14 +422,14 @@ class ExampleUnitTest {
   }
 
   @Test
-  fun capabilityRegistryKeepsPreviewOnlyControlsOutOfNewEdits() {
+  fun capabilityRegistryExposesSharedOverlayAndTransitionRendering() {
     assertTrue(FeatureCapabilityRegistry.effect(EffectType.MIRROR).isSelectable)
     assertFalse(FeatureCapabilityRegistry.effect(EffectType.OIL_PAINTING).isSelectable)
-    assertFalse(FeatureCapabilityRegistry.speedCurve().isSelectable)
-    assertFalse(FeatureCapabilityRegistry.overlayAnimation(OverlayAnim.SLIDE).isSelectable)
-    assertFalse(FeatureCapabilityRegistry.blendMode(OverlayBlendModeType.SCREEN).isSelectable)
-    assertFalse(FeatureCapabilityRegistry.maskShape(MaskShape.CIRCLE).isSelectable)
-    assertFalse(FeatureCapabilityRegistry.transition(TransitionType.PUSH_LEFT).isSelectable)
+    assertTrue(FeatureCapabilityRegistry.speedCurve().isSelectable)
+    assertTrue(FeatureCapabilityRegistry.overlayAnimation(OverlayAnim.SLIDE).isSelectable)
+    assertTrue(FeatureCapabilityRegistry.blendMode(OverlayBlendModeType.SCREEN).isSelectable)
+    assertTrue(FeatureCapabilityRegistry.maskShape(MaskShape.CIRCLE).isSelectable)
+    assertTrue(FeatureCapabilityRegistry.transition(TransitionType.PUSH_LEFT).isSelectable)
 
     val photo = MediaClip(
       sourceUri = "content://media/image/1",
@@ -442,7 +444,7 @@ class ExampleUnitTest {
         incoming = photo.copy(id = "second")
       ).isSelectable
     )
-    assertFalse(
+    assertTrue(
       FeatureCapabilityRegistry.transition(
         TransitionType.CROSSFADE,
         outgoing = photo.copy(rotation = 90f),
@@ -511,7 +513,7 @@ class ExampleUnitTest {
       transitionNext = Transition()
     )
     assertFalse(EditorState(clips = listOf(firstVideo, secondVideo)).hasUnsupportedExportEdits())
-    assertTrue(
+    assertFalse(
       EditorState(
         clips = listOf(firstVideo, secondVideo.copy(rotation = 90f))
       ).hasUnsupportedExportEdits()
@@ -586,7 +588,7 @@ class ExampleUnitTest {
     assertFalse(EditorState(clips = listOf(clip), texts = listOf(text), stickers = listOf(sticker), overlays = listOf(imageOverlay)).hasUnsupportedExportEdits())
     assertFalse(EditorState(clips = listOf(clip), overlays = listOf(imageOverlay.copy(isPhoto = false, isGif = true))).hasUnsupportedExportEdits())
     assertTrue(EditorState(clips = listOf(clip), texts = listOf(text.copy(animIn = TextAnimIn.TYPEWRITER))).hasUnsupportedExportEdits())
-    assertTrue(EditorState(clips = listOf(clip), overlays = listOf(imageOverlay.copy(entranceAnim = OverlayAnim.SLIDE))).hasUnsupportedExportEdits())
+    assertFalse(EditorState(clips = listOf(clip), overlays = listOf(imageOverlay.copy(entranceAnim = OverlayAnim.SLIDE))).hasUnsupportedExportEdits())
   }
 
   @Test
@@ -722,6 +724,203 @@ class ExampleUnitTest {
       EditorState(clips = listOf(clip.copy(audioEffects = effects.copy(delayTimeMs = 1_001L))))
         .hasUnsupportedExportEdits()
     )
+  }
+
+  @Test
+  fun loopedAudioBuildsBoundedSegmentsToProjectEnd() {
+    val audio = AudioClip(
+      sourceUri = "content://media/audio/1",
+      startTimeOnTimelineMs = 500L,
+      sourceDurationMs = 1_000L,
+      trimStartMs = 200L,
+      trimEndMs = 700L,
+      isLooped = true
+    )
+
+    val segments = audio.buildExportSegments(videoDurationMs = 2_200L)
+
+    assertEquals(4, segments.size)
+    assertEquals(AudioExportSegment(200L, 700L, 0L), segments[0])
+    assertEquals(AudioExportSegment(200L, 700L, 500L), segments[1])
+    assertEquals(AudioExportSegment(200L, 700L, 1_000L), segments[2])
+    assertEquals(AudioExportSegment(200L, 400L, 1_500L), segments[3])
+    assertEquals(4L, audio.requiredExportSegmentCount(videoDurationMs = 2_200L))
+  }
+
+  @Test
+  fun nonLoopedAudioIsClampedToRemainingProjectDuration() {
+    val audio = AudioClip(
+      sourceUri = "content://media/audio/1",
+      startTimeOnTimelineMs = 800L,
+      sourceDurationMs = 2_000L,
+      trimStartMs = 300L,
+      trimEndMs = 1_800L,
+      isLooped = false
+    )
+
+    val segments = audio.buildExportSegments(videoDurationMs = 1_200L)
+
+    assertEquals(listOf(AudioExportSegment(300L, 700L, 0L)), segments)
+  }
+
+  @Test
+  fun loopedAudioIsExportableUnlessItWouldCreateAnUnboundedSegmentCount() {
+    val clip = MediaClip(
+      sourceUri = "content://media/video/1",
+      originalDurationMs = 5_000L,
+      trimEndMs = 5_000L
+    )
+    val normalLoop = AudioClip(
+      sourceUri = "content://media/audio/1",
+      startTimeOnTimelineMs = 0L,
+      sourceDurationMs = 1_000L,
+      trimEndMs = 500L,
+      isLooped = true
+    )
+    assertFalse(EditorState(clips = listOf(clip), audioClips = listOf(normalLoop)).hasUnsupportedExportEdits())
+
+    val pathologicalLoop = normalLoop.copy(
+      sourceDurationMs = 1L,
+      trimStartMs = 0L,
+      trimEndMs = 1L
+    )
+    assertTrue(EditorState(clips = listOf(clip), audioClips = listOf(pathologicalLoop)).hasUnsupportedExportEdits())
+  }
+
+  @Test
+  fun waveformAccumulatorMeasuresActualPcm16Peaks() {
+    val accumulator = WaveformPeakAccumulator(durationUs = 1_000_000L, bucketCount = 4)
+    val pcm = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).apply {
+      putShort(0)
+      putShort(8_192)
+      putShort(16_384)
+      putShort(32_767)
+      flip()
+    }
+
+    accumulator.consume(
+      buffer = pcm,
+      offset = 0,
+      size = pcm.remaining(),
+      presentationTimeUs = 0L,
+      sampleRate = 4,
+      channelCount = 1,
+      encoding = C.ENCODING_PCM_16BIT
+    )
+
+    val peaks = accumulator.finish()
+    assertEquals(4, peaks.size)
+    assertEquals(0f, peaks[0], 0.001f)
+    assertEquals(0.25f, peaks[1], 0.01f)
+    assertEquals(0.5f, peaks[2], 0.01f)
+    assertTrue(peaks[3] > 0.99f)
+  }
+
+  @Test
+  fun waveformTimelineSamplingHonorsTrimAndLooping() {
+    val waveform = WaveformData(
+      durationMs = 1_000L,
+      peaks = listOf(0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f, 0.9f, 1f)
+    )
+
+    val trimmed = waveformPeaksForTimeline(
+      waveform = waveform,
+      trimStartMs = 200L,
+      trimEndMs = 600L,
+      displayDurationMs = 400L,
+      outputCount = 4
+    )
+    assertEquals(listOf(0.3f, 0.4f, 0.5f, 0.6f), trimmed)
+
+    val looped = waveformPeaksForTimeline(
+      waveform = waveform,
+      trimStartMs = 200L,
+      trimEndMs = 400L,
+      displayDurationMs = 600L,
+      outputCount = 6,
+      isLooped = true
+    )
+    assertEquals(listOf(0.3f, 0.4f, 0.3f, 0.4f, 0.3f, 0.4f), looped)
+  }
+
+  @Test
+  fun waveformTimelineSamplingFollowsPlaybackSpeedAndSpeedCurveClock() {
+    val waveform = WaveformData(
+      durationMs = 1_000L,
+      peaks = listOf(0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f, 0.9f, 1f)
+    )
+    val expected = listOf(0.2f, 0.4f, 0.6f, 0.8f, 1f)
+
+    val constantSpeed = waveformPeaksForTimeline(
+      waveform = waveform,
+      trimStartMs = 0L,
+      trimEndMs = 1_000L,
+      displayDurationMs = 500L,
+      outputCount = 5,
+      playbackSpeed = 2f
+    )
+    assertEquals(expected, constantSpeed)
+
+    val speedCurve = waveformPeaksForTimeline(
+      waveform = waveform,
+      trimStartMs = 0L,
+      trimEndMs = 1_000L,
+      displayDurationMs = 500L,
+      outputCount = 5,
+      speedCurve = SpeedCurve(listOf(SpeedPoint(0f, 2f), SpeedPoint(1f, 2f)))
+    )
+    assertEquals(expected, speedCurve)
+  }
+
+  @Test
+  fun waveformRenderSamplerReusesSpeedTimelineAndPeakArrayAcrossRedraws() {
+    val waveform = WaveformData(
+      durationMs = 60_000L,
+      peaks = List(4_096) { index -> (index % 100) / 100f }
+    )
+    var speedTimelineBuilds = 0
+    val sampler = WaveformTimelineSampler(
+      waveform = waveform,
+      trimStartMs = 0L,
+      trimEndMs = 60_000L,
+      displayDurationMs = 42_000L,
+      speedCurve = SpeedCurve(
+        listOf(
+          SpeedPoint(0f, 0.75f),
+          SpeedPoint(0.5f, 2f),
+          SpeedPoint(1f, 1f)
+        )
+      ),
+      speedTimelineFactory = { durationMs, curve ->
+        speedTimelineBuilds++
+        SpeedCurveTimeline(durationMs, curve)
+      }
+    )
+
+    val firstDrawPeaks = sampler.peaks(1_024)
+    repeat(100) {
+      assertSame(firstDrawPeaks, sampler.peaks(1_024))
+    }
+
+    assertEquals(1, speedTimelineBuilds)
+    assertEquals(1_024, firstDrawPeaks.size)
+  }
+
+  @Test
+  fun waveformDiskCacheRoundTripsMeasuredEnvelope() {
+    val directory = File(System.getProperty("java.io.tmpdir"), "clipp-waveform-${System.nanoTime()}")
+    try {
+      val cache = WaveformDiskCache(directory, maxBytes = 1_024L * 1_024L)
+      val original = WaveformData(1_250L, listOf(0.1f, 0.5f, 0.9f, 0.2f))
+
+      cache.write("fixture", original)
+      val restored = cache.read("fixture")
+
+      assertEquals(original, restored)
+      assertTrue(cache.fileFor("fixture").isFile)
+    } finally {
+      directory.deleteRecursively()
+    }
   }
 
   @Test

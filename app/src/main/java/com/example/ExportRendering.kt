@@ -94,6 +94,7 @@ private class TransitionSourceBitmapOverlay(
     context: Context,
     private val clip: MediaClip,
     private val type: TransitionType,
+    private val easing: EasingType,
     private val blankBitmap: Bitmap,
     private val windowStartMs: Long,
     private val windowEndMs: Long
@@ -148,7 +149,10 @@ private class TransitionSourceBitmapOverlay(
                     clip = clip,
                     localTimeMs = sampleTimeMs,
                     transitionType = type,
-                    transitionProgress = transitionProgress(localTimeMs, windowStartMs, windowEndMs)
+                    transitionProgress = easedTransitionProgress(
+                        transitionProgress(localTimeMs, windowStartMs, windowEndMs),
+                        easing
+                    )
                 )
             }
             if (!clip.isPhoto) decoded?.takeIf { it !== rendered }?.recycle()
@@ -165,6 +169,7 @@ private class TransitionSourceBitmapOverlay(
         return transitionSourceOverlaySettings(
             clip = clip,
             type = type,
+            easing = easing,
             localTimeMs = presentationTimeUs / 1_000L,
             windowStartMs = windowStartMs,
             windowEndMs = windowEndMs
@@ -201,7 +206,13 @@ private fun transitionOverlaySettings(
         TransitionType.SLIDE_LEFT -> overlaySettings(
             1.5f - eased, 0.5f, 1f, 1f, allowOffscreen = true
         )
+        TransitionType.PUSH_LEFT -> overlaySettings(
+            1.5f - eased, 0.5f, 1f, 1f, allowOffscreen = true
+        )
         TransitionType.SLIDE_RIGHT -> overlaySettings(
+            -0.5f + eased, 0.5f, 1f, 1f, allowOffscreen = true
+        )
+        TransitionType.PUSH_RIGHT -> overlaySettings(
             -0.5f + eased, 0.5f, 1f, 1f, allowOffscreen = true
         )
         TransitionType.SLIDE_UP -> overlaySettings(
@@ -229,12 +240,16 @@ private fun transitionOverlaySettings(
 private fun transitionSourceOverlaySettings(
     clip: MediaClip,
     type: TransitionType,
+    easing: EasingType,
     localTimeMs: Long,
     windowStartMs: Long,
     windowEndMs: Long
 ): OverlaySettings {
     val incomingTimeMs = (localTimeMs - windowStartMs).coerceAtLeast(0L)
-    val eased = easedProgress(transitionProgress(localTimeMs, windowStartMs, windowEndMs))
+    val eased = easedTransitionProgress(
+        transitionProgress(localTimeMs, windowStartMs, windowEndMs),
+        easing
+    )
     val scale = clip.keyframes.getValueAtTime("scale", incomingTimeMs, clip.scale)
         .coerceIn(0.05f, 10f)
     val posX = clip.keyframes.getValueAtTime("posX", incomingTimeMs, clip.posX)
@@ -251,6 +266,8 @@ private fun transitionSourceOverlaySettings(
         TransitionType.CROSSFADE -> alpha = eased
         TransitionType.SLIDE_LEFT -> targetX += 1f - eased
         TransitionType.SLIDE_RIGHT -> targetX -= 1f - eased
+        TransitionType.PUSH_LEFT -> targetX += 1f - eased
+        TransitionType.PUSH_RIGHT -> targetX -= 1f - eased
         TransitionType.SLIDE_UP -> targetY += 1f - eased
         TransitionType.SLIDE_DOWN -> targetY -= 1f - eased
         TransitionType.ZOOM_IN -> {
@@ -291,7 +308,9 @@ private fun transitionSourceOverlaySettings(
         allowOffscreen = type == TransitionType.SLIDE_LEFT ||
             type == TransitionType.SLIDE_RIGHT ||
             type == TransitionType.SLIDE_UP ||
-            type == TransitionType.SLIDE_DOWN
+            type == TransitionType.SLIDE_DOWN ||
+            type == TransitionType.PUSH_LEFT ||
+            type == TransitionType.PUSH_RIGHT
     )
 }
 
@@ -311,6 +330,7 @@ private class VideoFrameBitmapOverlay(
     private val windowEndMs: Long,
     private val blankBitmap: Bitmap,
     private val chromaKey: ChromaKeySettings,
+    private val maskShape: MaskShape,
     private val settingsAt: (Long) -> OverlaySettings
 ) : BitmapOverlay() {
     private companion object {
@@ -383,10 +403,18 @@ private class VideoFrameBitmapOverlay(
             (decoded.height * scale).toInt().coerceAtLeast(1),
             true
         ).also { decoded.recycle() }
-        if (!chromaKey.enabled) return scaled
-        return applyChromaKey(scaled, chromaKey).also { keyed ->
-            if (keyed !== scaled) scaled.recycle()
+        var current = scaled
+        if (chromaKey.enabled) {
+            current = applyChromaKey(current, chromaKey).also { keyed ->
+                if (keyed !== current && !current.isRecycled) current.recycle()
+            }
         }
+        if (maskShape != MaskShape.NONE) {
+            current = applyOverlayMask(current, maskShape).also { masked ->
+                if (masked !== current && !current.isRecycled) current.recycle()
+            }
+        }
+        return current
     }
 }
 
@@ -397,7 +425,8 @@ private class GifFrameBitmapOverlay(
     private val windowEndMs: Long,
     private val blankBitmap: Bitmap,
     private val settingsAt: (Long) -> OverlaySettings,
-    sourceUri: String
+    sourceUri: String,
+    private val maskShape: MaskShape
 ) : BitmapOverlay() {
     private companion object {
         const val SAMPLE_INTERVAL_MS = 33L
@@ -435,10 +464,15 @@ private class GifFrameBitmapOverlay(
             movie.setTime(sampleTimeMs.toInt())
             canvas.scale(scale, scale)
             movie.draw(canvas, 0f, 0f)
+            val prepared = if (maskShape == MaskShape.NONE) bitmap else {
+                applyOverlayMask(bitmap, maskShape).also { masked ->
+                    if (masked !== bitmap && !bitmap.isRecycled) bitmap.recycle()
+                }
+            }
             cachedBitmap?.recycle()
-            cachedBitmap = bitmap
+            cachedBitmap = prepared
             cachedSampleTimeMs = sampleTimeMs
-            return bitmap
+            return prepared
         }
     }
 
@@ -614,6 +648,27 @@ private class ProceduralEffectBitmapOverlay(
 
 private class ExportRgbMatrix(private val matrix: FloatArray) : RgbMatrix {
     override fun getMatrix(presentationTimeUs: Long, useHdr: Boolean): FloatArray = matrix.copyOf()
+}
+
+/** Moves the outgoing frame while the incoming transition source enters. */
+private class PushTransitionTransformation(
+    private val type: TransitionType,
+    clipDurationMs: Long,
+    transition: Transition
+) : MatrixTransformation {
+    private val durationMs = transitionDurationForClip(transition, clipDurationMs)
+    private val startMs = (clipDurationMs - durationMs).coerceAtLeast(0L)
+    private val easing = transition.easing
+
+    override fun getMatrix(presentationTimeUs: Long): Matrix {
+        val localTimeMs = presentationTimeUs / 1_000L
+        val progress = ((localTimeMs - startMs).toFloat() / durationMs).coerceIn(0f, 1f)
+        val eased = easedTransitionProgress(progress, easing)
+        val direction = if (type == TransitionType.PUSH_LEFT) -1f else 1f
+        return Matrix().apply {
+            postTranslate(direction * eased * 2f, 0f)
+        }
+    }
 }
 
 /**
@@ -1027,10 +1082,20 @@ private fun loadVideoFrame(context: Context, uri: String, timeMs: Long): Bitmap?
 private fun renderOverlayClipBitmap(context: Context, overlay: OverlayClip): Bitmap? {
     val bitmap = if (overlay.isPhoto) loadBitmap(context, overlay.sourceUri)
     else loadVideoFrame(context, overlay.sourceUri, overlay.trimStartMs)
-    if (bitmap == null || !overlay.chromaKey.enabled) return bitmap
-    return applyChromaKey(bitmap, overlay.chromaKey).also { keyed ->
-        if (keyed !== bitmap) bitmap.recycle()
+    if (bitmap == null) return null
+
+    var current = bitmap
+    if (overlay.chromaKey.enabled) {
+        current = applyChromaKey(current, overlay.chromaKey).also { keyed ->
+            if (keyed !== current && !current.isRecycled) current.recycle()
+        }
     }
+    if (overlay.maskShape != MaskShape.NONE) {
+        current = applyOverlayMask(current, overlay.maskShape).also { masked ->
+            if (masked !== current && !current.isRecycled) current.recycle()
+        }
+    }
+    return current
 }
 
 private const val TRANSITION_SOURCE_MAX_FRAME_DIMENSION = 1600
@@ -1160,6 +1225,61 @@ private fun flipBitmap(source: Bitmap, horizontal: Boolean, vertical: Boolean): 
         source.height / 2f
     )
     canvas.drawBitmap(source, 0f, 0f, null)
+    return output
+}
+
+/** Applies the same shape mask used by the editor preview to an overlay frame. */
+private fun applyOverlayMask(source: Bitmap, shape: MaskShape): Bitmap {
+    if (shape == MaskShape.NONE) return source
+
+    val output = Bitmap.createBitmap(
+        source.width.coerceAtLeast(1),
+        source.height.coerceAtLeast(1),
+        Bitmap.Config.ARGB_8888
+    )
+    val bounds = RectF(0f, 0f, source.width.toFloat(), source.height.toFloat())
+    val maskPath = Path().apply {
+        when (shape) {
+            MaskShape.CIRCLE -> addOval(bounds, Path.Direction.CW)
+            MaskShape.RECTANGLE -> addRect(bounds, Path.Direction.CW)
+            MaskShape.HEART -> {
+                val width = source.width.toFloat()
+                val height = source.height.toFloat()
+                moveTo(width * 0.5f, height * 0.88f)
+                cubicTo(width * 0.34f, height * 0.74f, width * 0.08f, height * 0.56f, width * 0.08f, height * 0.31f)
+                cubicTo(width * 0.08f, height * 0.08f, width * 0.38f, height * 0.04f, width * 0.5f, height * 0.24f)
+                cubicTo(width * 0.62f, height * 0.04f, width * 0.92f, height * 0.08f, width * 0.92f, height * 0.31f)
+                cubicTo(width * 0.92f, height * 0.56f, width * 0.66f, height * 0.74f, width * 0.5f, height * 0.88f)
+                close()
+            }
+            MaskShape.STAR -> {
+                val centerX = source.width / 2f
+                val centerY = source.height / 2f
+                val outerRadius = min(source.width, source.height) * 0.48f
+                val innerRadius = outerRadius * 0.44f
+                for (index in 0 until 10) {
+                    val radius = if (index % 2 == 0) outerRadius else innerRadius
+                    val angle = -PI.toFloat() / 2f + index * PI.toFloat() / 5f
+                    val x = centerX + kotlin.math.cos(angle) * radius
+                    val y = centerY + sin(angle) * radius
+                    if (index == 0) moveTo(x, y) else lineTo(x, y)
+                }
+                close()
+            }
+            MaskShape.NONE -> addRect(bounds, Path.Direction.CW)
+        }
+    }
+
+    val canvas = Canvas(output)
+    canvas.saveLayer(bounds, null)
+    canvas.drawBitmap(source, 0f, 0f, null)
+    val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN)
+    }
+    canvas.drawPath(maskPath, maskPaint)
+    maskPaint.xfermode = null
+    canvas.restore()
     return output
 }
 
@@ -1323,6 +1443,7 @@ private fun buildOverlaySettings(overlay: OverlayClip, globalTimeMs: Long): Over
     val exitDurationMs = 500L
     var alpha = 1f
     var scale = 1f
+    var slideOffsetY = 0f
     if (overlay.entranceAnim != OverlayAnim.NONE && relative < entranceDurationMs) {
         val progress = easedProgress(relative.toFloat() / entranceDurationMs)
         when (overlay.entranceAnim) {
@@ -1331,6 +1452,7 @@ private fun buildOverlaySettings(overlay: OverlayClip, globalTimeMs: Long): Over
                 alpha *= progress
                 scale *= progress.coerceAtLeast(0.001f)
             }
+            OverlayAnim.SLIDE -> slideOffsetY += 1f - progress
             else -> Unit
         }
     }
@@ -1344,16 +1466,20 @@ private fun buildOverlaySettings(overlay: OverlayClip, globalTimeMs: Long): Over
                 alpha *= inverseEase
                 scale *= inverseEase.coerceAtLeast(0.001f)
             }
+            OverlayAnim.SLIDE -> slideOffsetY += progress
             else -> Unit
         }
     }
+    val posX = overlay.keyframes.getValueAtTime("posX", relative, overlay.posX)
+    val posY = overlay.keyframes.getValueAtTime("posY", relative, overlay.posY) + slideOffsetY
     return overlaySettings(
-        posX = overlay.keyframes.getValueAtTime("posX", relative, overlay.posX),
-        posY = overlay.keyframes.getValueAtTime("posY", relative, overlay.posY),
+        posX = posX,
+        posY = posY,
         scaleX = overlay.keyframes.getValueAtTime("scaleX", relative, overlay.scaleX) * scale,
         scaleY = overlay.keyframes.getValueAtTime("scaleY", relative, overlay.scaleY) * scale,
         rotation = overlay.keyframes.getValueAtTime("rotation", relative, overlay.rotation),
-        alpha = overlay.keyframes.getValueAtTime("opacity", relative, overlay.opacity) * alpha
+        alpha = overlay.keyframes.getValueAtTime("opacity", relative, overlay.opacity) * alpha,
+        allowOffscreen = overlay.entranceAnim == OverlayAnim.SLIDE || overlay.exitAnim == OverlayAnim.SLIDE
     )
 }
 
@@ -1363,11 +1489,29 @@ internal fun buildExportOverlays(
     clipStartMs: Long,
     clipDurationMs: Long,
     clip: MediaClip
-): List<TextureOverlay> {
+): List<Effect> {
     if (clipDurationMs <= 0L) return emptyList()
     val blank = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
-    val overlays = mutableListOf<TextureOverlay>()
+    val overlayEffects = mutableListOf<Effect>()
     val renderGraph = TimelineRenderGraph(state.toTimelineProject())
+
+    fun addTextureOverlay(
+        overlay: TextureOverlay,
+        blendMode: OverlayBlendModeType = OverlayBlendModeType.NORMAL,
+        windowStartMs: Long = 0L,
+        windowEndMs: Long = clipDurationMs
+    ) {
+        if (blendMode == OverlayBlendModeType.NORMAL || overlay !is BitmapOverlay) {
+            overlayEffects += OverlayEffect(listOf(overlay))
+        } else {
+            overlayEffects += BlendModeOverlayEffect(
+                overlay = overlay,
+                blendMode = blendMode,
+                windowStartMs = windowStartMs,
+                windowEndMs = windowEndMs
+            )
+        }
+    }
 
     fun addWindowed(
         bitmap: Bitmap,
@@ -1377,11 +1521,17 @@ internal fun buildExportOverlays(
     ) {
         val start = max(0L, startGlobalMs - clipStartMs)
         val end = min(clipDurationMs, endGlobalMs - clipStartMs)
-        if (end > start) overlays += TimedBitmapOverlay(
-            listOf(BitmapWindow(start, end, bitmap)),
-            blank,
-            settingsAt
-        )
+        if (end > start) {
+            addTextureOverlay(
+                overlay = TimedBitmapOverlay(
+                    listOf(BitmapWindow(start, end, bitmap)),
+                    blank,
+                    settingsAt
+                ),
+                windowStartMs = start,
+                windowEndMs = end
+            )
+        }
     }
 
     // Build all user-authored visual overlays from the same canonical order
@@ -1409,14 +1559,28 @@ internal fun buildExportOverlays(
                             windowEndMs = end,
                             blankBitmap = blank,
                             settingsAt = { localTime -> buildOverlaySettings(overlay, clipStartMs + localTime) },
-                            sourceUri = overlay.sourceUri
+                            sourceUri = overlay.sourceUri,
+                            maskShape = overlay.maskShape
                         )
-                    }.onSuccess { overlays += it }
+                    }.onSuccess {
+                        addTextureOverlay(
+                            overlay = it,
+                            blendMode = overlay.blendMode,
+                            windowStartMs = start,
+                            windowEndMs = end
+                        )
+                    }
                 } else if (overlay.isPhoto) {
                     val bitmap = renderOverlayClipBitmap(context, overlay) ?: return@forEach
-                    addWindowed(bitmap, startTimeMs, endTimeMs) { localTime ->
-                        buildOverlaySettings(overlay, clipStartMs + localTime)
-                    }
+                    addTextureOverlay(
+                        overlay = TimedBitmapOverlay(
+                            listOf(BitmapWindow(start, end, bitmap)),
+                            blank
+                        ) { localTime -> buildOverlaySettings(overlay, clipStartMs + localTime) },
+                        blendMode = overlay.blendMode,
+                        windowStartMs = start,
+                        windowEndMs = end
+                    )
                 } else {
                     runCatching {
                         VideoFrameBitmapOverlay(
@@ -1428,9 +1592,17 @@ internal fun buildExportOverlays(
                             windowEndMs = end,
                             blankBitmap = blank,
                             chromaKey = overlay.chromaKey,
+                            maskShape = overlay.maskShape,
                             settingsAt = { localTime -> buildOverlaySettings(overlay, clipStartMs + localTime) }
                         )
-                    }.onSuccess { overlays += it }
+                    }.onSuccess {
+                        addTextureOverlay(
+                            overlay = it,
+                            blendMode = overlay.blendMode,
+                            windowStartMs = start,
+                            windowEndMs = end
+                        )
+                    }
                 }
             }
 
@@ -1541,34 +1713,51 @@ internal fun buildExportOverlays(
             effect.endTimeMs.coerceIn(0L, clipDurationMs)
         }
         if (windowEndMs <= windowStartMs) return@forEach
-        overlays += ProceduralEffectBitmapOverlay(
-            type = effect.type,
-            intensity = effect.intensity,
-            blankBitmap = blank,
+        addTextureOverlay(
+            overlay = ProceduralEffectBitmapOverlay(
+                type = effect.type,
+                intensity = effect.intensity,
+                blankBitmap = blank,
+                windowStartMs = windowStartMs,
+                windowEndMs = windowEndMs
+            ),
             windowStartMs = windowStartMs,
             windowEndMs = windowEndMs
         )
     }
 
     // These transition variants are safe to render as a deterministic color fade.
-    val transition = clip.transitionNext
+    val transition = clip.transitionNext.normalized()
     if (transition.type == TransitionType.FADE_TO_BLACK || transition.type == TransitionType.FADE_TO_WHITE) {
-        val duration = transition.durationMs.coerceIn(1L, clipDurationMs)
+        val duration = transitionDurationForClip(transition, clipDurationMs)
         val bitmap = renderSolidBitmap(
             if (transition.type == TransitionType.FADE_TO_BLACK) android.graphics.Color.BLACK else android.graphics.Color.WHITE
         )
         val start = clipDurationMs - duration
-        overlays += TimedBitmapOverlay(
-            listOf(BitmapWindow(start, clipDurationMs, bitmap)),
-            blank
-        ) { localTime ->
-            overlaySettings(0.5f, 0.5f, 1f, 1f, alpha = ((localTime - start).toFloat() / duration).coerceIn(0f, 1f))
-        }
+        addTextureOverlay(
+            overlay = TimedBitmapOverlay(
+                listOf(BitmapWindow(start, clipDurationMs, bitmap)),
+                blank
+            ) { localTime ->
+                overlaySettings(
+                    0.5f,
+                    0.5f,
+                    1f,
+                    1f,
+                    alpha = easedTransitionProgress(
+                        (localTime - start).toFloat() / duration,
+                        transition.easing
+                    )
+                )
+            },
+            windowStartMs = start,
+            windowEndMs = clipDurationMs
+        )
     }
     if (transition.type in EXPORT_PHOTO_TRANSITIONS) {
         val clipIndex = state.clips.indexOfFirst { it.id == clip.id }
         val nextClip = state.clips.getOrNull(clipIndex + 1)
-        val duration = transition.durationMs.coerceIn(1L, clipDurationMs)
+        val duration = transitionDurationForClip(transition, clipDurationMs)
         val start = clipDurationMs - duration
         val incomingCanRender = when {
             nextClip == null -> false
@@ -1582,15 +1771,22 @@ internal fun buildExportOverlays(
                     context = context,
                     clip = nextClip!!,
                     type = transition.type,
+                    easing = transition.easing,
                     blankBitmap = blank,
                     windowStartMs = start,
                     windowEndMs = clipDurationMs
                 )
-            }.onSuccess { overlays += it }
+            }.onSuccess {
+                addTextureOverlay(
+                    overlay = it,
+                    windowStartMs = start,
+                    windowEndMs = clipDurationMs
+                )
+            }
         }
     }
 
-    return overlays
+    return overlayEffects
 }
 
 internal fun MediaClip.canRenderPhotoTransitionSource(): Boolean {
@@ -1670,6 +1866,24 @@ internal fun buildExportVideoEffects(
             .build()
     }
 
+    val transition = clip.transitionNext.normalized()
+    if (transition.type == TransitionType.PUSH_LEFT || transition.type == TransitionType.PUSH_RIGHT) {
+        val clipIndex = state.clips.indexOfFirst { it.id == clip.id }
+        val incoming = state.clips.getOrNull(clipIndex + 1)
+        val incomingCanRender = incoming != null && if (incoming.isPhoto) {
+            incoming.canRenderPhotoTransitionSource()
+        } else {
+            incoming.canRenderVideoTransitionSource()
+        }
+        if (clip.canRenderTransitionBaseSource() && incomingCanRender) {
+            effects += PushTransitionTransformation(
+                type = transition.type,
+                clipDurationMs = clipDurationMs,
+                transition = transition
+            )
+        }
+    }
+
     val filterMatrix = getColorMatrixForFilter(clip.filterType, clip.filterIntensity)
     val adjustmentMatrix = getColorMatrixForAdjustments(clip.adjustments)
     val combined = ColorMatrix().apply {
@@ -1720,8 +1934,7 @@ internal fun buildExportVideoEffects(
         }
     }
 
-    val overlays = buildExportOverlays(context, state, clipStartMs, clipDurationMs, clip)
-    if (overlays.isNotEmpty()) effects += OverlayEffect(overlays)
+    effects += buildExportOverlays(context, state, clipStartMs, clipDurationMs, clip)
     return effects
 }
 
@@ -1738,7 +1951,12 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
         }
         if (clip.audioEffects.hasUnsupportedExportAutomation()) reasons += "advanced clip audio automation"
         val transitionType = clip.transitionNext.type
-        val isSupportedSourceTransition = transitionType in EXPORT_PHOTO_TRANSITIONS &&
+        val transitionBlockedByCurve = clip.speedCurve != null && transitionType != TransitionType.NONE
+        if (transitionBlockedByCurve) {
+            reasons += "transitions on curved clips"
+        }
+        val isSupportedSourceTransition = !transitionBlockedByCurve &&
+            transitionType in EXPORT_PHOTO_TRANSITIONS &&
             index < clips.lastIndex &&
             clip.canRenderTransitionSource() &&
             ((clips[index + 1].isPhoto && clips[index + 1].canRenderPhotoTransitionSource()) ||
@@ -1748,7 +1966,7 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
         val isColorFade = transitionType == TransitionType.NONE ||
             transitionType == TransitionType.FADE_TO_BLACK ||
             transitionType == TransitionType.FADE_TO_WHITE
-        if (!isColorFade && !isSupportedSourceTransition) {
+        if (!isColorFade && !transitionBlockedByCurve && !isSupportedSourceTransition) {
             reasons += "this transition type"
         }
         if (clip.effects.any { it.type !in EXPORT_SUPPORTED_EFFECTS }) {
@@ -1764,9 +1982,6 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
             }) {
             reasons += "partial-duration or invalid visual effect settings"
         }
-    }
-    if (overlays.any { it.blendMode != OverlayBlendModeType.NORMAL || it.maskShape != MaskShape.NONE || it.entranceAnim == OverlayAnim.SLIDE || it.exitAnim == OverlayAnim.SLIDE }) {
-        reasons += "unsupported overlay animation"
     }
     if (overlays.any { it.shadowRadius != 0f || it.borderWidth != 0f }) {
         reasons += "overlay border or shadow"
@@ -1801,15 +2016,20 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
     }
     if (audioClips.any { it.sourceUri.isNullOrBlank() && it.sourceClipId.isNullOrBlank() }) reasons += "an audio source"
     if (audioClips.any {
-            it.isLooped ||
-                it.autoDucking ||
+            it.autoDucking ||
                 it.keyframes.keys.any { key -> key !in EXPORT_SUPPORTED_AUDIO_KEYFRAMES } ||
                 it.keyframes["volume"].orEmpty().any { keyframe ->
                     keyframe.timeMs < 0L || !keyframe.value.isFinite() || keyframe.value !in 0f..1f
                 } ||
                 it.audioEffects.hasUnsupportedExportAutomation()
-        }) {
+    }) {
         reasons += "advanced audio automation"
+    }
+    val projectDurationMs = clips.sumOf { it.durationMs }
+    if (audioClips.any {
+            it.isLooped && it.requiredExportSegmentCount(projectDurationMs) > MAX_AUDIO_LOOP_EXPORT_SEGMENTS
+        }) {
+        reasons += "audio loop is too short for this project"
     }
     if (canvasSettings.aspectOption != AspectRatioOption.R_16_9 ||
         canvasSettings.fitMode != FitMode.Fit ||
