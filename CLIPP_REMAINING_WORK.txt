@@ -147,14 +147,27 @@ REMAINING WORK - PRIORITY 1: EDITOR/RENDERER FEATURES
 REMAINING WORK - PRIORITY 1: ADVANCED AUDIO
 --------------------------------------------
 
-[OPEN] 1. Audio looping in export.
+[IMPLEMENTED / DEVICE QA OPEN] 1. Audio looping in export.
+      Trimmed local audio can now repeat from its selected source window until
+      the video timeline ends. Preview follows the same loop behavior, export
+      creates bounded repeated Media3 items (including a final partial cycle),
+      and pathological sub-millisecond/very-short loops are gated by a segment
+      count limit. JVM regressions and debug assembly pass; the new device MP4
+      regression still needs to be run on an emulator/physical device.
 [OPEN] 2. Audio ducking against voiceover or other priority tracks.
 [OPEN] 3. Audio crossfade between tracks/clips.
 [OPEN] 4. Noise reduction and wind-noise reduction with real processors.
 [OPEN] 5. Voice effects/voice changer with real audio processing.
 [OPEN] 6. Audio-speed automation with correct timing and pitch behavior.
-[OPEN] 7. Measured waveform rendering from decoded audio, including caching,
-      cancellation, and correct timeline alignment.
+[IMPLEMENTED / DEVICE QA OPEN] 7. Measured waveform rendering from decoded audio.
+      Local audio/video sources are decoded through MediaExtractor/MediaCodec
+      into bounded peak envelopes, cached in memory and on disk, and reused for
+      trims/zoom changes without re-decoding. Timeline rendering preserves peaks
+      while zoomed out, aligns constant/curved-speed source audio, repeats looped
+      audio waveforms through project end, and cancels extraction when the
+      composable leaves composition. JVM extraction/resampling/cache regressions
+      pass and the Android test APK builds; the real device WAV extraction/cache
+      regression still needs to run on an emulator/physical device.
 
 Each processor needs preview/export parity, cancellation behavior, memory
 limits, and device verification. A UI toggle or metadata-only setting is not

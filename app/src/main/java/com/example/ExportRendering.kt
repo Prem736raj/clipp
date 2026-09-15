@@ -2016,15 +2016,20 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
     }
     if (audioClips.any { it.sourceUri.isNullOrBlank() && it.sourceClipId.isNullOrBlank() }) reasons += "an audio source"
     if (audioClips.any {
-            it.isLooped ||
-                it.autoDucking ||
+            it.autoDucking ||
                 it.keyframes.keys.any { key -> key !in EXPORT_SUPPORTED_AUDIO_KEYFRAMES } ||
                 it.keyframes["volume"].orEmpty().any { keyframe ->
                     keyframe.timeMs < 0L || !keyframe.value.isFinite() || keyframe.value !in 0f..1f
                 } ||
                 it.audioEffects.hasUnsupportedExportAutomation()
-        }) {
+    }) {
         reasons += "advanced audio automation"
+    }
+    val projectDurationMs = clips.sumOf { it.durationMs }
+    if (audioClips.any {
+            it.isLooped && it.requiredExportSegmentCount(projectDurationMs) > MAX_AUDIO_LOOP_EXPORT_SEGMENTS
+        }) {
+        reasons += "audio loop is too short for this project"
     }
     if (canvasSettings.aspectOption != AspectRatioOption.R_16_9 ||
         canvasSettings.fitMode != FitMode.Fit ||

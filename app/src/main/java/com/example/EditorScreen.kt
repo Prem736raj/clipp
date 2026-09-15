@@ -259,7 +259,13 @@ fun AudioPlayerComponent(
         if (actualUri == null) return@LaunchedEffect
         
         val relativeTimeMs = currentPositionMs - clip.startTimeOnTimelineMs
-        if (relativeTimeMs >= 0 && relativeTimeMs < clip.durationMs) {
+        val projectDurationMs = clips.sumOf { it.durationMs }
+        val activeDurationMs = if (clip.isLooped) {
+            (projectDurationMs - clip.startTimeOnTimelineMs).coerceAtLeast(0L)
+        } else {
+            clip.durationMs
+        }
+        if (relativeTimeMs >= 0 && relativeTimeMs < activeDurationMs) {
             val srcPos = if (clip.isLooped) {
                 val cycleLength = if (clip.trimEndMs > clip.trimStartMs) clip.trimEndMs - clip.trimStartMs else 1L
                 clip.trimStartMs + (relativeTimeMs % cycleLength)
@@ -318,43 +324,149 @@ fun VUMeter(
 @Composable
 fun AudioWaveform(
     clipId: String,
-    durationMs: Long,
+    sourceUri: String?,
+    sourceDurationMs: Long,
     trimStartMs: Long,
     trimEndMs: Long,
+    displayDurationMs: Long,
     pixelsPerMs: Float,
+    isLooped: Boolean = false,
+    playbackSpeed: Float = 1f,
+    speedCurve: SpeedCurve? = null,
     keyframes: Map<String, List<Keyframe>> = emptyMap(),
     audioEffects: AudioEffects = AudioEffects(),
     modifier: Modifier = Modifier,
     color: Color = MaterialTheme.colorScheme.primary
 ) {
-    Canvas(modifier = modifier) {
-        val totalWidth = size.width
-        val height = size.height
-        if (durationMs <= 0L || totalWidth <= 0f) return@Canvas
-
-        // A measured waveform is not available yet. Keep a neutral reference line
-        // instead of presenting synthetic amplitudes as audio analysis.
-        drawLine(
-            color = color.copy(alpha = 0.55f),
-            start = androidx.compose.ui.geometry.Offset(0f, height / 2f),
-            end = androidx.compose.ui.geometry.Offset(totalWidth, height / 2f),
-            strokeWidth = 1.dp.toPx()
-        )
-
-        val totalTrimMs = (trimEndMs - trimStartMs).coerceAtLeast(0L)
-        val fadeInPx = (audioEffects.fadeInMs.coerceAtMost(totalTrimMs) * pixelsPerMs).coerceIn(0f, totalWidth)
-        val fadeOutPx = (audioEffects.fadeOutMs.coerceAtMost(totalTrimMs) * pixelsPerMs).coerceIn(0f, totalWidth)
-        if (fadeInPx > 0f) {
-            drawLine(color = color, start = androidx.compose.ui.geometry.Offset(0f, height), end = androidx.compose.ui.geometry.Offset(fadeInPx, 0f), strokeWidth = 2.dp.toPx())
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val repository = remember(context.applicationContext) { WaveformRepository.get(context.applicationContext) }
+    val waveform by produceState<WaveformData?>(
+        initialValue = null,
+        key1 = clipId,
+        key2 = sourceUri,
+        key3 = sourceDurationMs
+    ) {
+        value = if (sourceUri.isNullOrBlank() || sourceDurationMs <= 0L) {
+            null
+        } else {
+            runCatching { repository.load(sourceUri, sourceDurationMs) }.getOrNull()
         }
-        if (fadeOutPx > 0f) {
+    }
+
+    val measured = waveform
+    val sampler = remember(
+        measured,
+        trimStartMs,
+        trimEndMs,
+        displayDurationMs,
+        isLooped,
+        playbackSpeed,
+        speedCurve
+    ) {
+        measured?.takeIf { it.hasMeasuredAudio }?.let {
+            WaveformTimelineSampler(
+                waveform = it,
+                trimStartMs = trimStartMs,
+                trimEndMs = trimEndMs,
+                displayDurationMs = displayDurationMs,
+                isLooped = isLooped,
+                playbackSpeed = playbackSpeed,
+                speedCurve = speedCurve
+            )
+        }
+    }
+
+    BoxWithConstraints(modifier = modifier) {
+        val totalWidthPx = with(density) { maxWidth.toPx() }
+        val barSpacingPx = with(density) { 3.dp.toPx() }.coerceAtLeast(2f)
+        val barCount = if (totalWidthPx > 0f) {
+            (totalWidthPx / barSpacingPx).toInt().coerceIn(1, 1_024)
+        } else {
+            0
+        }
+        val renderPeaks = remember(sampler, barCount) {
+            if (barCount > 0) sampler?.peaks(barCount) ?: FloatArray(0) else FloatArray(0)
+        }
+        val totalTrimMs = (trimEndMs - trimStartMs).coerceAtLeast(0L)
+        val volumeMarkerFractions = remember(
+            sampler,
+            keyframes,
+            trimStartMs,
+            totalTrimMs,
+            displayDurationMs,
+            isLooped
+        ) {
+            if (displayDurationMs <= 0L || totalTrimMs <= 0L) {
+                FloatArray(0)
+            } else {
+                val markers = ArrayList<Float>()
+                keyframes["volume"].orEmpty().forEach { keyframe ->
+                    val localSourceMs = (keyframe.timeMs - trimStartMs).coerceIn(0L, totalTrimMs)
+                    if (isLooped) {
+                        var displayTimeMs = localSourceMs
+                        while (displayTimeMs <= displayDurationMs && markers.size < 1_024) {
+                            markers += (displayTimeMs.toFloat() / displayDurationMs.toFloat()).coerceIn(0f, 1f)
+                            displayTimeMs += totalTrimMs
+                        }
+                    } else {
+                        val displayTimeMs = sampler?.playbackTimeForSourceOffset(localSourceMs)
+                            ?: (localSourceMs / playbackSpeed.coerceIn(0.1f, 10f)).toLong()
+                        markers += (displayTimeMs.toFloat() / displayDurationMs.toFloat()).coerceIn(0f, 1f)
+                    }
+                }
+                markers.toFloatArray()
+            }
+        }
+
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val totalWidth = size.width
+            val height = size.height
+            if (sourceDurationMs <= 0L || displayDurationMs <= 0L || totalWidth <= 0f) return@Canvas
+
+            if (renderPeaks.isNotEmpty()) {
+            val centerY = height / 2f
+            val halfHeight = (height * 0.44f).coerceAtLeast(1f)
+                renderPeaks.forEachIndexed { index, peak ->
+                    val x = ((index + 0.5f) / renderPeaks.size) * totalWidth
+                val amplitude = (peak.coerceIn(0f, 1f) * halfHeight).coerceAtLeast(0.5f)
+                drawLine(
+                    color = color,
+                    start = androidx.compose.ui.geometry.Offset(x, centerY - amplitude),
+                    end = androidx.compose.ui.geometry.Offset(x, centerY + amplitude),
+                    strokeWidth = 1.5.dp.toPx(),
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round
+                )
+                }
+            } else {
+            // Honest loading/no-audio state: never synthesize random amplitudes.
+            drawLine(
+                color = color.copy(alpha = 0.35f),
+                start = androidx.compose.ui.geometry.Offset(0f, height / 2f),
+                end = androidx.compose.ui.geometry.Offset(totalWidth, height / 2f),
+                strokeWidth = 1.dp.toPx()
+            )
+            }
+
+            val displayPixelsPerMs = if (displayDurationMs > 0L) totalWidth / displayDurationMs.toFloat() else pixelsPerMs
+            val fadeInPx = (audioEffects.fadeInMs.coerceAtMost(totalTrimMs) * displayPixelsPerMs).coerceIn(0f, totalWidth)
+            val fadeOutPx = (audioEffects.fadeOutMs.coerceAtMost(totalTrimMs) * displayPixelsPerMs).coerceIn(0f, totalWidth)
+            if (fadeInPx > 0f) {
+            drawLine(color = color, start = androidx.compose.ui.geometry.Offset(0f, height), end = androidx.compose.ui.geometry.Offset(fadeInPx, 0f), strokeWidth = 2.dp.toPx())
+            }
+            if (fadeOutPx > 0f) {
             val startPx = (totalWidth - fadeOutPx).coerceAtLeast(0f)
             drawLine(color = color, start = androidx.compose.ui.geometry.Offset(startPx, 0f), end = androidx.compose.ui.geometry.Offset(totalWidth, height), strokeWidth = 2.dp.toPx())
-        }
+            }
 
-        keyframes["volume"]?.forEach { keyframe ->
-            val kpx = ((keyframe.timeMs - trimStartMs) * pixelsPerMs).coerceIn(0f, totalWidth)
-            drawCircle(color = Color.Red, radius = 4.dp.toPx(), center = androidx.compose.ui.geometry.Offset(kpx, height / 2f))
+            volumeMarkerFractions.forEach { fraction ->
+                val kpx = (fraction * totalWidth).coerceIn(0f, totalWidth)
+                drawCircle(
+                    color = Color.Red,
+                    radius = if (isLooped) 3.dp.toPx() else 4.dp.toPx(),
+                    center = androidx.compose.ui.geometry.Offset(kpx, height / 2f)
+                )
+            }
         }
     }
 }
@@ -4042,10 +4154,14 @@ fun EditorScreen(
                                         if (isSelected && !clip.isPhoto) {
                                             AudioWaveform(
                                                 clipId = clip.id,
-                                                durationMs = clip.originalDurationMs,
+                                                sourceUri = clip.sourceUri,
+                                                sourceDurationMs = clip.originalDurationMs,
                                                 trimStartMs = clip.trimStartMs,
                                                 trimEndMs = clip.trimEndMs,
+                                                displayDurationMs = clip.durationMs,
                                                 pixelsPerMs = pixelsPerSecond / 1000f,
+                                                playbackSpeed = clip.playbackSpeed,
+                                                speedCurve = clip.speedCurve,
                                                 keyframes = clip.keyframes,
                                                 audioEffects = clip.audioEffects,
                                                 modifier = Modifier.fillMaxSize().padding(top = 16.dp),
@@ -4297,9 +4413,18 @@ fun EditorScreen(
                                     .width(with(density) { totalWidthPx.toDp() })
                             ) {
                                 for (audioClip in audioClips) {
-                                    val drawWidthPx = (audioClip.durationMs / 1000f) * pixelsPerSecond
+                                    val audioTimelineDurationMs = if (audioClip.isLooped) {
+                                        (videoDurationMs - audioClip.startTimeOnTimelineMs).coerceAtLeast(0L)
+                                    } else {
+                                        audioClip.durationMs.coerceAtMost(
+                                            (videoDurationMs - audioClip.startTimeOnTimelineMs).coerceAtLeast(0L)
+                                        )
+                                    }
+                                    val drawWidthPx = (audioTimelineDurationMs / 1000f) * pixelsPerSecond
                                     val startPx = (audioClip.startTimeOnTimelineMs / 1000f) * pixelsPerSecond
                                     val isSelected = selectedAudioId == audioClip.id
+                                    val resolvedAudioUri = audioClip.sourceUri
+                                        ?: audioClip.sourceClipId?.let { sourceId -> clips.find { it.id == sourceId }?.sourceUri }
                                     
                                     Box(
                                         modifier = Modifier
@@ -4330,7 +4455,13 @@ fun EditorScreen(
                                                             val newAudios = audioClips.toMutableList()
                                                             val idx = newAudios.indexOfFirst { it.id == audioClip.id }
                                                             if (idx != -1) {
-                                                                val oStart = (newAudios[idx].startTimeOnTimelineMs + shiftMs).coerceIn(0L, (videoDurationMs - newAudios[idx].durationMs).coerceAtLeast(0L))
+                                                                val movingClip = newAudios[idx]
+                                                                val latestStartMs = if (movingClip.isLooped) {
+                                                                    (videoDurationMs - 100L).coerceAtLeast(0L)
+                                                                } else {
+                                                                    (videoDurationMs - movingClip.durationMs).coerceAtLeast(0L)
+                                                                }
+                                                                val oStart = (movingClip.startTimeOnTimelineMs + shiftMs).coerceIn(0L, latestStartMs)
                                                                 newAudios[idx] = newAudios[idx].copy(startTimeOnTimelineMs = oStart)
                                                                 audioClips = newAudios
                                                                 accDrag = 0f
@@ -4343,17 +4474,20 @@ fun EditorScreen(
                                     ) {
                                         AudioWaveform(
                                             clipId = audioClip.id,
-                                            durationMs = audioClip.sourceDurationMs,
+                                            sourceUri = resolvedAudioUri,
+                                            sourceDurationMs = audioClip.sourceDurationMs,
                                             trimStartMs = audioClip.trimStartMs,
                                             trimEndMs = audioClip.trimEndMs,
+                                            displayDurationMs = audioTimelineDurationMs,
                                             pixelsPerMs = pixelsPerSecond / 1000f,
+                                            isLooped = audioClip.isLooped,
                                             keyframes = audioClip.keyframes,
                                             audioEffects = audioClip.audioEffects,
                                             modifier = Modifier.fillMaxSize(),
                                             color = Color(0xFF00BFFF).copy(alpha = 0.5f)
                                         )
                                         
-                                        if (audioClip.displayName != null && audioClip.durationMs > 500) {
+                                        if (audioClip.displayName != null && audioTimelineDurationMs > 500) {
                                             Text(
                                                 text = audioClip.displayName,
                                                 color = Color.White,
@@ -5439,6 +5573,28 @@ fun EditorScreen(
                             valueRange = 0f..1f
                         )
 
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                Text("Loop audio", style = MaterialTheme.typography.labelLarge)
+                                Text(
+                                    "Repeat the selected trimmed region until the video ends.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = selectedAudio.isLooped,
+                                onCheckedChange = { enabled ->
+                                    updateSelectedAudio(selectedAudio.copy(isLooped = enabled))
+                                    persistHistory()
+                                }
+                            )
+                        }
+
                         Text("Volume at playhead: ${(volumeAtCursor * 100).toInt()}%", style = MaterialTheme.typography.labelMedium)
                         Slider(
                             value = volumeAtCursor,
@@ -5615,7 +5771,7 @@ fun EditorScreen(
                         )
 
                         Text(
-                            "Export applies EQ, pitch, bounded delay/reverb, distortion, volume keyframes, and fades. Preview playback currently uses the source track until export.",
+                            "Export applies looping, EQ, pitch, bounded delay/reverb, distortion, volume keyframes, and fades. Preview uses the trimmed source and repeats it when Loop audio is enabled.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

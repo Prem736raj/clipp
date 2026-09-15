@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -1035,6 +1036,73 @@ class ExportInstrumentedTest {
             exporter.close()
             source.delete()
             audio.delete()
+        }
+    }
+
+    @Test
+    fun loopedAudioTrackExtendsToVideoEndAndPublishesAudio() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val source = File.createTempFile("clipp-export-loop-base-", ".png", context.cacheDir)
+        val audio = File.createTempFile("clipp-export-loop-audio-", ".wav", context.cacheDir)
+        writeSolidPng(source, android.graphics.Color.rgb(30, 110, 210))
+        writeMonoWav(audio, durationMs = 400L)
+
+        val clip = MediaClip(
+            sourceUri = Uri.fromFile(source).toString(),
+            originalDurationMs = 1_400L,
+            trimEndMs = 1_400L,
+            isPhoto = true,
+            isMuted = true
+        )
+        val state = EditorState(
+            clips = listOf(clip),
+            audioClips = listOf(
+                AudioClip(
+                    sourceUri = Uri.fromFile(audio).toString(),
+                    displayName = "Loop",
+                    startTimeOnTimelineMs = 200L,
+                    sourceDurationMs = 400L,
+                    trimEndMs = 400L,
+                    isLooped = true
+                )
+            )
+        )
+        val exporter = VideoExporter(context)
+        var result: Outcome? = null
+        try {
+            result = awaitExport(exporter, listOf(clip), "Clipp_instrumented_looped_audio.mp4", state)
+            assertSuccessful(result!!)
+            assertPublishedMp4(context, result!!, requireAudio = true)
+            assertTrue(result!!.metadata!!.durationMs in 1_200L..1_600L)
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            source.delete()
+            audio.delete()
+        }
+    }
+
+    @Test
+    fun measuredWaveformIsExtractedFromLocalPcmAndReusedFromDiskCache() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val audio = File.createTempFile("clipp-waveform-tone-", ".wav", context.cacheDir)
+        val cacheDirectory = File(context.cacheDir, "waveform-regression-${System.nanoTime()}")
+        writeMonoWav(audio, durationMs = 900L)
+        val uri = Uri.fromFile(audio).toString()
+        val repository = WaveformRepository.createForTests(context, cacheDirectory)
+
+        try {
+            val first = repository.load(uri, 900L)
+            assertTrue(first.peaks.isNotEmpty())
+            assertTrue("Expected measured tone peaks", first.peaks.maxOrNull() ?: 0f > 0.15f)
+            assertTrue(repository.cacheFileForTests(uri, 900L).isFile)
+
+            repository.clearMemoryCacheForTests()
+            val cached = repository.load(uri, 900L)
+            assertEquals(first, cached)
+        } finally {
+            audio.delete()
+            cacheDirectory.deleteRecursively()
         }
     }
 

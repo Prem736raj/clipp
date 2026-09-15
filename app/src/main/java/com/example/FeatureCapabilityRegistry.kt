@@ -128,7 +128,7 @@ internal object FeatureCapabilityRegistry {
             id = "audio",
             label = "Local audio tracks and voiceover",
             capability = FeatureCapability.PREVIEW_AND_EXPORT_SUPPORTED,
-            detail = "Volume, fades, supported keyframes, and implemented processors are muxed into MP4."
+            detail = "Measured cached waveforms drive the timeline; trimmed audio can loop to the end of the video, while volume, fades, supported keyframes, and implemented processors are muxed into MP4."
         ),
         FeatureCapabilityStatus(
             id = "speed-curves",
