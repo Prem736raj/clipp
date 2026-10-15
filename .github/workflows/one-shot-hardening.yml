@@ -44,32 +44,39 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
           p = Path("app/src/test/java/com/example/ProductionHardeningTest.kt")
           text = p.read_text(encoding="utf-8")
-          old = '''        val liveState = EditorState(
-              canvasSettings = CanvasSettingsState(backgroundColorValue = Color.Blue.value.toLong()),
-              layerOrder = listOf("live-layer")
+          replacement = "\n".join([
+              '        val liveText = TextOverlay(',
+              '            id = "live-text",',
+              '            text = "Current draft",',
+              '            startTimeOnTimelineMs = 0L,',
+              '            durationMs = 1_000L',
+              '        )',
+              '        val liveState = EditorState(',
+              '            canvasSettings = CanvasSettingsState(backgroundColorValue = Color.Blue.value.toLong()),',
+              '            texts = listOf(liveText),',
+              '            layerOrder = listOf(liveText.id)',
+              '        )',
+              '',
+              '        val json = serializeEditorHistorySnapshot('
+          ])
+          text, count = re.subn(
+              r'        val liveState = EditorState\(\n.*?\n        val json = serializeEditorHistorySnapshot\(',
+              replacement,
+              text,
+              count=1,
+              flags=re.DOTALL
           )
-          '''
-          new = '''        val liveText = TextOverlay(
-              id = "live-text",
-              text = "Current draft",
-              startTimeOnTimelineMs = 0L,
-              durationMs = 1_000L
-          )
-          val liveState = EditorState(
-              canvasSettings = CanvasSettingsState(backgroundColorValue = Color.Blue.value.toLong()),
-              texts = listOf(liveText),
-              layerOrder = listOf(liveText.id)
-          )
-          '''
-          if text.count(old) != 1:
-              raise SystemExit("Expected one liveState regression fixture")
-          text = text.replace(old, new, 1)
+          if count != 1:
+              raise SystemExit(f"Expected one liveState regression fixture, found {count}")
           old_assert = '        assertEquals(listOf("live-layer"), restored.layerOrder)\n'
-          new_assert = '''        assertEquals("Current draft", restored.texts.single().text)
-          assertEquals(listOf("live-text"), restored.layerOrder)
-          '''
+          new_assert = "\n".join([
+              '        assertEquals("Current draft", restored.texts.single().text)',
+              '        assertEquals(listOf("live-text"), restored.layerOrder)',
+              ''
+          ])
           if text.count(old_assert) != 1:
               raise SystemExit("Expected one layerOrder assertion")
           p.write_text(text.replace(old_assert, new_assert, 1), encoding="utf-8")
