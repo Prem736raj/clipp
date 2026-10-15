@@ -40,7 +40,7 @@ The previous self-modifying one-shot hardening workflow and patch scripts were r
 - `assembleDebug`
 - `assembleDebugAndroidTest`
 
-Local equivalents are green. The remote workflow result is not claimed until the updated branch is pushed and GitHub executes the new head.
+Local equivalents are green. The remote workflow result is authoritative only after GitHub completes verification for the current pushed head.
 
 ## E Architecture Map
 

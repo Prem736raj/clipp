@@ -31,6 +31,10 @@ jobs:
           yes | "$sdkmanager" --licenses >/dev/null || true
           "$sdkmanager" "platforms;android-36.1"
 
+      - name: Make Gradle wrapper executable
+        shell: bash
+        run: chmod +x gradlew
+
       - name: Verify unit tests, lint, and debug artifacts
         shell: bash
         run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
