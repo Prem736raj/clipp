@@ -425,27 +425,27 @@ fun AudioWaveform(
             if (sourceDurationMs <= 0L || displayDurationMs <= 0L || totalWidth <= 0f) return@Canvas
 
             if (renderPeaks.isNotEmpty()) {
-            val centerY = height / 2f
-            val halfHeight = (height * 0.44f).coerceAtLeast(1f)
+                val centerY = height / 2f
+                val halfHeight = (height * 0.44f).coerceAtLeast(1f)
                 renderPeaks.forEachIndexed { index, peak ->
                     val x = ((index + 0.5f) / renderPeaks.size) * totalWidth
-                val amplitude = (peak.coerceIn(0f, 1f) * halfHeight).coerceAtLeast(0.5f)
-                drawLine(
-                    color = color,
-                    start = androidx.compose.ui.geometry.Offset(x, centerY - amplitude),
-                    end = androidx.compose.ui.geometry.Offset(x, centerY + amplitude),
-                    strokeWidth = 1.5.dp.toPx(),
-                    cap = androidx.compose.ui.graphics.StrokeCap.Round
-                )
+                    val amplitude = (peak.coerceIn(0f, 1f) * halfHeight).coerceAtLeast(0.5f)
+                    drawLine(
+                        color = color,
+                        start = androidx.compose.ui.geometry.Offset(x, centerY - amplitude),
+                        end = androidx.compose.ui.geometry.Offset(x, centerY + amplitude),
+                        strokeWidth = 1.5.dp.toPx(),
+                        cap = androidx.compose.ui.graphics.StrokeCap.Round
+                    )
                 }
             } else {
-            // Honest loading/no-audio state: never synthesize random amplitudes.
-            drawLine(
-                color = color.copy(alpha = 0.35f),
-                start = androidx.compose.ui.geometry.Offset(0f, height / 2f),
-                end = androidx.compose.ui.geometry.Offset(totalWidth, height / 2f),
-                strokeWidth = 1.dp.toPx()
-            )
+                // Honest loading/no-audio state: never synthesize random amplitudes.
+                drawLine(
+                    color = color.copy(alpha = 0.35f),
+                    start = androidx.compose.ui.geometry.Offset(0f, height / 2f),
+                    end = androidx.compose.ui.geometry.Offset(totalWidth, height / 2f),
+                    strokeWidth = 1.dp.toPx()
+                )
             }
 
             val displayPixelsPerMs = if (displayDurationMs > 0L) totalWidth / displayDurationMs.toFloat() else pixelsPerMs
@@ -927,7 +927,10 @@ data class EditorHistoryModel(
     val currentState: EditorState? = null,
     // New projects persist the canonical layer document alongside the legacy
     // state. Older JSON has no field and remains readable through the default.
-    val timelineProject: TimelineProject? = currentState?.toTimelineProject()
+    val timelineProject: TimelineProject? = currentState?.toTimelineProject(),
+    val zoom: Float? = null,
+    @com.squareup.moshi.Json(name = "pos") val positionMs: Long? = null,
+    @com.squareup.moshi.Json(name = "tool") val activeTool: String? = null
 )
 
 class ComposeDataAdapter {
@@ -972,6 +975,24 @@ val editorHistoryMoshi: com.squareup.moshi.Moshi = com.squareup.moshi.Moshi.Buil
     .add(ComposeDataAdapter())
     .addLast(com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory())
     .build()
+
+internal fun serializeEditorHistorySnapshot(
+    undoStack: List<HistoryAction>,
+    redoStack: List<HistoryAction>,
+    currentState: EditorState,
+    zoom: Float,
+    positionMs: Long,
+    activeTool: String?
+): String = editorHistoryMoshi.adapter(EditorHistoryModel::class.java).toJson(
+    EditorHistoryModel(
+        undoStack = undoStack,
+        redoStack = redoStack,
+        currentState = currentState,
+        zoom = zoom,
+        positionMs = positionMs,
+        activeTool = activeTool
+    )
+)
 
 fun removeTimeRangeFromClips(clips: List<MediaClip>, startGlobal: Long, endGlobal: Long): List<MediaClip> {
     val result = mutableListOf<MediaClip>()
@@ -1147,6 +1168,44 @@ fun EditorScreen(
     LaunchedEffect(videoDurationMs) {
         currentPositionMs = currentPositionMs.coerceIn(0L, videoDurationMs)
     }
+
+    fun currentEditorState(): EditorState = EditorState(
+        clips = clips,
+        canvasSettings = canvasSettings,
+        overlays = overlays,
+        texts = texts,
+        captions = captions,
+        captionSettings = captionSettings,
+        stickers = stickers,
+        drawings = drawings,
+        frames = frames,
+        audioClips = audioClips,
+        layerOrder = layerOrder
+    )
+
+    fun persistCurrentProject(markDirty: Boolean, projectState: String? = null): Boolean {
+        val currentProject = project ?: return false
+        val historyJson = runCatching {
+            serializeEditorHistorySnapshot(
+                undoStack = undoStack,
+                redoStack = redoStack,
+                currentState = currentEditorState(),
+                zoom = zoom,
+                positionMs = currentPositionMs,
+                activeTool = activeTool
+            )
+        }.getOrNull() ?: return false
+
+        val savedProject = currentProject.copy(
+            isDirty = markDirty,
+            historyState = historyJson,
+            lastEdited = System.currentTimeMillis(),
+            projectState = projectState ?: currentProject.projectState
+        )
+        projectViewModel.updateProject(savedProject)
+        project = savedProject
+        return true
+    }
     
     fun saveState(
         newClips: List<MediaClip> = clips,
@@ -1160,18 +1219,7 @@ fun EditorScreen(
         clips = normalizedClips
         canvasSettings = newCanvas
         
-        // Save to DB
-        project?.let { currentProject ->
-            val historyModel = EditorHistoryModel(undoStack, redoStack, EditorState(normalizedClips, newCanvas, overlays, texts, captions, captionSettings, stickers, drawings, frames, audioClips, layerOrder))
-            val historyJson = try { editorHistoryMoshi.adapter(EditorHistoryModel::class.java).toJson(historyModel) } catch(e: Exception) { "" }
-            val savedProject = currentProject.copy(
-                isDirty = true,
-                historyState = historyJson,
-                lastEdited = System.currentTimeMillis()
-            )
-            projectViewModel.updateProject(savedProject)
-            project = savedProject
-        }
+        persistCurrentProject(markDirty = true)
     }
     
     fun saveOverlayState(
@@ -1183,17 +1231,7 @@ fun EditorScreen(
         redoStack = emptyList()
         overlays = newOverlays
         
-        project?.let { currentProject ->
-            val historyModel = EditorHistoryModel(undoStack, redoStack, EditorState(clips, canvasSettings, newOverlays, texts, captions, captionSettings, stickers, drawings, frames, audioClips, layerOrder))
-            val historyJson = try { editorHistoryMoshi.adapter(EditorHistoryModel::class.java).toJson(historyModel) } catch(e: Exception) { "" }
-            val savedProject = currentProject.copy(
-                isDirty = true,
-                historyState = historyJson,
-                lastEdited = System.currentTimeMillis()
-            )
-            projectViewModel.updateProject(savedProject)
-            project = savedProject
-        }
+        persistCurrentProject(markDirty = true)
     }
 
     fun saveTextState(
@@ -1205,31 +1243,12 @@ fun EditorScreen(
         redoStack = emptyList()
         texts = newTexts
         
-        project?.let { currentProject ->
-            val historyModel = EditorHistoryModel(undoStack, redoStack, EditorState(clips, canvasSettings, overlays, newTexts, captions, captionSettings, stickers, drawings, frames, audioClips, layerOrder))
-            val historyJson = try { editorHistoryMoshi.adapter(EditorHistoryModel::class.java).toJson(historyModel) } catch(e: Exception) { "" }
-            val savedProject = currentProject.copy(
-                isDirty = true,
-                historyState = historyJson,
-                lastEdited = System.currentTimeMillis()
-            )
-            projectViewModel.updateProject(savedProject)
-            project = savedProject
-        }
+        persistCurrentProject(markDirty = true)
     }
     
     val persistHistory: () -> Unit = {
-        project?.let { currentProject ->
-            val historyModel = EditorHistoryModel(undoStack, redoStack, EditorState(clips, canvasSettings, overlays, texts, captions, captionSettings, stickers, drawings, frames, audioClips, layerOrder))
-            val historyJson = try { editorHistoryMoshi.adapter(EditorHistoryModel::class.java).toJson(historyModel) } catch(e: Exception) { "" }
-            val savedProject = currentProject.copy(
-                isDirty = true,
-                historyState = historyJson,
-                lastEdited = System.currentTimeMillis()
-            )
-            projectViewModel.updateProject(savedProject)
-            project = savedProject
-        }
+        persistCurrentProject(markDirty = true)
+        Unit
     }
 
     var isRecordingVoiceover by remember { mutableStateOf(false) }
@@ -1634,9 +1653,10 @@ fun EditorScreen(
         LaunchedEffect(projectId) {
             if (project != null) {
                 try {
-                    val json = org.json.JSONObject(project!!.historyState)
-                    if (json.has("zoom")) zoom = json.getDouble("zoom").toFloat()
-                    if (json.has("pos")) currentPositionMs = json.getLong("pos").coerceAtLeast(0L)
+                    val historyModel = editorHistoryMoshi.adapter(EditorHistoryModel::class.java)
+                        .fromJson(project!!.historyState)
+                    historyModel?.zoom?.let { zoom = it }
+                    historyModel?.positionMs?.let { currentPositionMs = it.coerceAtLeast(0L) }
                     // Do not reopen editor panels from stale history. Unsupported
                     // layers and effects are intentionally not exposed by the
                     // current export-safe editor surface.
@@ -1646,28 +1666,12 @@ fun EditorScreen(
         }
 
         val saveDraft = {
-            project?.let { p ->
-                val json = org.json.JSONObject()
-                try {
-                    if (p.historyState.isNotEmpty()) {
-                        val oldJson = org.json.JSONObject(p.historyState)
-                        oldJson.keys().forEach { json.put(it, oldJson.get(it)) }
-                    }
-                } catch (e: Exception) {}
-                json.put("zoom", zoom.toDouble())
-                json.put("pos", currentPositionMs)
-                json.put("tool", activeTool ?: "")
-                
-                val finalProject = p.copy(
-                    isDirty = false, 
-                    lastEdited = System.currentTimeMillis(), 
-                    projectState = "Draft",
-                    historyState = json.toString()
-                )
-                projectViewModel.updateProject(finalProject)
+            if (persistCurrentProject(markDirty = false, projectState = "Draft")) {
                 android.widget.Toast.makeText(context, "Saved Draft", android.widget.Toast.LENGTH_SHORT).show()
+                onBack()
+            } else {
+                android.widget.Toast.makeText(context, "Could not save draft", android.widget.Toast.LENGTH_LONG).show()
             }
-            onBack()
         }
 
         
@@ -1710,11 +1714,11 @@ fun EditorScreen(
                     title = { Text(project?.name ?: "Loading...", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) },
                     navigationIcon = {
                         IconButton(onClick = {
-                            project?.let {
-                                val finalProject = it.copy(isDirty = false, lastEdited = System.currentTimeMillis())
-                                projectViewModel.updateProject(finalProject)
+                            if (persistCurrentProject(markDirty = false)) {
+                                onBack()
+                            } else {
+                                android.widget.Toast.makeText(context, "Could not save project", android.widget.Toast.LENGTH_LONG).show()
                             }
-                            onBack()
                         }) {
                             Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
                         }

@@ -233,6 +233,60 @@ class ExampleUnitTest {
   }
 
   @Test
+  fun persistenceSnapshotRoundTripsLatestLiveStateAndUiMetadata() {
+    val video = MediaClip(
+      id = "latest-video",
+      sourceUri = "content://media/video/latest",
+      originalDurationMs = 3_000L,
+      trimEndMs = 3_000L
+    )
+    val text = TextOverlay(
+      id = "latest-text",
+      text = "Unsaved title",
+      startTimeOnTimelineMs = 500L,
+      durationMs = 1_500L
+    )
+    val audio = AudioClip(
+      id = "latest-audio",
+      sourceUri = "content://media/audio/latest",
+      startTimeOnTimelineMs = 250L,
+      sourceDurationMs = 2_000L,
+      trimEndMs = 2_000L,
+      volume = 0.35f
+    )
+    val latestState = EditorState(
+      clips = listOf(video),
+      texts = listOf(text),
+      audioClips = listOf(audio),
+      layerOrder = listOf(text.id)
+    )
+
+    val json = serializeEditorHistorySnapshot(
+      undoStack = listOf(HistoryAction(EditorState(clips = listOf(video)), "Before title")),
+      redoStack = emptyList(),
+      currentState = latestState,
+      zoom = 1.75f,
+      positionMs = 1_234L,
+      activeTool = "Text"
+    )
+    val history = editorHistoryMoshi
+      .adapter(EditorHistoryModel::class.java)
+      .fromJson(json)
+    val restored = history?.restoredEditorState()
+
+    assertEquals(listOf(video.id), restored?.clips?.map { it.id })
+    assertEquals("Unsaved title", restored?.texts?.single()?.text)
+    assertEquals(audio.id, restored?.audioClips?.single()?.id)
+    assertEquals(0.35f, restored?.audioClips?.single()?.volume)
+    assertEquals(listOf(text.id), restored?.layerOrder)
+    assertEquals(listOf(video.id, text.id, audio.id), history?.timelineProject?.layers?.map { it.id })
+    assertEquals(1.75f, history?.zoom)
+    assertEquals(1_234L, history?.positionMs)
+    assertEquals("Text", history?.activeTool)
+    assertEquals("Before title", history?.undoStack?.single()?.description)
+  }
+
+  @Test
   fun unifiedTimelineReportsStructuralCorruptionInsteadOfDroppingLayers() {
     val invalid = TimelineProject(
       layers = listOf(

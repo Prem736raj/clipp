@@ -1022,7 +1022,7 @@ internal class VolumeAudioProcessor(volume: Float) : BaseAudioProcessor() {
         return inputAudioFormat
     }
 
-    override fun isActive(): Boolean = gain != 1f
+    override fun isActive(): Boolean = super.isActive() || gain != 1f
 
     override fun queueInput(inputBuffer: ByteBuffer) {
         val input = inputBuffer.order(ByteOrder.LITTLE_ENDIAN)
@@ -1076,7 +1076,8 @@ internal class KeyframedVolumeAudioProcessor(
         processedFrames = 0L
     }
 
-    override fun isActive(): Boolean = baseGain != 1f ||
+    override fun isActive(): Boolean = super.isActive() ||
+        baseGain != 1f ||
         fadeInDurationMs > 0L ||
         fadeOutDurationMs > 0L ||
         sortedVolumeKeyframes.isNotEmpty()
