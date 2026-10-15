@@ -29,6 +29,14 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platforms;android-36.1"
 
+      - name: Use compiler-safe package Media3 opt-in
+        run: |
+          rm -f app/src/main/java/com/example/package-info.kt
+          cat > app/src/main/java/com/example/package-info.java <<'EOF'
+          @androidx.annotation.OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)
+          package com.example;
+          EOF
+
       - name: Apply focused P0/P1 hardening
         run: python3 .github/scripts/apply_production_hardening_v2.py
 
