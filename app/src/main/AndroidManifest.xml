@@ -3,6 +3,7 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
         android:allowBackup="false"
@@ -36,14 +37,6 @@
                 <data android:mimeType="image/*" />
             </intent-filter>
 
-            <!-- Share target for multiple files -->
-            <intent-filter>
-                <action android:name="android.intent.action.SEND_MULTIPLE" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="video/*" />
-                <data android:mimeType="image/*" />
-            </intent-filter>
-
             <!-- Open With for video files -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -63,7 +56,10 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="clipp" />
+                <data android:scheme="clipp" android:host="project" />
+                <data android:scheme="clipp" android:host="new" />
+                <data android:scheme="clipp" android:host="quick-edit" />
+                <data android:scheme="clipp" android:host="shortcut" />
             </intent-filter>
         </activity>
 
