@@ -114,13 +114,6 @@ class MainActivity : ComponentActivity() {
                 sharedVideoUri = uri.toString()
             }
         }
-    } else if (intent?.action == android.content.Intent.ACTION_SEND_MULTIPLE) {
-        if (intent.type?.startsWith("video/") == true || intent.type?.startsWith("image/") == true) {
-            val uris = intent.getParcelableArrayListExtra<android.net.Uri>(android.content.Intent.EXTRA_STREAM)
-            if (!uris.isNullOrEmpty()) {
-                sharedVideoUri = uris[0].toString()
-            }
-        }
     } else if (intent?.action == android.content.Intent.ACTION_VIEW) {
         // Handle both shortcuts and open-with
         if (intent.dataString?.startsWith("clipp://shortcut/") == true) {
