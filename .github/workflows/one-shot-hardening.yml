@@ -82,6 +82,65 @@ jobs:
           p.write_text(text.replace(old_assert, new_assert, 1), encoding="utf-8")
           PY
 
+      - name: Fix waveform drawing indentation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("app/src/main/java/com/example/EditorScreen.kt")
+          text = p.read_text(encoding="utf-8")
+          old = '''            if (renderPeaks.isNotEmpty()) {
+            val centerY = height / 2f
+            val halfHeight = (height * 0.44f).coerceAtLeast(1f)
+                renderPeaks.forEachIndexed { index, peak ->
+                    val x = ((index + 0.5f) / renderPeaks.size) * totalWidth
+                val amplitude = (peak.coerceIn(0f, 1f) * halfHeight).coerceAtLeast(0.5f)
+                drawLine(
+                    color = color,
+                    start = androidx.compose.ui.geometry.Offset(x, centerY - amplitude),
+                    end = androidx.compose.ui.geometry.Offset(x, centerY + amplitude),
+                    strokeWidth = 1.5.dp.toPx(),
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round
+                )
+                }
+            } else {
+            // Honest loading/no-audio state: never synthesize random amplitudes.
+            drawLine(
+                color = color.copy(alpha = 0.35f),
+                start = androidx.compose.ui.geometry.Offset(0f, height / 2f),
+                end = androidx.compose.ui.geometry.Offset(totalWidth, height / 2f),
+                strokeWidth = 1.dp.toPx()
+            )
+            }
+'''
+          new = '''            if (renderPeaks.isNotEmpty()) {
+                val centerY = height / 2f
+                val halfHeight = (height * 0.44f).coerceAtLeast(1f)
+                renderPeaks.forEachIndexed { index, peak ->
+                    val x = ((index + 0.5f) / renderPeaks.size) * totalWidth
+                    val amplitude = (peak.coerceIn(0f, 1f) * halfHeight).coerceAtLeast(0.5f)
+                    drawLine(
+                        color = color,
+                        start = androidx.compose.ui.geometry.Offset(x, centerY - amplitude),
+                        end = androidx.compose.ui.geometry.Offset(x, centerY + amplitude),
+                        strokeWidth = 1.5.dp.toPx(),
+                        cap = androidx.compose.ui.graphics.StrokeCap.Round
+                    )
+                }
+            } else {
+                // Honest loading/no-audio state: never synthesize random amplitudes.
+                drawLine(
+                    color = color.copy(alpha = 0.35f),
+                    start = androidx.compose.ui.geometry.Offset(0f, height / 2f),
+                    end = androidx.compose.ui.geometry.Offset(totalWidth, height / 2f),
+                    strokeWidth = 1.dp.toPx()
+                )
+            }
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f"Expected one malformed waveform block, found {text.count(old)}")
+          p.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+
       - name: Validate patch shape
         run: git diff --check
 
@@ -89,7 +148,18 @@ jobs:
         run: bash ./gradlew --no-daemon testDebugUnitTest
 
       - name: Android lint
-        run: bash ./gradlew --no-daemon lintDebug
+        run: |
+          set +e
+          bash ./gradlew --no-daemon lintDebug
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            report=app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt
+            if [ -f "$report" ]; then
+              echo "--- remaining lint errors ---"
+              grep -n "Error:" "$report" || true
+            fi
+          fi
+          exit "$status"
 
       - name: Assemble debug app and instrumentation APK
         run: bash ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest
