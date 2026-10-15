@@ -6,6 +6,29 @@ Frozen source baseline: `585597d0ed98588e41924b0a06bd3d82de8d6b2b` (`main`)
 
 This file is the frozen pre-fix audit snapshot. Production-source hardening starts only after this snapshot. Prior historical hardening notes are treated as evidence to revalidate, not as a substitute for the current audit.
 
+## Post-fix resolution record — 2026-10-15
+
+The finding text below remains the frozen pre-fix record. This resolution block records what was subsequently proven on `astra/clipp-production-hardening` without rewriting the original evidence.
+
+| Finding | Current status | Verified result |
+| --- | --- | --- |
+| `CLIPP-P0-001` | **FIXED IN BRANCH; DEVICE REVALIDATION PENDING** | Save Draft and editor Back now serialize one canonical live `EditorHistoryModel` snapshot before marking clean. A new JVM regression round-trips the latest video/text/audio/layer order plus editor position metadata. |
+| `CLIPP-P1-002` | **FIXED IN BRANCH** | `SEND_MULTIPLE` is no longer advertised and the dead first-item runtime branch was removed. |
+| `CLIPP-P1-003` | **FIXED IN BRANCH** | `android.permission.VIBRATE` is declared. |
+| `CLIPP-P1-004` | **FIXED IN BRANCH** | Media3 unstable API use is covered by package-level `androidx.annotation.OptIn` in `package-info.java`; current lint reports zero `UnsafeOptInUsageError`. |
+| `CLIPP-P1-005` | **FIXED IN BRANCH** | Both audio processors include `super.isActive()`; current lint reports zero `MissingSuperCall`. |
+| `CLIPP-P1-006` | **FIXED IN BRANCH** | `clipp://` routes are limited to supported hosts and local video Open With is MIME-based rather than URL-like scheme routing. |
+| `CLIPP-P1-007` | **FIXED IN BRANCH** | Generic `*.jks` and `*.keystore` ignores are present. |
+| `CLIPP-P1-008` | **FIXED IN BRANCH** | `lintDebug` is green with **0 errors, 177 warnings, 1 hint** and no lint baseline/suppression was introduced. |
+| `CLIPP-P1-009` | **OPEN RELEASE GATE** | `adb devices -l` returned no connected emulator or physical device, so current export/device evidence is still absent. |
+| `CLIPP-P1-010` | **FIXED IN BRANCH** | JDK 21 `testDebugUnitTest`: **41 tests, 41 passed, 0 failed/errors/skipped**. |
+| `CLIPP-P1-011` | **OPEN RELEASE GATE** | Persistable URI grants are attempted, but an explicit relink/recovery UX for expired/non-persistable providers remains unimplemented. |
+| `CLIPP-P1-012` | **OPEN RELEASE GATE** | Output publication validates existence/non-empty output and positive duration; explicit video-track/dimension validation is deferred until device export fixtures can verify it safely. |
+| `CLIPP-P1-013` | **OPEN EXTERNAL RELEASE GATE** | Owner signing credentials/signed minified release artifact were not available in this audit session. |
+| `CLIPP-P1-014` | **OPEN DEVICE RELEASE GATE** | TalkBack/custom-control accessibility verification still requires a connected device/emulator. |
+
+Current local build evidence: `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `assembleDebugAndroidTest` all pass under JDK 21. No merge to `main` has been performed.
+
 ## CLIPP-P0-001 — Save/exit paths can mark a project clean without serializing the live editor document
 
 - **Priority:** P0
