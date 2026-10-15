@@ -30,7 +30,7 @@ jobs:
           "$SDKMANAGER" "platforms;android-36.1"
 
       - name: Apply focused P0/P1 hardening
-        run: python3 .github/scripts/apply_production_hardening.py
+        run: python3 .github/scripts/apply_production_hardening_v2.py
 
       - name: Validate patch shape
         run: git diff --check
