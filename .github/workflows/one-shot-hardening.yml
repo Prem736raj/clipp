@@ -36,13 +36,13 @@ jobs:
         run: git diff --check
 
       - name: Unit tests
-        run: ./gradlew --no-daemon testDebugUnitTest
+        run: bash ./gradlew --no-daemon testDebugUnitTest
 
       - name: Android lint
-        run: ./gradlew --no-daemon lintDebug
+        run: bash ./gradlew --no-daemon lintDebug
 
       - name: Assemble debug app and instrumentation APK
-        run: ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest
+        run: bash ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest
 
       - name: Commit verified hardening changes
         run: |
