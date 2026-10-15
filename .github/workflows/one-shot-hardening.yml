@@ -29,120 +29,11 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platforms;android-36.1"
 
-      - name: Use compiler-safe package Media3 opt-in
+      - name: Apply production hardening
         run: |
-          rm -f app/src/main/java/com/example/package-info.kt
-          cat > app/src/main/java/com/example/package-info.java <<'EOF'
-          @androidx.annotation.OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)
-          package com.example;
-          EOF
-
-      - name: Apply focused P0/P1 hardening
-        run: python3 .github/scripts/apply_production_hardening_v2.py
-
-      - name: Align persistence regression with valid canonical layer order
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-          p = Path("app/src/test/java/com/example/ProductionHardeningTest.kt")
-          text = p.read_text(encoding="utf-8")
-          replacement = "\n".join([
-              '        val liveText = TextOverlay(',
-              '            id = "live-text",',
-              '            text = "Current draft",',
-              '            startTimeOnTimelineMs = 0L,',
-              '            durationMs = 1_000L',
-              '        )',
-              '        val liveState = EditorState(',
-              '            canvasSettings = CanvasSettingsState(backgroundColorValue = Color.Blue.value.toLong()),',
-              '            texts = listOf(liveText),',
-              '            layerOrder = listOf(liveText.id)',
-              '        )',
-              '',
-              '        val json = serializeEditorHistorySnapshot('
-          ])
-          text, count = re.subn(
-              r'        val liveState = EditorState\(\n.*?\n        val json = serializeEditorHistorySnapshot\(',
-              replacement,
-              text,
-              count=1,
-              flags=re.DOTALL
-          )
-          if count != 1:
-              raise SystemExit(f"Expected one liveState regression fixture, found {count}")
-          old_assert = '        assertEquals(listOf("live-layer"), restored.layerOrder)\n'
-          new_assert = "\n".join([
-              '        assertEquals("Current draft", restored.texts.single().text)',
-              '        assertEquals(listOf("live-text"), restored.layerOrder)',
-              ''
-          ])
-          if text.count(old_assert) != 1:
-              raise SystemExit("Expected one layerOrder assertion")
-          p.write_text(text.replace(old_assert, new_assert, 1), encoding="utf-8")
-          PY
-
-      - name: Fix waveform drawing indentation
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("app/src/main/java/com/example/EditorScreen.kt")
-          text = p.read_text(encoding="utf-8")
-          old = '''            if (renderPeaks.isNotEmpty()) {
-            val centerY = height / 2f
-            val halfHeight = (height * 0.44f).coerceAtLeast(1f)
-                renderPeaks.forEachIndexed { index, peak ->
-                    val x = ((index + 0.5f) / renderPeaks.size) * totalWidth
-                val amplitude = (peak.coerceIn(0f, 1f) * halfHeight).coerceAtLeast(0.5f)
-                drawLine(
-                    color = color,
-                    start = androidx.compose.ui.geometry.Offset(x, centerY - amplitude),
-                    end = androidx.compose.ui.geometry.Offset(x, centerY + amplitude),
-                    strokeWidth = 1.5.dp.toPx(),
-                    cap = androidx.compose.ui.graphics.StrokeCap.Round
-                )
-                }
-            } else {
-            // Honest loading/no-audio state: never synthesize random amplitudes.
-            drawLine(
-                color = color.copy(alpha = 0.35f),
-                start = androidx.compose.ui.geometry.Offset(0f, height / 2f),
-                end = androidx.compose.ui.geometry.Offset(totalWidth, height / 2f),
-                strokeWidth = 1.dp.toPx()
-            )
-            }
-'''
-          new = '''            if (renderPeaks.isNotEmpty()) {
-                val centerY = height / 2f
-                val halfHeight = (height * 0.44f).coerceAtLeast(1f)
-                renderPeaks.forEachIndexed { index, peak ->
-                    val x = ((index + 0.5f) / renderPeaks.size) * totalWidth
-                    val amplitude = (peak.coerceIn(0f, 1f) * halfHeight).coerceAtLeast(0.5f)
-                    drawLine(
-                        color = color,
-                        start = androidx.compose.ui.geometry.Offset(x, centerY - amplitude),
-                        end = androidx.compose.ui.geometry.Offset(x, centerY + amplitude),
-                        strokeWidth = 1.5.dp.toPx(),
-                        cap = androidx.compose.ui.graphics.StrokeCap.Round
-                    )
-                }
-            } else {
-                // Honest loading/no-audio state: never synthesize random amplitudes.
-                drawLine(
-                    color = color.copy(alpha = 0.35f),
-                    start = androidx.compose.ui.geometry.Offset(0f, height / 2f),
-                    end = androidx.compose.ui.geometry.Offset(totalWidth, height / 2f),
-                    strokeWidth = 1.dp.toPx()
-                )
-            }
-'''
-          if text.count(old) != 1:
-              raise SystemExit(f"Expected one malformed waveform block, found {text.count(old)}")
-          p.write_text(text.replace(old, new, 1), encoding="utf-8")
-          PY
-
-      - name: Validate patch shape
-        run: git diff --check
+          python3 .github/scripts/apply_production_hardening_v2.py
+          python3 .github/scripts/finalize_production_hardening.py
+          git diff --check
 
       - name: Unit tests
         run: bash ./gradlew --no-daemon testDebugUnitTest
@@ -155,7 +46,6 @@ jobs:
           if [ "$status" -ne 0 ]; then
             report=app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt
             if [ -f "$report" ]; then
-              echo "--- remaining lint errors ---"
               grep -n "Error:" "$report" || true
             fi
           fi
