@@ -727,6 +727,105 @@ class ExampleUnitTest {
   }
 
   @Test
+  fun audioCrossfadeAndAutoDuckingAreExportableWithinBounds() {
+    val video = MediaClip(
+      sourceUri = "content://media/video/1",
+      originalDurationMs = 4_000L,
+      trimEndMs = 4_000L
+    )
+    val background = AudioClip(
+      sourceUri = "content://media/audio/1",
+      startTimeOnTimelineMs = 0L,
+      sourceDurationMs = 4_000L,
+      trimEndMs = 4_000L,
+      autoDucking = true,
+      audioEffects = AudioEffects(crossfadeMs = 500L)
+    )
+
+    assertFalse(EditorState(clips = listOf(video), audioClips = listOf(background)).hasUnsupportedExportEdits())
+    assertTrue(
+      EditorState(
+        clips = listOf(video),
+        audioClips = listOf(background.copy(audioEffects = AudioEffects(crossfadeMs = 2_500L)))
+      ).hasUnsupportedExportEdits()
+    )
+    assertTrue(
+      EditorState(
+        clips = listOf(video.copy(audioEffects = AudioEffects(crossfadeMs = 500L)))
+      ).hasUnsupportedExportEdits()
+    )
+  }
+
+  @Test
+  fun audioDuckingWindowsMergeForegroundSources() {
+    val first = MediaClip(
+      sourceUri = "content://media/video/1",
+      originalDurationMs = 1_000L,
+      trimEndMs = 1_000L
+    )
+    val muted = first.copy(
+      id = "muted",
+      sourceUri = "content://media/video/2",
+      isMuted = true
+    )
+    val voice = AudioClip(
+      sourceUri = "content://media/audio/voice",
+      startTimeOnTimelineMs = 500L,
+      sourceDurationMs = 1_000L,
+      trimEndMs = 1_000L
+    )
+    val background = voice.copy(
+      id = "background",
+      sourceUri = "content://media/audio/music",
+      autoDucking = true
+    )
+
+    val windows = EditorState(
+      clips = listOf(first, muted),
+      audioClips = listOf(voice, background)
+    ).buildAudioDuckingWindows(projectDurationMs = 2_000L)
+
+    assertEquals(listOf(AudioDuckingWindow(0L, 1_500L)), windows)
+  }
+
+  @Test
+  fun timelineAudioMixProcessorAppliesCrossfadeAndDucking() {
+    val clip = AudioClip(
+      sourceUri = "content://media/audio/1",
+      startTimeOnTimelineMs = 0L,
+      sourceDurationMs = 1_000L,
+      trimEndMs = 1_000L,
+      autoDucking = true,
+      audioEffects = AudioEffects(crossfadeMs = 200L)
+    )
+    val processor = TimelineAudioMixProcessor(
+      timelineStartMs = 0L,
+      projectDurationMs = 1_000L,
+      audioClip = clip,
+      duckingWindows = listOf(AudioDuckingWindow(400L, 600L))
+    )
+    processor.configure(AudioProcessor.AudioFormat(1_000, 1, C.ENCODING_PCM_16BIT))
+    processor.flush()
+
+    val input = ByteBuffer.allocate(1_000 * 2).order(ByteOrder.LITTLE_ENDIAN).apply {
+      repeat(1_000) { putShort(10_000) }
+      flip()
+    }
+    processor.queueInput(input)
+    val output = processor.output.order(ByteOrder.LITTLE_ENDIAN)
+    fun sampleAt(index: Int): Int {
+      output.position(index * 2)
+      return output.short.toInt()
+    }
+
+    assertEquals(0, sampleAt(0))
+    assertTrue(sampleAt(199) in 9_000..10_000)
+    assertTrue(sampleAt(450) in 2_400..2_600)
+    assertTrue(sampleAt(800) in 9_000..10_000)
+    assertTrue(sampleAt(999) < 100)
+  }
+
+  @Test
   fun loopedAudioBuildsBoundedSegmentsToProjectEnd() {
     val audio = AudioClip(
       sourceUri = "content://media/audio/1",

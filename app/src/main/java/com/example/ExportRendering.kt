@@ -2016,16 +2016,24 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
     }
     if (audioClips.any { it.sourceUri.isNullOrBlank() && it.sourceClipId.isNullOrBlank() }) reasons += "an audio source"
     if (audioClips.any {
-            it.autoDucking ||
-                it.keyframes.keys.any { key -> key !in EXPORT_SUPPORTED_AUDIO_KEYFRAMES } ||
+            it.keyframes.keys.any { key -> key !in EXPORT_SUPPORTED_AUDIO_KEYFRAMES } ||
                 it.keyframes["volume"].orEmpty().any { keyframe ->
                     keyframe.timeMs < 0L || !keyframe.value.isFinite() || keyframe.value !in 0f..1f
                 } ||
-                it.audioEffects.hasUnsupportedExportAutomation()
+                it.audioEffects.hasUnsupportedExportAutomation(allowCrossfade = true)
     }) {
         reasons += "advanced audio automation"
     }
     val projectDurationMs = clips.sumOf { it.durationMs }
+    if (audioClips.any { audioClip ->
+            val maxCrossfadeMs = minOf(
+                MAX_EXPORT_CROSSFADE_MS,
+                audioClip.timelineDurationMs(projectDurationMs) / 2L
+            )
+            audioClip.audioEffects.crossfadeMs > maxCrossfadeMs
+        }) {
+        reasons += "audio crossfade is longer than half of its track"
+    }
     if (audioClips.any {
             it.isLooped && it.requiredExportSegmentCount(projectDurationMs) > MAX_AUDIO_LOOP_EXPORT_SEGMENTS
         }) {

@@ -146,6 +146,7 @@ import androidx.compose.ui.geometry.Rect
 fun AudioPlayerComponent(
     clip: AudioClip,
     clips: List<MediaClip>,
+    audioClips: List<AudioClip>,
     currentPositionMs: Long,
     isPlaying: Boolean,
     isMuted: Boolean,
@@ -167,11 +168,22 @@ fun AudioPlayerComponent(
     
     val actualUri = clip.sourceUri ?: clips.find { it.id == clip.sourceClipId }?.sourceUri
     
-    val targetVolume = if (isMuted || clip.isMuted) 0f else clip.volume * masterVolume
+    val projectDurationMs = clips.sumOf { it.durationMs }
+    val duckingWindows = remember(clips, audioClips, projectDurationMs) {
+        EditorState(clips = clips, audioClips = audioClips).buildAudioDuckingWindows(projectDurationMs)
+    }
+    val timelineMixGain = clip.timelineMixGainAt(
+        projectTimeMs = currentPositionMs,
+        projectDurationMs = projectDurationMs,
+        duckingWindows = duckingWindows
+    )
+    val targetVolume = if (isMuted || clip.isMuted) 0f else {
+        clip.volume * masterVolume * timelineMixGain
+    }
     
     val smoothedVolume by androidx.compose.animation.core.animateFloatAsState(
         targetValue = targetVolume,
-        animationSpec = androidx.compose.animation.core.tween(500)
+        animationSpec = androidx.compose.animation.core.tween(80)
     )
     
     LaunchedEffect(actualUri) {
@@ -186,7 +198,6 @@ fun AudioPlayerComponent(
         if (actualUri == null) return@LaunchedEffect
         
         val relativeTimeMs = currentPositionMs - clip.startTimeOnTimelineMs
-        val projectDurationMs = clips.sumOf { it.durationMs }
         val activeDurationMs = if (clip.isLooped) {
             (projectDurationMs - clip.startTimeOnTimelineMs).coerceAtLeast(0L)
         } else {
@@ -1757,6 +1768,7 @@ fun EditorScreen(
                 AudioPlayerComponent(
                     clip = audioClip,
                     clips = clips,
+                    audioClips = audioClips,
                     currentPositionMs = currentPositionMs,
                     isPlaying = isPlaying,
                     isMuted = isMuted,
@@ -5054,6 +5066,10 @@ fun EditorScreen(
                     selectedAudio.volume
                 ).coerceIn(0f, 1f)
                 val maxFadeMs = minOf(5_000L, selectedAudio.durationMs.coerceAtLeast(1L))
+                val maxCrossfadeMs = minOf(
+                    MAX_EXPORT_CROSSFADE_MS,
+                    selectedAudio.timelineDurationMs(videoDurationMs) / 2L
+                ).coerceAtLeast(0L)
 
                 fun updateSelectedAudio(updated: AudioClip) {
                     val index = audioClips.indexOfFirst { it.id == selectedAudio.id }
@@ -5194,6 +5210,48 @@ fun EditorScreen(
                             valueRange = 0f..maxFadeMs.toFloat()
                         )
 
+                        Text("Crossfade: ${selectedAudio.audioEffects.crossfadeMs} ms", style = MaterialTheme.typography.labelMedium)
+                        Slider(
+                            value = selectedAudio.audioEffects.crossfadeMs.coerceIn(0L, maxCrossfadeMs).toFloat(),
+                            onValueChange = { value ->
+                                updateSelectedAudio(
+                                    selectedAudio.copy(
+                                        audioEffects = selectedAudio.audioEffects.copy(crossfadeMs = value.toLong())
+                                    )
+                                )
+                            },
+                            onValueChangeFinished = { persistHistory() },
+                            valueRange = 0f..maxCrossfadeMs.coerceAtLeast(1L).toFloat(),
+                            enabled = maxCrossfadeMs > 0L
+                        )
+                        Text(
+                            "Fades both edges of this track so overlapping audio blends smoothly.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                Text("Auto duck", style = MaterialTheme.typography.labelLarge)
+                                Text(
+                                    "Lower this track under audible video or foreground audio, with smooth ramps.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = selectedAudio.autoDucking,
+                                onCheckedChange = { enabled ->
+                                    updateSelectedAudio(selectedAudio.copy(autoDucking = enabled))
+                                    persistHistory()
+                                }
+                            )
+                        }
+
                         Text("Equalizer", style = MaterialTheme.typography.labelMedium)
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             items(EXPORT_EQ_PRESETS.size) { index ->
@@ -5315,7 +5373,7 @@ fun EditorScreen(
                         )
 
                         Text(
-                            "Export applies looping, EQ, pitch, bounded delay/reverb, distortion, volume keyframes, and fades. Preview uses the trimmed source and repeats it when Loop audio is enabled.",
+                            "Preview and export apply crossfade envelopes and auto ducking. Export also applies looping, EQ, pitch, bounded delay/reverb, distortion, volume keyframes, and fades.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

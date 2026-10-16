@@ -51,9 +51,9 @@ class ExportHandle internal constructor(private val cancelAction: () -> Unit) {
     fun cancel() = cancelAction()
 }
 
-internal fun AudioEffects.hasUnsupportedExportAutomation(): Boolean {
+internal fun AudioEffects.hasUnsupportedExportAutomation(allowCrossfade: Boolean = false): Boolean {
     return fadeInMs < 0L || fadeOutMs < 0L ||
-        crossfadeMs != 0L ||
+        crossfadeMs < 0L || crossfadeMs > MAX_EXPORT_CROSSFADE_MS || (!allowCrossfade && crossfadeMs != 0L) ||
         eqPreset !in EXPORT_EQ_PRESETS ||
         reverbPreset !in EXPORT_REVERB_PRESETS ||
         delayTimeMs !in 0L..MAX_EXPORT_DELAY_MS ||
@@ -375,6 +375,7 @@ class VideoExporter(context: Context) {
         clips: List<MediaClip>,
         videoDurationMs: Long
     ): List<EditedMediaItemSequence> {
+        val duckingWindows = state.buildAudioDuckingWindows(videoDurationMs)
         return state.audioClips.mapNotNull { audioClip ->
             if (videoDurationMs <= 0L) return@mapNotNull null
             val sourceUri = audioClip.sourceUri
@@ -392,7 +393,9 @@ class VideoExporter(context: Context) {
                         audioClip = audioClip,
                         sourceUri = sourceUri,
                         segment = segment,
-                        masterVolume = state.canvasSettings.masterVolume
+                        masterVolume = state.canvasSettings.masterVolume,
+                        projectDurationMs = videoDurationMs,
+                        duckingWindows = duckingWindows
                     )
                 )
             }
@@ -404,7 +407,9 @@ class VideoExporter(context: Context) {
         audioClip: AudioClip,
         sourceUri: String,
         segment: AudioExportSegment,
-        masterVolume: Float
+        masterVolume: Float,
+        projectDurationMs: Long,
+        duckingWindows: List<AudioDuckingWindow>
     ): EditedMediaItem {
         val mediaItem = MediaItem.Builder()
             .setUri(Uri.parse(sourceUri))
@@ -438,6 +443,14 @@ class VideoExporter(context: Context) {
             )
         } else if (!audioClip.isMuted && effectiveVolume != 1f) {
             processors += VolumeAudioProcessor(effectiveVolume)
+        }
+        if (!audioClip.isMuted && (audioEffects.crossfadeMs > 0L || audioClip.autoDucking)) {
+            processors += TimelineAudioMixProcessor(
+                timelineStartMs = audioClip.startTimeOnTimelineMs + segment.timelineOffsetMs,
+                projectDurationMs = projectDurationMs,
+                audioClip = audioClip,
+                duckingWindows = duckingWindows
+            )
         }
         if (!audioClip.isMuted) {
             processors.addAdvancedAudioProcessors(audioEffects)
@@ -1154,5 +1167,66 @@ internal class KeyframedVolumeAudioProcessor(
             1f
         }
         return (keyframedGain * fadeInGain * fadeOutGain).coerceIn(0f, 1f)
+    }
+}
+
+/** Applies timeline-aware crossfade and automatic ducking gain to decoded PCM audio. */
+internal class TimelineAudioMixProcessor(
+    private val timelineStartMs: Long,
+    private val projectDurationMs: Long,
+    private val audioClip: AudioClip,
+    private val duckingWindows: List<AudioDuckingWindow>
+) : BaseAudioProcessor() {
+    private var sampleRate = 0
+    private var channelCount = 0
+    private var bytesPerSample = 0
+    private var processedFrames = 0L
+
+    override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
+        if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT &&
+            inputAudioFormat.encoding != C.ENCODING_PCM_FLOAT
+        ) {
+            throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
+        }
+        sampleRate = inputAudioFormat.sampleRate
+        channelCount = inputAudioFormat.channelCount
+        bytesPerSample = if (inputAudioFormat.encoding == C.ENCODING_PCM_16BIT) 2 else 4
+        return inputAudioFormat
+    }
+
+    override fun onFlush() {
+        processedFrames = 0L
+    }
+
+    override fun isActive(): Boolean = audioClip.audioEffects.crossfadeMs > 0L || audioClip.autoDucking
+
+    override fun queueInput(inputBuffer: ByteBuffer) {
+        val input = inputBuffer.order(ByteOrder.LITTLE_ENDIAN)
+        val bytesPerFrame = (channelCount * bytesPerSample).coerceAtLeast(1)
+        val completeBytes = input.remaining() - input.remaining() % bytesPerFrame
+        val output = replaceOutputBuffer(completeBytes).order(ByteOrder.LITTLE_ENDIAN)
+        val frameCount = completeBytes / bytesPerFrame
+        repeat(frameCount) { frameIndex ->
+            val localTimeMs = if (sampleRate > 0) {
+                ((processedFrames + frameIndex) * 1_000L / sampleRate).coerceAtLeast(0L)
+            } else {
+                0L
+            }
+            val gain = audioClip.timelineMixGainAt(
+                projectTimeMs = timelineStartMs + localTimeMs,
+                projectDurationMs = projectDurationMs,
+                duckingWindows = duckingWindows
+            )
+            repeat(channelCount) {
+                if (bytesPerSample == 2) {
+                    val sample = input.short.toInt()
+                    output.putShort((sample * gain).roundToInt().coerceIn(-32768, 32767).toShort())
+                } else {
+                    output.putFloat((input.float * gain).coerceIn(-1f, 1f))
+                }
+            }
+        }
+        processedFrames += frameCount
+        output.flip()
     }
 }

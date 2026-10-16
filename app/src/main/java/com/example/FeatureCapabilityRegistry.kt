@@ -149,8 +149,14 @@ internal object FeatureCapabilityRegistry {
             detail = "Shape masks, blend modes, and vertical slide animations share the bitmap and GLES export compositor."
         ),
         FeatureCapabilityStatus(
+            id = "audio-mixing",
+            label = "Audio crossfade and automatic ducking",
+            capability = FeatureCapability.PREVIEW_AND_EXPORT_SUPPORTED,
+            detail = "Audio tracks can crossfade at their edges and automatically duck under audible primary or foreground tracks in preview and MP4 export."
+        ),
+        FeatureCapabilityStatus(
             id = "unsupported-audio-dsp",
-            label = "Noise reduction, voice changer, ducking, and audio crossfade",
+            label = "Noise reduction and voice changer",
             capability = FeatureCapability.COMING_LATER,
             detail = "Controls remain unavailable until real export processors exist."
         ),
