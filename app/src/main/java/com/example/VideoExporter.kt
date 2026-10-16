@@ -439,7 +439,9 @@ class VideoExporter(context: Context) {
                 durationMs = segment.durationMs,
                 fadeInMs = audioEffects.fadeInMs,
                 fadeOutMs = audioEffects.fadeOutMs,
-                volumeKeyframes = volumeKeyframes
+                volumeKeyframes = volumeKeyframes,
+                fadeTimelineOffsetMs = segment.timelineOffsetMs,
+                fadeTimelineDurationMs = audioClip.timelineDurationMs(projectDurationMs)
             )
         } else if (!audioClip.isMuted && effectiveVolume != 1f) {
             processors += VolumeAudioProcessor(effectiveVolume)
@@ -1082,7 +1084,9 @@ internal class KeyframedVolumeAudioProcessor(
     private val durationMs: Long,
     fadeInMs: Long,
     fadeOutMs: Long,
-    volumeKeyframes: List<Keyframe>
+    volumeKeyframes: List<Keyframe>,
+    private val fadeTimelineOffsetMs: Long = 0L,
+    private val fadeTimelineDurationMs: Long = durationMs
 ) : BaseAudioProcessor() {
     private val fadeInDurationMs = fadeInMs.coerceAtLeast(0L)
     private val fadeOutDurationMs = fadeOutMs.coerceAtLeast(0L)
@@ -1156,17 +1160,13 @@ internal class KeyframedVolumeAudioProcessor(
             }
             first.value + (second.value - first.value) * progress
         }
-        val fadeInGain = if (fadeInDurationMs > 0L) {
-            (timeMs.toFloat() / fadeInDurationMs).coerceIn(0f, 1f)
-        } else {
-            1f
-        }
-        val fadeOutGain = if (fadeOutDurationMs > 0L && durationMs > 0L) {
-            ((durationMs - timeMs).toFloat() / fadeOutDurationMs).coerceIn(0f, 1f)
-        } else {
-            1f
-        }
-        return (keyframedGain * fadeInGain * fadeOutGain).coerceIn(0f, 1f)
+        val fadeGain = audioFadeGainAt(
+            localTimeMs = fadeTimelineOffsetMs + timeMs,
+            durationMs = fadeTimelineDurationMs,
+            fadeInMs = fadeInDurationMs,
+            fadeOutMs = fadeOutDurationMs
+        )
+        return (keyframedGain * fadeGain).coerceIn(0f, 1f)
     }
 }
 

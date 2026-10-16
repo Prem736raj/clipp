@@ -826,6 +826,52 @@ class ExampleUnitTest {
   }
 
   @Test
+  fun previewAudioAutomationUsesWholeLoopedTimelineForFades() {
+    val clip = AudioClip(
+      sourceUri = "content://media/audio/1",
+      startTimeOnTimelineMs = 500L,
+      sourceDurationMs = 600L,
+      trimStartMs = 100L,
+      trimEndMs = 500L,
+      volume = 0.8f,
+      isLooped = true,
+      audioEffects = AudioEffects(fadeInMs = 200L, fadeOutMs = 200L)
+    )
+
+    assertEquals(0f, clip.previewAutomationGainAt(500L, 2_500L, 0.5f), 0.0001f)
+    assertEquals(0.2f, clip.previewAutomationGainAt(600L, 2_500L, 0.5f), 0.0001f)
+    assertEquals(0.4f, clip.previewAutomationGainAt(900L, 2_500L, 0.5f), 0.0001f)
+    assertEquals(0.2f, clip.previewAutomationGainAt(2_400L, 2_500L, 0.5f), 0.0001f)
+    assertEquals(100L, clip.sourceTimeAtProjectTime(1_300L, 2_500L))
+  }
+
+  @Test
+  fun loopedExportFadeDoesNotRestartAtEverySegmentBoundary() {
+    val processor = KeyframedVolumeAudioProcessor(
+      baseGain = 1f,
+      durationMs = 400L,
+      fadeInMs = 200L,
+      fadeOutMs = 200L,
+      volumeKeyframes = emptyList(),
+      fadeTimelineOffsetMs = 400L,
+      fadeTimelineDurationMs = 1_200L
+    )
+    processor.configure(AudioProcessor.AudioFormat(1_000, 1, C.ENCODING_PCM_16BIT))
+    processor.flush()
+
+    val input = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).apply {
+      putShort(10_000)
+      putShort(10_000)
+      flip()
+    }
+    processor.queueInput(input)
+    val output = processor.output.order(ByteOrder.LITTLE_ENDIAN)
+
+    assertTrue(output.short.toInt() in 9_900..10_000)
+    assertTrue(output.short.toInt() in 9_900..10_000)
+  }
+
+  @Test
   fun loopedAudioBuildsBoundedSegmentsToProjectEnd() {
     val audio = AudioClip(
       sourceUri = "content://media/audio/1",

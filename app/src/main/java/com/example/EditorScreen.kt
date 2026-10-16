@@ -177,8 +177,13 @@ fun AudioPlayerComponent(
         projectDurationMs = projectDurationMs,
         duckingWindows = duckingWindows
     )
+    val automationGain = clip.previewAutomationGainAt(
+        projectTimeMs = currentPositionMs,
+        projectDurationMs = projectDurationMs,
+        masterVolume = masterVolume
+    )
     val targetVolume = if (isMuted || clip.isMuted) 0f else {
-        clip.volume * masterVolume * timelineMixGain
+        automationGain * timelineMixGain
     }
     
     val smoothedVolume by androidx.compose.animation.core.animateFloatAsState(
@@ -790,6 +795,7 @@ fun EditorScreen(
     var isRecordingVoiceover by remember { mutableStateOf(false) }
     var voiceRecorder by remember { mutableStateOf<MediaRecorder?>(null) }
     var voiceRecordingFile by remember { mutableStateOf<File?>(null) }
+    var voiceRecordingStartMs by remember { mutableStateOf<Long?>(null) }
 
     DisposableEffect(Unit) {
         onDispose {
@@ -799,10 +805,11 @@ fun EditorScreen(
                 runCatching { recorder.release() }
             }
             voiceRecordingFile?.delete()
+            voiceRecordingStartMs = null
         }
     }
 
-    fun addAudioTrack(uri: Uri, displayName: String?) {
+    fun addAudioTrack(uri: Uri, displayName: String?, timelineStartMs: Long = currentPositionMs) {
         scope.launch {
             val durationMs = MediaMetadataReader.readAudioDuration(context, uri)
             if (durationMs == null || durationMs <= 0L) {
@@ -812,7 +819,7 @@ fun EditorScreen(
             val audio = AudioClip(
                 sourceUri = uri.toString(),
                 displayName = displayName ?: uri.lastPathSegment?.substringAfterLast('/') ?: "Audio",
-                startTimeOnTimelineMs = currentPositionMs.coerceIn(0L, videoDurationMs),
+                startTimeOnTimelineMs = timelineStartMs.coerceIn(0L, videoDurationMs),
                 sourceDurationMs = durationMs,
                 trimEndMs = durationMs
             )
@@ -834,56 +841,72 @@ fun EditorScreen(
         }
     }
 
-    fun startVoiceoverRecording() {
-        if (isRecordingVoiceover) return
+    fun startVoiceoverRecording(): Boolean {
+        if (isRecordingVoiceover) return false
+        if (videoDurationMs <= 0L || currentPositionMs >= videoDurationMs) {
+            android.widget.Toast.makeText(
+                context,
+                "Move the playhead before the end of the video to record a voiceover.",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+            return false
+        }
         val directory = File(context.filesDir, "voiceovers")
         if (!directory.exists() && !directory.mkdirs()) {
             android.widget.Toast.makeText(context, "Could not create a voiceover file.", android.widget.Toast.LENGTH_LONG).show()
-            return
+            return false
         }
         val file = File(directory, "voiceover-${UUID.randomUUID()}.m4a")
-        runCatching {
-            val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) MediaRecorder(context) else MediaRecorder()
-            recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
-            recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            recorder.setAudioSamplingRate(44_100)
-            recorder.setAudioEncodingBitRate(128_000)
-            recorder.setOutputFile(file.absolutePath)
-            recorder.prepare()
-            recorder.start()
-            voiceRecorder = recorder
+        val recordingStartMs = currentPositionMs.coerceIn(0L, (videoDurationMs - 1L).coerceAtLeast(0L))
+        var recorder: MediaRecorder? = null
+        return runCatching {
+            recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) MediaRecorder(context) else MediaRecorder()
+            val activeRecorder = checkNotNull(recorder)
+            activeRecorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+            activeRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            activeRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            activeRecorder.setAudioSamplingRate(44_100)
+            activeRecorder.setAudioEncodingBitRate(128_000)
+            activeRecorder.setOutputFile(file.absolutePath)
+            activeRecorder.prepare()
+            activeRecorder.start()
+            voiceRecorder = activeRecorder
             voiceRecordingFile = file
+            voiceRecordingStartMs = recordingStartMs
             isRecordingVoiceover = true
             android.widget.Toast.makeText(context, "Recording voiceover… tap Stop Voiceover when finished.", android.widget.Toast.LENGTH_LONG).show()
+            true
         }.onFailure {
+            recorder?.let { failedRecorder ->
+                runCatching { failedRecorder.reset() }
+                runCatching { failedRecorder.release() }
+            }
             file.delete()
             android.widget.Toast.makeText(context, "Could not start voiceover recording.", android.widget.Toast.LENGTH_LONG).show()
-        }
+        }.getOrDefault(false)
     }
 
     fun stopVoiceoverRecording() {
         val recorder = voiceRecorder ?: return
         val file = voiceRecordingFile
+        val recordingStartMs = voiceRecordingStartMs
         voiceRecorder = null
         voiceRecordingFile = null
+        voiceRecordingStartMs = null
         isRecordingVoiceover = false
-        runCatching { recorder.stop() }
-            .onFailure { file?.delete() }
+        val stoppedCleanly = runCatching { recorder.stop() }.isSuccess
+        if (!stoppedCleanly) file?.delete()
         runCatching { recorder.reset() }
         runCatching { recorder.release() }
-        if (file == null || !file.exists() || file.length() == 0L) {
+        if (!stoppedCleanly || file == null || !file.exists() || file.length() == 0L) {
             android.widget.Toast.makeText(context, "Voiceover recording was empty.", android.widget.Toast.LENGTH_LONG).show()
             return
         }
-        addAudioTrack(Uri.fromFile(file), "Voiceover")
-    }
-
-    val recordAudioPermission = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) startVoiceoverRecording()
-        else android.widget.Toast.makeText(context, "Microphone permission is required for voiceover.", android.widget.Toast.LENGTH_LONG).show()
+        addAudioTrack(
+            Uri.fromFile(file),
+            "Voiceover",
+            timelineStartMs = recordingStartMs ?: currentPositionMs
+        )
     }
     
     fun seekToGlobal(globalMs: Long, player: ExoPlayer) {
@@ -897,6 +920,7 @@ fun EditorScreen(
     var isMuted by remember { mutableStateOf(false) }
     var isFullscreen by remember { mutableStateOf(false) }
     var showFullscreenControls by remember { mutableStateOf(false) }
+    var mainPlaybackEnded by remember { mutableStateOf(false) }
     
     
     val exoPlayer = remember {
@@ -916,6 +940,7 @@ fun EditorScreen(
                 }
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_ENDED) {
+                        mainPlaybackEnded = true
                         isPlaying = false
                         seekTo(0)
                         pause()
@@ -960,6 +985,27 @@ fun EditorScreen(
             exoPlayer.release() 
             bgExoPlayer.release()
             overlayExoPlayer.release()
+        }
+    }
+
+    val recordAudioPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            if (startVoiceoverRecording()) exoPlayer.play()
+        } else {
+            android.widget.Toast.makeText(
+                context,
+                "Microphone permission is required for voiceover.",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    LaunchedEffect(mainPlaybackEnded) {
+        if (mainPlaybackEnded) {
+            if (isRecordingVoiceover) stopVoiceoverRecording()
+            mainPlaybackEnded = false
         }
     }
     
@@ -1726,7 +1772,7 @@ fun EditorScreen(
                                     "Voiceover" -> if (isRecordingVoiceover) {
                                         stopVoiceoverRecording()
                                     } else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                                        startVoiceoverRecording()
+                                        if (startVoiceoverRecording()) exoPlayer.play()
                                     } else {
                                         recordAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
                                     }
@@ -3201,6 +3247,7 @@ fun EditorScreen(
                         .clickable {
                             com.example.utils.HapticUtil.playLightTap(view, context)
                             if (isPlaying) {
+                                if (isRecordingVoiceover) stopVoiceoverRecording()
                                 exoPlayer.pause()
                             } else {
                                 if (exoPlayer.playbackState == Player.STATE_ENDED) {
@@ -5373,7 +5420,7 @@ fun EditorScreen(
                         )
 
                         Text(
-                            "Preview and export apply crossfade envelopes and auto ducking. Export also applies looping, EQ, pitch, bounded delay/reverb, distortion, volume keyframes, and fades.",
+                            "Preview and export apply looping, volume keyframes, fades, crossfade envelopes, and auto ducking. Export also applies EQ, pitch, bounded delay/reverb, and distortion.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -7017,6 +7064,7 @@ fun EditorScreen(
                         .background(MaterialTheme.colorScheme.primary, CircleShape)
                         .clickable {
                             if (isPlaying) {
+                                if (isRecordingVoiceover) stopVoiceoverRecording()
                                 exoPlayer.pause()
                             } else {
                                 if (exoPlayer.playbackState == Player.STATE_ENDED) {

@@ -9,10 +9,74 @@ internal data class AudioDuckingWindow(
     val endTimeMs: Long
 )
 
+internal fun audioFadeGainAt(
+    localTimeMs: Long,
+    durationMs: Long,
+    fadeInMs: Long,
+    fadeOutMs: Long
+): Float {
+    if (durationMs <= 0L || localTimeMs !in 0L until durationMs) return 0f
+    val fadeInGain = if (fadeInMs > 0L) {
+        localTimeMs.toFloat() / fadeInMs.coerceAtMost(durationMs).coerceAtLeast(1L).toFloat()
+    } else {
+        1f
+    }
+    val fadeOutGain = if (fadeOutMs > 0L) {
+        (durationMs - localTimeMs).toFloat() /
+            fadeOutMs.coerceAtMost(durationMs).coerceAtLeast(1L).toFloat()
+    } else {
+        1f
+    }
+    return minOf(fadeInGain, fadeOutGain).coerceIn(0f, 1f)
+}
+
 internal fun AudioClip.timelineDurationMs(projectDurationMs: Long): Long {
     val startMs = startTimeOnTimelineMs.coerceIn(0L, projectDurationMs.coerceAtLeast(0L))
     val remainingMs = (projectDurationMs - startMs).coerceAtLeast(0L)
     return if (isLooped) remainingMs else durationMs.coerceAtMost(remainingMs)
+}
+
+internal fun AudioClip.sourceTimeAtProjectTime(
+    projectTimeMs: Long,
+    projectDurationMs: Long
+): Long? {
+    val activeDurationMs = timelineDurationMs(projectDurationMs)
+    if (activeDurationMs <= 0L) return null
+    val localTimeMs = projectTimeMs - startTimeOnTimelineMs
+    if (localTimeMs !in 0L until activeDurationMs) return null
+    val sourceWindowMs = (trimEndMs - trimStartMs).coerceAtLeast(0L)
+    if (sourceWindowMs <= 0L) return null
+    return if (isLooped) {
+        trimStartMs + (localTimeMs % sourceWindowMs)
+    } else {
+        (trimStartMs + localTimeMs).coerceAtMost(trimEndMs - 1L)
+    }
+}
+
+/**
+ * Preview-side gain for the same volume keyframes and edge fades used by export.
+ * Crossfade and ducking stay in [timelineMixGainAt] so the two envelopes can be
+ * composed independently and tested without an ExoPlayer instance.
+ */
+internal fun AudioClip.previewAutomationGainAt(
+    projectTimeMs: Long,
+    projectDurationMs: Long,
+    masterVolume: Float
+): Float {
+    val activeDurationMs = timelineDurationMs(projectDurationMs)
+    if (activeDurationMs <= 0L) return 0f
+    val localTimeMs = projectTimeMs - startTimeOnTimelineMs
+    if (localTimeMs !in 0L until activeDurationMs) return 0f
+    val sourceTimeMs = sourceTimeAtProjectTime(projectTimeMs, projectDurationMs) ?: return 0f
+    val automatedVolume = keyframes.getValueAtTime("volume", sourceTimeMs, volume)
+        .coerceIn(0f, 1f)
+    val fadeGain = audioFadeGainAt(
+        localTimeMs = localTimeMs,
+        durationMs = activeDurationMs,
+        fadeInMs = audioEffects.fadeInMs,
+        fadeOutMs = audioEffects.fadeOutMs
+    )
+    return (automatedVolume * masterVolume.coerceIn(0f, 1f) * fadeGain).coerceIn(0f, 1f)
 }
 
 /**

@@ -154,8 +154,15 @@ REMAINING WORK - PRIORITY 1: ADVANCED AUDIO
       and pathological sub-millisecond/very-short loops are gated by a segment
       count limit. JVM regressions and debug assembly pass; the new device MP4
       regression still needs to be run on an emulator/physical device.
-[OPEN] 2. Audio ducking against voiceover or other priority tracks.
-[OPEN] 3. Audio crossfade between tracks/clips.
+[IMPLEMENTED / DEVICE QA OPEN] 2. Audio ducking against foreground tracks.
+      Preview and export share the same bounded ducking windows. Background
+      tracks marked for auto-ducking reduce gain under audible primary clip
+      audio and non-ducking foreground audio; JVM regressions pass, while a
+      real-device MP4 listening/export check is still pending.
+[IMPLEMENTED / DEVICE QA OPEN] 3. Audio crossfade between tracks/clips.
+      Audio tracks apply bounded edge crossfade envelopes in preview and export.
+      Loop-segment export now keeps one whole-track fade timeline so fade-in does
+      not restart at every repeated source segment; device export QA is pending.
 [OPEN] 4. Noise reduction and wind-noise reduction with real processors.
 [OPEN] 5. Voice effects/voice changer with real audio processing.
 [OPEN] 6. Audio-speed automation with correct timing and pitch behavior.
@@ -260,7 +267,7 @@ Export-ready today (implementation status):
 - Selected audio tracks/processors and volume automation.
 
 Coming later or still gated:
-- Noise reduction, voice changer, ducking, and audio crossfade.
+- Noise reduction, voice changer, and audio-speed automation.
 - Partial-duration legacy effects and some advanced visual effects.
 - Advanced text/sticker animation, 3D text, border/shadow parity.
 - Transitions on speed-curved clips and any unsupported source combination.
