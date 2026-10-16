@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">Clipp</string>
+    <string name="shortcut_new_project_short">New</string>
+    <string name="shortcut_new_project_long">New Project</string>
+    <string name="shortcut_quick_trim_short">Quick Trim</string>
+    <string name="shortcut_quick_trim_long">Quick Trim</string>
+    <string name="shortcut_continue_short">Continue</string>
+    <string name="shortcut_continue_long">Continue Last Project</string>
+</resources>

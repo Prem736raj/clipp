@@ -1,0 +1,283 @@
+CLIPP - CURRENT STATUS AND REMAINING WORK
+==========================================
+Report date: 2026-09-13
+Repository: https://github.com/Prem736raj/clipp
+Checkout: C:\Users\prem7\Downloads\clipp-main
+Branch: audit/production-hardening-2026-09-06
+Implementation baseline reviewed: 3dfc8d5
+
+EXECUTIVE ANSWER
+----------------
+Clipp is a strong local Android video-editor MVP/prototype with a real MP4
+export pipeline. It is not yet production-ready and it is not yet comparable
+to the breadth, reliability, or polish of KineMaster, VN, CapCut, or similar
+mature editors.
+
+The core local editing path is substantially implemented. The largest open
+work is now advanced feature parity, real AI/online services, complete QA,
+release signing, Play Store preparation, and low-end device validation.
+
+ROUGH WORK ESTIMATE
+-------------------
+These are engineering estimates, not guarantees:
+
+1. Credible local production v1:
+   Approximately 4-8 engineer-weeks, assuming one experienced Android
+   engineer plus focused QA. This includes closing release blockers, running
+   the full device/export matrix, fixing discovered issues, accessibility,
+   dependency/security review, and producing a signed release AAB.
+
+2. All currently listed advanced and online features:
+   Approximately 6-12+ engineer-months for a small experienced team. The
+   actual time depends heavily on the selected speech/AI models, backend,
+   billing requirements, device support, and quality bar.
+
+3. Broad KineMaster/VN-level parity:
+   A multi-person, ongoing product effort rather than a small remaining patch.
+   Mature competitors have years of renderer, device, template, audio, AI,
+   cloud, and usability work. Exact parity should not be treated as a finite
+   one-sprint target.
+
+WHAT IS ALREADY IMPLEMENTED
+----------------------------
+The current branch contains implementation for the following local workflow
+and capabilities:
+
+- Android system media selection and local, account-free projects.
+- Multi-clip projects, trim, split, reorder, still-image duration, crop,
+  rotate, flip, clip positioning, and transform/crop keyframes.
+- Constant speed and sampled speed-curve automation with pitch-preserving
+  export segments.
+- Shared timeline/render-graph and capability gating to prevent known
+  preview/export mismatches.
+- Text, captions, stickers, drawings, frames, image overlays, GIF overlays,
+  and video overlays.
+- Supported overlay animation, overlay position/scale/rotation/opacity
+  keyframes, chroma key, circle/rectangle/heart/star masks, and saved overlay
+  blend modes.
+- A set of exportable filters, adjustments, deterministic effects, and GLES
+  distortion effects.
+- Crossfade, slide, push, zoom, spin, flip, photo wipe, and fade-to-color
+  transitions for supported source combinations, with bounded duration and
+  easing.
+- Local music and microphone voiceover, volume/fade automation, selected EQ,
+  pitch, delay, reverb, and distortion processors.
+- Local templates, project persistence/recovery, storage-safety behavior, and
+  foreground sequential batch export.
+- Performance modes, playback cadence limits, visible thumbnail windows, and
+  preview decode/cache budgets.
+- Export capability status shown in the UI and unsupported project settings
+  blocked before export instead of reporting false success.
+
+IMPORTANT VALIDATION LIMIT
+---------------------------
+The latest speed-curve and mask/blend/push-transition implementation has
+passed the debug Kotlin compilation and debug APK assembly. The corresponding
+unit/device export regressions were intentionally not run yet. Therefore the
+latest renderer changes are implemented but not fully device-verified.
+
+REMAINING WORK - PRIORITY 0: RELEASE BLOCKERS
+----------------------------------------------
+These must be completed before calling the app production-ready:
+
+[OPEN] 1. Run current automated tests after the latest renderer changes.
+      Re-run unit tests and connected Android tests; fix any regressions.
+
+[OPEN] 2. Run real export QA on physical/emulated devices.
+      Verify source video, photo, GIF, and video overlays at multiple
+      timestamps. Verify every mask, blend mode, push transition, speed curve,
+      keyframe, audio processor, and failure path. Confirm output duration,
+      frame order, audio sync, playable MP4, and MediaStore publication.
+
+[OPEN] 3. Complete the device/performance matrix.
+      Test Android 7/8 through API 36, at least one 4 GB device, a 6/8 GB
+      mid-range device, and a flagship. Measure launch time, memory, frame
+      time, scrolling, long timelines, multiple overlays, and long exports.
+      Fix OOM, ANR, thermal, and encoder compatibility issues.
+
+[OPEN] 4. Build and verify the signed release artifact.
+      Configure an owner-supplied upload keystore outside the repository,
+      build a minified/R8 release, generate a signed AAB, install it, and
+      verify that no secrets or debug-only behavior are shipped.
+
+[OPEN] 5. Complete real-user workflow QA.
+      Test import, edit, save, close, reopen, relink/missing media, export,
+      share, cancel, retry, delete project, microphone denial, storage full,
+      corrupt media, theme changes, deep links, shortcuts, and batch export.
+
+[OPEN] 6. Complete accessibility and UX QA.
+      Verify TalkBack labels, minimum touch targets, dark/light contrast,
+      selected states, 1.0x-2.0x font scaling, keyboard/back behavior, loading
+      states, and actionable error messages.
+
+[OPEN] 7. Finish privacy, dependency, security, and Play checks.
+      Reconcile the manifest, privacy policy, Data Safety form, SDK behavior,
+      network endpoints, logging, permissions, dependency vulnerabilities,
+      store assets, content rating, and Play pre-launch report.
+
+REMAINING WORK - PRIORITY 1: EDITOR/RENDERER FEATURES
+-------------------------------------------------------
+
+[OPEN] 1. Partial-duration visual effects.
+      Effects currently have a safe limitation around sub-range timing. Make
+      every supported effect start and stop at the exact requested timeline
+      range in both preview and export, or keep the control disabled.
+
+[OPEN] 2. Additional visual effects.
+      Implement and validate oil-paint and other currently unimplemented
+      effects with deterministic, exportable renderers. Do not expose a
+      preview-only effect as export-ready.
+
+[OPEN] 3. Advanced text and sticker parity.
+      Implement export-parity for slide, typewriter, blur/glitch/bounce and
+      other currently preview-only text/sticker animations. Add full overlay
+      border/shadow behavior and real 3D-text depth if those controls remain
+      in the product.
+
+[OPEN] 4. Advanced transition support.
+      Extend transition timing and compositor coverage to speed-curved clips,
+      more complex edited-source combinations, masks/overlap timing, and any
+      transition whose preview and export frame windows still differ. Keep
+      unsupported combinations gated until verified.
+
+[OPEN] 5. Advanced clip automation.
+      Finish any remaining clip keyframe semantics that are not covered by the
+      current position, scale, rotation, crop, and volume implementation.
+
+REMAINING WORK - PRIORITY 1: ADVANCED AUDIO
+--------------------------------------------
+
+[IMPLEMENTED / DEVICE QA OPEN] 1. Audio looping in export.
+      Trimmed local audio can now repeat from its selected source window until
+      the video timeline ends. Preview follows the same loop behavior, export
+      creates bounded repeated Media3 items (including a final partial cycle),
+      and pathological sub-millisecond/very-short loops are gated by a segment
+      count limit. JVM regressions and debug assembly pass; the new device MP4
+      regression still needs to be run on an emulator/physical device.
+[OPEN] 2. Audio ducking against voiceover or other priority tracks.
+[OPEN] 3. Audio crossfade between tracks/clips.
+[OPEN] 4. Noise reduction and wind-noise reduction with real processors.
+[OPEN] 5. Voice effects/voice changer with real audio processing.
+[OPEN] 6. Audio-speed automation with correct timing and pitch behavior.
+[IMPLEMENTED / DEVICE QA OPEN] 7. Measured waveform rendering from decoded audio.
+      Local audio/video sources are decoded through MediaExtractor/MediaCodec
+      into bounded peak envelopes, cached in memory and on disk, and reused for
+      trims/zoom changes without re-decoding. Timeline rendering preserves peaks
+      while zoomed out, aligns constant/curved-speed source audio, repeats looped
+      audio waveforms through project end, and cancels extraction when the
+      composable leaves composition. JVM extraction/resampling/cache regressions
+      pass and the Android test APK builds; the real device WAV extraction/cache
+      regression still needs to run on an emulator/physical device.
+
+Each processor needs preview/export parity, cancellation behavior, memory
+limits, and device verification. A UI toggle or metadata-only setting is not
+enough to call an audio feature complete.
+
+REMAINING WORK - PRIORITY 2: CAPTIONS, TTS, AND AI
+--------------------------------------------------
+
+[OPEN] 1. Automatic captions/transcription.
+      Choose a real on-device ASR model or a consented cloud service. Extract
+      audio, transcribe real speech, produce timestamped editable segments,
+      support progress/cancellation/language handling, and optionally export
+      SRT/burned captions.
+
+[OPEN] 2. Text-to-speech.
+      Integrate Android TextToSpeech or another real engine, support voice,
+      language, rate, and pitch selection, save generated audio, attach it to
+      the project, and clean temporary files safely.
+
+[OPEN] 3. AI editing features.
+      Each feature must be either genuinely implemented or hidden: silence
+      detection, scene detection, smart reframe/tracking, background removal,
+      object removal, auto-enhance, vocal separation, noise reduction, AI
+      music, and highlight generation. Models, licenses, privacy, offline
+      behavior, progress, cancellation, and low-end performance all need
+      decisions before shipping.
+
+REMAINING WORK - PRIORITY 2: ONLINE PRODUCT FEATURES
+-----------------------------------------------------
+
+[OPEN] 1. Cloud accounts and authentication.
+      Add a real identity provider, secure sessions, account recovery, and
+      correct sign-out/delete behavior, or keep the app explicitly local-only.
+
+[OPEN] 2. Cloud sync and remote backup.
+      Add a real backend, upload/download conflict handling, encryption,
+      retention/deletion rules, offline behavior, and accurate privacy copy.
+
+[OPEN] 3. Remote templates and template delivery.
+      Add real catalog APIs/storage, versioning, media licensing, caching,
+      moderation, and failure/offline states.
+
+[OPEN] 4. Billing and account-based entitlements.
+      Configure real Play products, query localized ProductDetails, process
+      pending/acknowledged/restored purchases, verify entitlements, handle
+      grace/account-hold states, and never unlock Pro from local preferences.
+
+[OPEN] 5. Background batch export.
+      Move batch jobs to durable background work with progress, retry,
+      resumability, cancellation, notifications, storage limits, and recovery
+      after process death. The current foreground sequential batch path is not
+      the same feature.
+
+REMAINING WORK - PRIORITY 3: ENGINEERING QUALITY
+-------------------------------------------------
+
+[OPEN] 1. Complete editor-state decomposition.
+      Continue moving the large EditorScreen into focused route, ViewModel,
+      preview, timeline, tracks, panels, and renderer components. Reduce local
+      mutable state and make ownership/test boundaries clear.
+
+[OPEN] 2. Finish performance hardening.
+      Profile populated projects on real low/mid-range devices, reduce player
+      and bitmap pressure, tune export memory, and fix frame-time/OOM issues
+      found by measurement.
+
+[OPEN] 3. Storage and project-file audit.
+      Verify cache/project/voiceover/temp/thumbnail accounting, orphan cleanup,
+      export cleanup, migration recovery, and safe deletion of app-owned files
+      without touching original gallery media.
+
+[OPEN] 4. Test-suite expansion.
+      Add critical timeline, migration, repository, URI, export-model, data
+      deletion, billing-entitlement, accessibility, and end-to-end tests. The
+      latest speed/mask/blend/transition changes still need their planned test
+      coverage.
+
+[OPEN] 5. Dependency and identity cleanup.
+      Remove unused services/libraries, scan vulnerabilities, update Media3 and
+      other dependencies cautiously, and isolate the eventual namespace/package
+      migration from functional changes.
+
+CURRENT CAPABILITY SUMMARY
+---------------------------
+Export-ready today (implementation status):
+- Core local editing and MP4 export.
+- Selected text/sticker/drawing/frame/overlay rendering.
+- Selected visual effects and distortion effects.
+- Shape masks, blend modes, overlay slide animation, and push transitions.
+- Selected audio tracks/processors and volume automation.
+
+Coming later or still gated:
+- Noise reduction, voice changer, ducking, and audio crossfade.
+- Partial-duration legacy effects and some advanced visual effects.
+- Advanced text/sticker animation, 3D text, border/shadow parity.
+- Transitions on speed-curved clips and any unsupported source combination.
+- Automatic captions, TTS, AI editing, cloud/accounts, billing, and remote
+  templates.
+- Durable background batch export with retries/resume.
+
+FINAL RELEASE DECISION
+----------------------
+Do not label the current app production-ready yet. A debug build passing is
+only a compilation/package signal. The latest renderer changes still need
+device export verification, and the signed release, accessibility, security,
+Play Store, and full real-user QA gates remain open.
+
+Recommended launch strategy:
+1. Ship a narrow, honest, account-free local v1 after Priority 0 is closed.
+2. Keep AI, cloud, billing, unsupported effects, and advanced audio visibly
+   disabled or accurately labelled until their real implementations exist.
+3. Add advanced features one at a time with preview/export parity and device
+   regressions before exposing them to production users.

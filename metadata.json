@@ -1,0 +1,6 @@
+{
+  "name": "Clipp",
+  "description": "Private local video editor with verified MP4 export",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
