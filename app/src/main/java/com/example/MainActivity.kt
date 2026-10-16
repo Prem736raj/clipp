@@ -90,7 +90,9 @@ class MainActivity : ComponentActivity() {
     // The native splash API is used to ensure a seamless cold-start background.
     splashScreen.setKeepOnScreenCondition { false }
     
-    var sharedVideoUri: String? = null
+    val incomingLaunch = IncomingLaunchParser.parse(intent)
+    val sharedMediaUris = incomingLaunch.mediaUris
+    val incomingIntentFlags = intent?.flags ?: 0
     val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
     Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
         val prefs = getSharedPreferences("clipp_crash_prefs", android.content.Context.MODE_PRIVATE)
@@ -106,50 +108,7 @@ class MainActivity : ComponentActivity() {
         defaultHandler?.uncaughtException(thread, throwable)
     }
 
-    var shortcutAction: String? = null
-    if (intent?.action == android.content.Intent.ACTION_SEND) {
-        if (intent.type?.startsWith("video/") == true || intent.type?.startsWith("image/") == true) {
-            val uri = intent.getParcelableExtra<android.net.Uri>(android.content.Intent.EXTRA_STREAM)
-            if (uri != null) {
-                sharedVideoUri = uri.toString()
-            }
-        }
-    } else if (intent?.action == android.content.Intent.ACTION_SEND_MULTIPLE) {
-        if (intent.type?.startsWith("video/") == true || intent.type?.startsWith("image/") == true) {
-            val uris = intent.getParcelableArrayListExtra<android.net.Uri>(android.content.Intent.EXTRA_STREAM)
-            if (!uris.isNullOrEmpty()) {
-                sharedVideoUri = uris[0].toString()
-            }
-        }
-    } else if (intent?.action == android.content.Intent.ACTION_VIEW) {
-        // Handle both shortcuts and open-with
-        if (intent.dataString?.startsWith("clipp://shortcut/") == true) {
-             shortcutAction = intent.dataString?.removePrefix("clipp://shortcut/")
-        } else if (intent.data?.scheme == "clipp") {
-             val routeHost = intent.data?.host
-             val routeValue = intent.data?.pathSegments?.firstOrNull()
-             shortcutAction = when (routeHost) {
-                 "project" -> routeValue?.let { "open_$it" }
-                 "new" -> "new_project"
-                 "quick-edit" -> "quick_trim"
-                 else -> null
-             }
-        } else if (intent.type?.startsWith("video/") == true || intent.type?.startsWith("image/") == true || intent.dataString?.endsWith(".mp4") == true) {
-             sharedVideoUri = intent.dataString
-        }
-    }
-
-    // Shared/opened content grants are often temporary. Keep a persistable
-    // grant when the provider supports it; non-persistable providers simply
-    // continue through the normal error state in the editor.
-    sharedVideoUri?.let { value ->
-        runCatching {
-            contentResolver.takePersistableUriPermission(
-                android.net.Uri.parse(value),
-                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
-        }
-    }
+    val shortcutAction = incomingLaunch.shortcutAction
     
     setContent {
       val isFromCrash = intent.getBooleanExtra("from_crash", false)
@@ -166,7 +125,7 @@ class MainActivity : ComponentActivity() {
              )
           }
       } else {
-          ClippApp(sharedVideoUri, shortcutAction)
+          ClippApp(sharedMediaUris, shortcutAction, incomingIntentFlags)
       }
     }
   }
@@ -190,7 +149,11 @@ val items = listOf(
 )
 
 @Composable
-fun ClippApp(sharedVideoUri: String? = null, shortcutAction: String? = null) {
+fun ClippApp(
+  sharedMediaUris: List<String> = emptyList(),
+  shortcutAction: String? = null,
+  incomingIntentFlags: Int = 0
+) {
   val context = androidx.compose.ui.platform.LocalContext.current
   val sharedPrefs = remember { context.getSharedPreferences("clipp_prefs", android.content.Context.MODE_PRIVATE) }
   val hasCompletedOnboarding = remember { sharedPrefs.getBoolean("has_completed_onboarding", false) }
@@ -207,7 +170,11 @@ fun ClippApp(sharedVideoUri: String? = null, shortcutAction: String? = null) {
   val currentDestination = navBackStackEntry?.destination?.route
   val projectViewModel: ProjectViewModel = viewModel()
   
-  var showShareIntentDialog by remember { mutableStateOf(sharedVideoUri != null) }
+  val launchScope = rememberCoroutineScope()
+  val primarySharedMediaUri = sharedMediaUris.firstOrNull()
+  var showShareIntentDialog by remember { mutableStateOf(sharedMediaUris.isNotEmpty()) }
+  var isPreparingSharedProject by remember { mutableStateOf(false) }
+  var sharedProjectError by remember { mutableStateOf<String?>(null) }
   var handledShortcutAction by remember { mutableStateOf<String?>(null) }
 
   MyApplicationTheme(darkTheme = darkTheme) {
@@ -461,33 +428,74 @@ fun ClippApp(sharedVideoUri: String? = null, shortcutAction: String? = null) {
   }
 
   // Share Intent Dialog
-  if (showShareIntentDialog && sharedVideoUri != null) {
+  if (showShareIntentDialog && primarySharedMediaUri != null) {
       AlertDialog(
-          onDismissRequest = { showShareIntentDialog = false },
+          onDismissRequest = {
+              if (!isPreparingSharedProject) showShareIntentDialog = false
+          },
           title = { Text("Open Shared Media") },
-          text = { Text("How would you like to edit this media with Clipp?") },
+          text = {
+              Column {
+                  Text(
+                      if (sharedMediaUris.size == 1) {
+                          "How would you like to edit this media with Clipp?"
+                      } else {
+                          "${sharedMediaUris.size} items were shared. Quick Edit opens the first item; Full Project imports all of them."
+                      }
+                  )
+                  if (isPreparingSharedProject) {
+                      Spacer(Modifier.height(8.dp))
+                      Text("Importing media safely…")
+                  }
+                  sharedProjectError?.let { message ->
+                      Spacer(Modifier.height(8.dp))
+                      Text(message, color = MaterialTheme.colorScheme.error)
+                  }
+              }
+          },
           confirmButton = {
-              TextButton(onClick = {
+              TextButton(
+                enabled = !isPreparingSharedProject,
+                onClick = {
                   showShareIntentDialog = false
-                  navController.navigate("quick_edit?uri=${android.net.Uri.encode(sharedVideoUri)}")
-              }) {
-                  Text("Quick Edit")
+                  navController.navigate("quick_edit?uri=${android.net.Uri.encode(primarySharedMediaUri)}")
+                }
+              ) {
+                  Text(if (sharedMediaUris.size > 1) "Quick Edit First" else "Quick Edit")
               }
           },
           dismissButton = {
-              TextButton(onClick = {
-                  showShareIntentDialog = false
-                  // Create a new full project and import
-                  val projectId = java.util.UUID.randomUUID().toString()
-                  val newProject = com.example.data.ProjectEntity(
-                      id = projectId,
-                      name = "Shared Project",
-                      duration = "00:00",
-                      sourceMediaPaths = listOf(sharedVideoUri)
-                  )
-                  projectViewModel.addProject(newProject)
-                  navController.navigate("editor/$projectId")
-              }) {
+              TextButton(
+                enabled = !isPreparingSharedProject,
+                onClick = {
+                  sharedProjectError = null
+                  isPreparingSharedProject = true
+                  launchScope.launch {
+                      val durableResult = IncomingMediaStore.makeProjectMediaDurable(
+                          context = context,
+                          uriStrings = sharedMediaUris,
+                          incomingIntentFlags = incomingIntentFlags
+                      )
+                      durableResult.onSuccess { durableUris ->
+                          val projectId = java.util.UUID.randomUUID().toString()
+                          val newProject = com.example.data.ProjectEntity(
+                              id = projectId,
+                              name = "Shared Project",
+                              duration = "00:00",
+                              sourceMediaPaths = durableUris
+                          )
+                          projectViewModel.addProject(newProject) {
+                              isPreparingSharedProject = false
+                              showShareIntentDialog = false
+                              navController.navigate("editor/$projectId")
+                          }
+                      }.onFailure {
+                          isPreparingSharedProject = false
+                          sharedProjectError = "Clipp could not safely import the shared media. Please choose the file from inside Clipp."
+                      }
+                  }
+                }
+              ) {
                   Text("Full Project")
               }
           }

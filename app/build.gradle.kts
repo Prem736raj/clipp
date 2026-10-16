@@ -21,9 +21,13 @@ if (clippReleaseTasksRequested) {
       "Release builds require environment-supplied signing variables: ${missingSigningVariables.joinToString()}."
     )
   }
-  val configuredKeystore = file(System.getenv("KEYSTORE_PATH"))
+  val configuredKeystore = file(System.getenv("KEYSTORE_PATH")).canonicalFile
   if (!configuredKeystore.isFile) {
     throw GradleException("KEYSTORE_PATH must point to an existing upload keystore outside the repository.")
+  }
+  val repositoryRoot = rootProject.projectDir.canonicalFile.toPath()
+  if (configuredKeystore.toPath().startsWith(repositoryRoot)) {
+    throw GradleException("KEYSTORE_PATH must point to an upload keystore outside the repository.")
   }
 }
 

@@ -487,8 +487,12 @@ class VideoExporter(context: Context) {
                 file.inputStream().use { source -> source.copyTo(destination) }
             } ?: error("Could not open MediaStore output")
             val ready = ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }
-            appContext.contentResolver.update(uri, ready, null, null)
-            uri to file.length()
+            check(appContext.contentResolver.update(uri, ready, null, null) == 1) {
+                "Could not finalize MediaStore export"
+            }
+            val publishedSize = readPublishedSize(uri)
+            check(publishedSize > 0L) { "Published export is empty" }
+            uri to publishedSize
         }.getOrElse {
             appContext.contentResolver.delete(uri, null, null)
             null
@@ -504,6 +508,7 @@ class VideoExporter(context: Context) {
         val destination = File(directory, name)
         return runCatching {
             file.copyTo(destination, overwrite = true)
+            check(destination.length() > 0L) { "Published export is empty" }
             publishedAppFile = destination
             FileProvider.getUriForFile(
                 appContext,
@@ -523,6 +528,20 @@ class VideoExporter(context: Context) {
             retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
                 ?.toLongOrNull() ?: 0L
         }.getOrDefault(0L).also { runCatching { retriever.release() } }
+    }
+
+    private fun readPublishedSize(uri: Uri): Long {
+        return runCatching {
+            appContext.contentResolver.query(
+                uri,
+                arrayOf(MediaStore.MediaColumns.SIZE),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else 0L
+            } ?: 0L
+        }.getOrDefault(0L)
     }
 
     private fun deletePublished(published: Triple<Uri, Long, Long>) {

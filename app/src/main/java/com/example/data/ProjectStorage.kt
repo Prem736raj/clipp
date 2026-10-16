@@ -7,8 +7,8 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * Calculates and cleans only files owned by Clipp. Source gallery URIs are
- * never treated as deletable project files.
+ * Calculates and cleans only files owned by Clipp. External gallery URIs are
+ * never treated as deletable project files; app-owned import copies are.
  */
 object ProjectStorage {
     fun normalize(context: Context, project: ProjectEntity): ProjectEntity {
@@ -58,6 +58,7 @@ object ProjectStorage {
     fun deleteAllOwnedFiles(context: Context) {
         listOf(
             File(context.filesDir, "voiceovers"),
+            File(context.filesDir, "imports"),
             File(context.filesDir, "projects"),
             File(context.filesDir, "thumbnails"),
             File(context.filesDir, "proxies"),
@@ -70,6 +71,9 @@ object ProjectStorage {
     private fun ownedFiles(context: Context, project: ProjectEntity): Set<File> {
         return buildSet {
             ownedFile(context, project.thumbnailUri)?.let(::add)
+            project.sourceMediaPaths.forEach { path ->
+                ownedFile(context, path)?.let(::add)
+            }
             collectOwnedHistoryFiles(context, project.historyState, this)
         }
     }

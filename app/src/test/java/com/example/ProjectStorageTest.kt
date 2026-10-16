@@ -80,4 +80,30 @@ class ProjectStorageTest {
         assertTrue(source.exists())
         source.delete()
     }
+
+    @Test
+    fun deletesOwnedImportedSourceButNeverExternalSource() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val imported = File(context.filesDir, "imports/project-import.mp4").apply {
+            parentFile?.mkdirs()
+            writeBytes(byteArrayOf(1, 2, 3, 4))
+        }
+        val external = File.createTempFile("clipp-external-", ".mp4").apply {
+            writeBytes(byteArrayOf(5, 6, 7, 8))
+        }
+        val project = ProjectEntity(
+            name = "Imported source cleanup",
+            duration = "00:01",
+            sourceMediaPaths = listOf(
+                Uri.fromFile(imported).toString(),
+                Uri.fromFile(external).toString()
+            )
+        )
+
+        ProjectStorage.deleteOwnedFiles(context, project)
+
+        assertFalse(imported.exists())
+        assertTrue(external.exists())
+        external.delete()
+    }
 }
