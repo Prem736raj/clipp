@@ -661,7 +661,7 @@ private fun AppliedEffect.remappedForSpeedSegment(
     val effectEndMs = if (endTimeMs == -1L) segmentEndMs else endTimeMs
     val overlapStartMs = maxOf(startTimeMs, segmentStartMs)
     val overlapEndMs = minOf(effectEndMs, segmentEndMs)
-    if (overlapEndMs < overlapStartMs) return null
+    if (overlapEndMs <= overlapStartMs) return null
     val sourceSpanMs = (segmentEndMs - segmentStartMs).coerceAtLeast(1L)
     fun localTime(timeMs: Long): Long = (
         (timeMs - segmentStartMs).toDouble() / sourceSpanMs.toDouble() * segmentDurationMs

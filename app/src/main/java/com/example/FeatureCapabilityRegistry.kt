@@ -57,14 +57,10 @@ internal object FeatureCapabilityRegistry {
         EffectType.BOKEH
     ) + EXPORT_SHADER_EFFECTS
 
-    internal val exportTimedOverlayEffects = setOf(
-        EffectType.FILM_GRAIN,
-        EffectType.ANAMORPHIC_FLARE,
-        EffectType.SPARKLE,
-        EffectType.LIGHT_LEAK,
-        EffectType.LENS_FLARE,
-        EffectType.BOKEH
-    ) + EXPORT_SHADER_EFFECTS
+    // Every effect advertised as export-ready supports a bounded clip-local
+    // start/end window. Keep this derived from the capability set so a newly
+    // exportable effect cannot silently fall back to full-clip timing.
+    internal val exportTimedEffects = exportSupportedEffects
 
     internal val exportVideoTransitions = setOf(
         TransitionType.CROSSFADE,

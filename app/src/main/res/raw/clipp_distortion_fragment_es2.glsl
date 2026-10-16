@@ -113,6 +113,23 @@ void main() {
     vec4 blue = sampleFrame(uv - vec2(0.012 * intensity, 0.0));
     vec3 neon = vec3(red.r, base.g, blue.b) * 1.25;
     color = vec4(mix(base.rgb, neon, 0.75 * intensity), base.a);
+  } else if (uMode == 14) {
+    float radius = mix(0.0015, 0.012, intensity);
+    vec4 sum = base * 4.0;
+    sum += sampleFrame(uv + vec2(radius, 0.0)) * 2.0;
+    sum += sampleFrame(uv - vec2(radius, 0.0)) * 2.0;
+    sum += sampleFrame(uv + vec2(0.0, radius)) * 2.0;
+    sum += sampleFrame(uv - vec2(0.0, radius)) * 2.0;
+    sum += sampleFrame(uv + vec2(radius, radius));
+    sum += sampleFrame(uv + vec2(radius, -radius));
+    sum += sampleFrame(uv + vec2(-radius, radius));
+    sum += sampleFrame(uv - vec2(radius, radius));
+    color = sum / 16.0;
+  } else if (uMode == 15) {
+    float barHeight = 0.15 * intensity;
+    if (uv.y < barHeight || uv.y > 1.0 - barHeight) {
+      color = vec4(0.0, 0.0, 0.0, base.a);
+    }
   }
 
   gl_FragColor = vec4(clamp(color.rgb, 0.0, 1.0), color.a);

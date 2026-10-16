@@ -67,7 +67,7 @@ fun Modifier.applyAllVisualEffects(effects: List<AppliedEffect>, timeMs: Long, c
     for (eff in effects) {
         val start = eff.startTimeMs
         val end = if (eff.endTimeMs == -1L) clipDurationMs else eff.endTimeMs
-        if (timeMs in start..end) {
+        if (timeMs >= start && timeMs < end) {
             mod = mod.applyVisualEffectModifier(eff, timeMs)
         }
     }

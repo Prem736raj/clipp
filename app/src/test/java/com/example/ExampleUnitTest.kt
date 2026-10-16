@@ -414,10 +414,16 @@ class ExampleUnitTest {
       effects = listOf(AppliedEffect(type = EffectType.LIGHT_LEAK, startTimeMs = 100L, endTimeMs = 700L))
     )
     assertFalse(EditorState(clips = listOf(partialProceduralEffect)).hasUnsupportedExportEdits())
-    val partialEffect = clip.copy(
-      effects = listOf(AppliedEffect(type = EffectType.MIRROR, startTimeMs = 100L))
+    FeatureCapabilityRegistry.exportSupportedEffects.forEach { type ->
+      val partialEffect = clip.copy(
+        effects = listOf(AppliedEffect(type = type, startTimeMs = 100L, endTimeMs = 700L))
+      )
+      assertFalse("Expected partial-duration $type to be exportable", EditorState(clips = listOf(partialEffect)).hasUnsupportedExportEdits())
+    }
+    val zeroLengthEffect = clip.copy(
+      effects = listOf(AppliedEffect(type = EffectType.MIRROR, startTimeMs = 500L, endTimeMs = 500L))
     )
-    assertTrue(EditorState(clips = listOf(partialEffect)).hasUnsupportedExportEdits())
+    assertTrue(EditorState(clips = listOf(zeroLengthEffect)).hasUnsupportedExportEdits())
     val blockedEffect = clip.copy(effects = listOf(AppliedEffect(type = EffectType.OIL_PAINTING)))
     assertTrue(EditorState(clips = listOf(blockedEffect)).hasUnsupportedExportEdits())
   }

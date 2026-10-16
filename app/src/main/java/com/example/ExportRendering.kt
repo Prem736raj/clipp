@@ -23,7 +23,6 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.media3.common.Effect
 import androidx.media3.effect.BitmapOverlay
 import androidx.media3.effect.Crop
-import androidx.media3.effect.GaussianBlur
 import androidx.media3.effect.MatrixTransformation
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.OverlaySettings
@@ -44,7 +43,7 @@ private val EXPORT_SUPPORTED_CLIP_KEYFRAMES = FeatureCapabilityRegistry.exportSu
 private val EXPORT_SUPPORTED_OVERLAY_KEYFRAMES = FeatureCapabilityRegistry.exportSupportedOverlayKeyframes
 internal val EXPORT_SUPPORTED_AUDIO_KEYFRAMES = FeatureCapabilityRegistry.exportSupportedAudioKeyframes
 private val EXPORT_SUPPORTED_EFFECTS = FeatureCapabilityRegistry.exportSupportedEffects
-private val EXPORT_TIMED_OVERLAY_EFFECTS = FeatureCapabilityRegistry.exportTimedOverlayEffects
+private val EXPORT_TIMED_EFFECTS = FeatureCapabilityRegistry.exportTimedEffects
 private val EXPORT_VIDEO_TRANSITIONS = FeatureCapabilityRegistry.exportVideoTransitions
 private val EXPORT_PHOTO_TRANSITIONS = FeatureCapabilityRegistry.exportPhotoTransitions
 private val EXPORT_SUPPORTED_TEXT_ANIM_IN = FeatureCapabilityRegistry.exportSupportedTextAnimIn
@@ -646,8 +645,31 @@ private class ProceduralEffectBitmapOverlay(
     }
 }
 
-private class ExportRgbMatrix(private val matrix: FloatArray) : RgbMatrix {
-    override fun getMatrix(presentationTimeUs: Long, useHdr: Boolean): FloatArray = matrix.copyOf()
+private class ExportRgbMatrix(
+    private val matrix: FloatArray,
+    startTimeMs: Long = 0L,
+    endTimeMs: Long = Long.MAX_VALUE
+) : RgbMatrix {
+    private val startTimeMs = startTimeMs.coerceAtLeast(0L)
+    private val endTimeMs = endTimeMs.coerceAtLeast(this.startTimeMs + 1L)
+
+    override fun getMatrix(presentationTimeUs: Long, useHdr: Boolean): FloatArray {
+        val timeMs = presentationTimeUs / 1_000L
+        return if (timeMs >= startTimeMs && timeMs < endTimeMs) {
+            matrix.copyOf()
+        } else {
+            IDENTITY_RGB_MATRIX.copyOf()
+        }
+    }
+
+    private companion object {
+        val IDENTITY_RGB_MATRIX = floatArrayOf(
+            1f, 0f, 0f, 0f,
+            0f, 1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 0f, 0f, 1f
+        )
+    }
 }
 
 /** Moves the outgoing frame while the incoming transition source enters. */
@@ -729,10 +751,34 @@ private class KeyframedClipTransformation(
     }
 }
 
-private class ShakeTransformation(
-    private val intensity: Float
+private class TimedMirrorTransformation(
+    startTimeMs: Long,
+    endTimeMs: Long
 ) : MatrixTransformation {
+    private val startTimeMs = startTimeMs.coerceAtLeast(0L)
+    private val endTimeMs = endTimeMs.coerceAtLeast(this.startTimeMs + 1L)
+
     override fun getMatrix(presentationTimeUs: Long): Matrix {
+        val timeMs = presentationTimeUs / 1_000L
+        return Matrix().apply {
+            if (timeMs >= startTimeMs && timeMs < endTimeMs) {
+                postScale(-1f, 1f)
+            }
+        }
+    }
+}
+
+private class ShakeTransformation(
+    private val intensity: Float,
+    startTimeMs: Long,
+    endTimeMs: Long
+) : MatrixTransformation {
+    private val startTimeMs = startTimeMs.coerceAtLeast(0L)
+    private val endTimeMs = endTimeMs.coerceAtLeast(this.startTimeMs + 1L)
+
+    override fun getMatrix(presentationTimeUs: Long): Matrix {
+        val timeMs = presentationTimeUs / 1_000L
+        if (timeMs < startTimeMs || timeMs >= endTimeMs) return Matrix()
         val timeSeconds = presentationTimeUs / 1_000_000f
         val amplitude = 0.025f * intensity.coerceIn(0f, 1f)
         return Matrix().apply {
@@ -1043,17 +1089,6 @@ private fun renderSolidBitmap(color: Int): Bitmap {
     return Bitmap.createBitmap(1024, 1024, Bitmap.Config.ARGB_8888).also { bitmap ->
         Canvas(bitmap).drawColor(color)
     }
-}
-
-private fun renderLetterboxBitmap(intensity: Float): Bitmap {
-    val size = 1024
-    val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-    val canvas = Canvas(bitmap)
-    val barHeight = size * 0.15f * intensity.coerceIn(0f, 1f)
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.BLACK }
-    canvas.drawRect(0f, 0f, size.toFloat(), barHeight, paint)
-    canvas.drawRect(0f, size - barHeight, size.toFloat(), size.toFloat(), paint)
-    return bitmap
 }
 
 private fun loadBitmap(context: Context, uri: String): Bitmap? {
@@ -1690,14 +1725,6 @@ internal fun buildExportOverlays(
         }
     }
 
-    clip.effects.filter { it.type == EffectType.LETTERBOX }.forEach { effect ->
-        addWindowed(
-            renderLetterboxBitmap(effect.intensity),
-            clipStartMs,
-            clipStartMs + clipDurationMs
-        ) { _ -> overlaySettings(0.5f, 0.5f, 1f, 1f) }
-    }
-
     clip.effects.filter {
         it.type == EffectType.FILM_GRAIN ||
             it.type == EffectType.ANAMORPHIC_FLARE ||
@@ -1824,15 +1851,18 @@ private fun AppliedEffect.isRenderableTransitionEffect(
     allowedEffects: Set<EffectType>,
     clipDurationMs: Long
 ): Boolean {
-    val endMs = if (endTimeMs == -1L) clipDurationMs else endTimeMs
     return type in allowedEffects &&
-        startTimeMs >= 0L &&
-        endTimeMs >= -1L &&
-        endMs >= startTimeMs &&
+        hasValidExportTiming(clipDurationMs) &&
         intensity.isFinite() &&
         intensity in 0f..1f &&
-        (startTimeMs == 0L || type in EXPORT_TIMED_OVERLAY_EFFECTS) &&
-        (endTimeMs == -1L || endTimeMs >= clipDurationMs || type in EXPORT_TIMED_OVERLAY_EFFECTS)
+        (startTimeMs == 0L || type in EXPORT_TIMED_EFFECTS) &&
+        (endTimeMs == -1L || endTimeMs >= clipDurationMs || type in EXPORT_TIMED_EFFECTS)
+}
+
+private fun AppliedEffect.hasValidExportTiming(clipDurationMs: Long): Boolean {
+    if (startTimeMs < 0L || endTimeMs < -1L) return false
+    val resolvedEndMs = if (endTimeMs == -1L) clipDurationMs else endTimeMs
+    return resolvedEndMs > startTimeMs
 }
 
 internal fun buildExportVideoEffects(
@@ -1906,28 +1936,41 @@ internal fun buildExportVideoEffects(
     if (!isIdentity) effects += ExportRgbMatrix(matrix4x4)
 
     clip.effects.forEach { effect ->
+        val effectEndMs = if (effect.endTimeMs == -1L) clipDurationMs else effect.endTimeMs
         when (effect.type) {
             EffectType.GAUSSIAN_BLUR -> {
-                effects += GaussianBlur((24f * effect.intensity.coerceIn(0.05f, 1f)).coerceAtLeast(1f))
-            }
-            EffectType.MIRROR -> {
-                effects += ScaleAndRotateTransformation.Builder()
-                    .setScale(-1f, 1f)
-                    .build()
-            }
-            EffectType.SHAKE -> effects += ShakeTransformation(effect.intensity)
-            EffectType.COMIC_BOOK,
-            EffectType.PENCIL_SKETCH,
-            EffectType.POP_ART -> {
-                buildExportEffectColorMatrix(effect)?.let { effects += ExportRgbMatrix(it) }
-            }
-            in EXPORT_SHADER_EFFECTS -> {
-                val endTimeMs = if (effect.endTimeMs == -1L) clipDurationMs else effect.endTimeMs
                 effects += ShaderDistortionEffect(
                     type = effect.type,
                     intensity = effect.intensity,
                     startTimeMs = effect.startTimeMs,
-                    endTimeMs = endTimeMs
+                    endTimeMs = effectEndMs
+                )
+            }
+            EffectType.MIRROR -> {
+                effects += TimedMirrorTransformation(effect.startTimeMs, effectEndMs)
+            }
+            EffectType.SHAKE -> effects += ShakeTransformation(
+                intensity = effect.intensity,
+                startTimeMs = effect.startTimeMs,
+                endTimeMs = effectEndMs
+            )
+            EffectType.COMIC_BOOK,
+            EffectType.PENCIL_SKETCH,
+            EffectType.POP_ART -> {
+                buildExportEffectColorMatrix(effect)?.let {
+                    effects += ExportRgbMatrix(
+                        matrix = it,
+                        startTimeMs = effect.startTimeMs,
+                        endTimeMs = effectEndMs
+                    )
+                }
+            }
+            in EXPORT_SHADER_EFFECTS -> {
+                effects += ShaderDistortionEffect(
+                    type = effect.type,
+                    intensity = effect.intensity,
+                    startTimeMs = effect.startTimeMs,
+                    endTimeMs = effectEndMs
                 )
             }
             else -> Unit
@@ -1973,10 +2016,9 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
             reasons += "this visual effect"
         }
         if (clip.effects.any {
-                it.startTimeMs < 0L ||
-                    it.endTimeMs < -1L ||
-                    (it.startTimeMs > 0L && it.type !in EXPORT_TIMED_OVERLAY_EFFECTS) ||
-                    (it.endTimeMs != -1L && it.endTimeMs < clip.durationMs && it.type !in EXPORT_TIMED_OVERLAY_EFFECTS) ||
+                !it.hasValidExportTiming(clip.durationMs) ||
+                    (it.startTimeMs > 0L && it.type !in EXPORT_TIMED_EFFECTS) ||
+                    (it.endTimeMs != -1L && it.endTimeMs < clip.durationMs && it.type !in EXPORT_TIMED_EFFECTS) ||
                     !it.intensity.isFinite() ||
                     it.intensity !in 0f..1f
             }) {

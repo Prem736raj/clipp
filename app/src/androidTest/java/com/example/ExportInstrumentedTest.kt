@@ -846,6 +846,48 @@ class ExportInstrumentedTest {
     }
 
     @Test
+    fun partialCoreEffectsRenderOnlyInsideTheirWindows() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val source = File.createTempFile("clipp-export-timed-core-effects-", ".png", context.cacheDir)
+        writeVerticalSplitPng(source, android.graphics.Color.RED, android.graphics.Color.BLUE)
+        val clip = MediaClip(
+            sourceUri = Uri.fromFile(source).toString(),
+            originalDurationMs = 1_400L,
+            trimEndMs = 1_400L,
+            isPhoto = true,
+            effects = listOf(
+                AppliedEffect(
+                    type = EffectType.MIRROR,
+                    intensity = 1f,
+                    startTimeMs = 300L,
+                    endTimeMs = 700L
+                ),
+                AppliedEffect(
+                    type = EffectType.LETTERBOX,
+                    intensity = 1f,
+                    startTimeMs = 700L,
+                    endTimeMs = 1_100L
+                )
+            )
+        )
+        val exporter = VideoExporter(context)
+        var result: Outcome? = null
+        try {
+            result = awaitExport(exporter, listOf(clip), "Clipp_instrumented_timed_core_effects.mp4")
+            assertSuccessful(result!!)
+            assertPublishedMp4(context, result!!)
+            assertFramePixelHasDominantColor(context, result!!, 200_000L, 0.25f, 0.5f, expected = "red")
+            assertFramePixelHasDominantColor(context, result!!, 500_000L, 0.25f, 0.5f, expected = "blue")
+            assertFramePixelHasDominantColor(context, result!!, 850_000L, 0.25f, 0.05f, expected = "black")
+            assertFramePixelHasDominantColor(context, result!!, 1_250_000L, 0.25f, 0.05f, expected = "red")
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            source.delete()
+        }
+    }
+
+    @Test
     fun shaderDistortionEffectsAreRenderedIntoPublishedFrames() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val source = File.createTempFile("clipp-export-shader-effects-", ".png", context.cacheDir)
@@ -1225,6 +1267,42 @@ class ExportInstrumentedTest {
                     "red" -> assertTrue("Expected red frame, got $red/$green/$blue", red > green + 40 && red > blue + 40)
                     "blue" -> assertTrue("Expected blue frame, got $red/$green/$blue", blue > red + 40 && blue > green + 40)
                     "green" -> assertTrue("Expected green frame, got $red/$green/$blue", green > red + 40 && green > blue + 40)
+                    else -> error("Unknown expected color: $expected")
+                }
+            } finally {
+                frame.recycle()
+            }
+        } finally {
+            retriever.release()
+        }
+    }
+
+    private fun assertFramePixelHasDominantColor(
+        context: android.content.Context,
+        result: Outcome,
+        frameTimeUs: Long,
+        xFraction: Float,
+        yFraction: Float,
+        expected: String
+    ) {
+        val retriever = android.media.MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(context, result.uri!!)
+            val frame = retriever.getFrameAtTime(
+                frameTimeUs,
+                android.media.MediaMetadataRetriever.OPTION_CLOSEST
+            ) ?: error("Missing frame at $frameTimeUs")
+            try {
+                val x = (frame.width * xFraction.coerceIn(0f, 1f)).toInt().coerceIn(0, frame.width - 1)
+                val y = (frame.height * yFraction.coerceIn(0f, 1f)).toInt().coerceIn(0, frame.height - 1)
+                val pixel = frame.getPixel(x, y)
+                val red = (pixel ushr 16) and 0xff
+                val green = (pixel ushr 8) and 0xff
+                val blue = pixel and 0xff
+                when (expected) {
+                    "red" -> assertTrue("Expected red pixel, got $red/$green/$blue", red > green + 40 && red > blue + 40)
+                    "blue" -> assertTrue("Expected blue pixel, got $red/$green/$blue", blue > red + 40 && blue > green + 40)
+                    "black" -> assertTrue("Expected black pixel, got $red/$green/$blue", red < 40 && green < 40 && blue < 40)
                     else -> error("Unknown expected color: $expected")
                 }
             } finally {

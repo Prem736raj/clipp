@@ -71,18 +71,18 @@ and capabilities:
 
 IMPORTANT VALIDATION LIMIT
 ---------------------------
-The latest speed-curve and mask/blend/push-transition implementation has
-passed the debug Kotlin compilation and debug APK assembly. The corresponding
-unit/device export regressions were intentionally not run yet. Therefore the
-latest renderer changes are implemented but not fully device-verified.
+The current renderer/export branch has passed the JVM suite and the API 34
+connected Android regression suite, including real MP4 export checks. This is
+emulator evidence only. Physical-device coverage, the broader Android/API,
+GPU/codec matrix, long-export stress, and real-user workflow QA remain open.
 
 REMAINING WORK - PRIORITY 0: RELEASE BLOCKERS
 ----------------------------------------------
 These must be completed before calling the app production-ready:
 
 [CURRENT SUITE PASS / RE-RUN AFTER FUTURE CHANGES] 1. Run current automated tests after the latest renderer changes.
-      On 2026-10-16 the current debug JVM suite passed 56/56 and the API 34
-      connected Android suite passed 23/23 on the audit34 emulator. Re-run both
+      On 2026-10-17 the current debug JVM suite passed 56/56 and the API 34
+      connected Android suite passed 24/24 on the audit34 emulator. Re-run both
       suites after future renderer/export changes and fix any regressions.
 
 [PARTIAL / API 34 EMULATOR PASS] 2. Run real export QA on physical/emulated devices.
@@ -91,9 +91,10 @@ These must be completed before calling the app production-ready:
       keyframe, audio processor, and failure path. Confirm output duration,
       frame order, audio sync, playable MP4, and MediaStore publication. The
       current API 34 emulator suite verifies codec/storage readiness, MediaStore
-      publication, and a real MP4 export containing looped audio plus fade,
-      crossfade, and ducking. Physical-device and broader media-matrix QA remain
-      open.
+      publication, a real MP4 export containing looped audio plus fade,
+      crossfade, and ducking, and a timed visual-effect export that proves
+      normal -> mirror -> letterbox -> normal frame behavior. Physical-device
+      and broader media-matrix QA remain open.
 
 [OPEN] 3. Complete the device/performance matrix.
       Test Android 7/8 through API 36, at least one 4 GB device, a 6/8 GB
@@ -124,10 +125,14 @@ These must be completed before calling the app production-ready:
 REMAINING WORK - PRIORITY 1: EDITOR/RENDERER FEATURES
 -------------------------------------------------------
 
-[OPEN] 1. Partial-duration visual effects.
-      Effects currently have a safe limitation around sub-range timing. Make
-      every supported effect start and stop at the exact requested timeline
-      range in both preview and export, or keep the control disabled.
+[IMPLEMENTED / API 34 EMULATOR PASS] 1. Partial-duration visual effects.
+      Every currently export-supported effect now accepts a positive-length
+      clip-local sub-range and uses the same inclusive-start/exclusive-end
+      boundary in preview and export. Mirror, shake, Gaussian blur, comic-book,
+      pencil-sketch, pop-art, letterbox, procedural overlays, and GLES
+      distortion effects are covered by the updated timing path. Invalid or
+      zero-length ranges remain blocked. Physical-device renderer validation is
+      still part of the Priority 0 device matrix.
 
 [OPEN] 2. Additional visual effects.
       Implement and validate oil-paint and other currently unimplemented
@@ -278,7 +283,7 @@ Export-ready today (implementation status):
 
 Coming later or still gated:
 - Noise reduction, voice changer, and audio-speed automation.
-- Partial-duration legacy effects and some advanced visual effects.
+- Oil-painting and other currently unimplemented advanced visual effects.
 - Advanced text/sticker animation, 3D text, border/shadow parity.
 - Transitions on speed-curved clips and any unsupported source combination.
 - Automatic captions, TTS, AI editing, cloud/accounts, billing, and remote
