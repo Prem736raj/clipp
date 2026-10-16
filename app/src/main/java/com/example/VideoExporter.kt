@@ -162,8 +162,6 @@ class VideoExporter(context: Context) {
         onError: (String) -> Unit
     ): ExportHandle {
         val canceled = AtomicBoolean(false)
-        val outputFile = File(appContext.cacheDir, "export-${UUID.randomUUID()}.mp4")
-        temporaryOutput = outputFile
 
         // Export through the canonical document boundary. The renderer still
         // consumes the legacy payloads today, but all timing/order/shared
@@ -177,6 +175,13 @@ class VideoExporter(context: Context) {
             onError("Export blocked: ${unsupportedReasons.joinToString(", ")}")
             return ExportHandle { canceled.set(true) }
         }
+        val deviceReadiness = inspectExportDeviceReadiness(appContext, canonicalState)
+        deviceReadiness.blockingReason?.let { reason ->
+            onError("Export blocked: $reason")
+            return ExportHandle { canceled.set(true) }
+        }
+        val outputFile = File(appContext.cacheDir, "export-${UUID.randomUUID()}.mp4")
+        temporaryOutput = outputFile
         val exportClips = canonicalState.clips
         val editedItems = mutableListOf<EditedMediaItem>()
         var clipStartMs = 0L
@@ -209,6 +214,11 @@ class VideoExporter(context: Context) {
                     progressJob?.cancel()
                     if (canceled.get()) {
                         cleanupTemporaryOutput()
+                        return
+                    }
+                    publicationStorageBlockingReason(appContext, outputFile.length())?.let { reason ->
+                        cleanupTemporaryOutput()
+                        onError(reason)
                         return
                     }
                     scope.launch {
@@ -246,7 +256,7 @@ class VideoExporter(context: Context) {
                         Log.e("ClippExporter", "Media3 export failed", exportException)
                     }
                     if (!canceled.get()) {
-                        onError("Export failed: ${exportException.getErrorCodeName()}")
+                        onError(userFacingExportFailure(exportException.getErrorCodeName()))
                     }
                 }
             })

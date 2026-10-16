@@ -24,6 +24,29 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class ExportInstrumentedTest {
     @Test
+    fun deviceExportReadinessHasRequiredCodecsAndStorage() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val snapshot = captureExportDeviceSnapshot(context)
+        val state = EditorState(
+            clips = listOf(
+                MediaClip(
+                    sourceUri = "content://clipp/device-readiness",
+                    originalDurationMs = 1_000L,
+                    trimEndMs = 1_000L,
+                    isPhoto = false
+                )
+            )
+        )
+        val readiness = evaluateExportDeviceReadiness(snapshot, state.requiresAudioEncoder())
+
+        assertEquals(true, snapshot.h264EncoderAvailable)
+        assertEquals(true, snapshot.aacEncoderAvailable)
+        assertTrue((snapshot.cacheFreeBytes ?: 0L) >= MIN_EXPORT_START_FREE_BYTES)
+        assertTrue((snapshot.mediaFreeBytes ?: 0L) >= MIN_EXPORT_START_FREE_BYTES)
+        assertNull(readiness.blockingReason)
+    }
+
+    @Test
     fun localPhotoIsRenderedAndPublishedAsValidatedMp4() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val source = File.createTempFile("clipp-export-fixture-", ".png", context.cacheDir)
@@ -1063,7 +1086,21 @@ class ExportInstrumentedTest {
                     startTimeOnTimelineMs = 200L,
                     sourceDurationMs = 400L,
                     trimEndMs = 400L,
-                    isLooped = true
+                    isLooped = true,
+                    autoDucking = true,
+                    audioEffects = AudioEffects(
+                        fadeInMs = 120L,
+                        fadeOutMs = 120L,
+                        crossfadeMs = 100L
+                    )
+                ),
+                AudioClip(
+                    sourceUri = Uri.fromFile(audio).toString(),
+                    displayName = "Foreground",
+                    startTimeOnTimelineMs = 650L,
+                    sourceDurationMs = 400L,
+                    trimEndMs = 400L,
+                    volume = 0.8f
                 )
             )
         )

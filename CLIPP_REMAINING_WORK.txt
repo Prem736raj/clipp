@@ -80,14 +80,20 @@ REMAINING WORK - PRIORITY 0: RELEASE BLOCKERS
 ----------------------------------------------
 These must be completed before calling the app production-ready:
 
-[OPEN] 1. Run current automated tests after the latest renderer changes.
-      Re-run unit tests and connected Android tests; fix any regressions.
+[CURRENT SUITE PASS / RE-RUN AFTER FUTURE CHANGES] 1. Run current automated tests after the latest renderer changes.
+      On 2026-10-16 the current debug JVM suite passed 56/56 and the API 34
+      connected Android suite passed 23/23 on the audit34 emulator. Re-run both
+      suites after future renderer/export changes and fix any regressions.
 
-[OPEN] 2. Run real export QA on physical/emulated devices.
+[PARTIAL / API 34 EMULATOR PASS] 2. Run real export QA on physical/emulated devices.
       Verify source video, photo, GIF, and video overlays at multiple
       timestamps. Verify every mask, blend mode, push transition, speed curve,
       keyframe, audio processor, and failure path. Confirm output duration,
-      frame order, audio sync, playable MP4, and MediaStore publication.
+      frame order, audio sync, playable MP4, and MediaStore publication. The
+      current API 34 emulator suite verifies codec/storage readiness, MediaStore
+      publication, and a real MP4 export containing looped audio plus fade,
+      crossfade, and ducking. Physical-device and broader media-matrix QA remain
+      open.
 
 [OPEN] 3. Complete the device/performance matrix.
       Test Android 7/8 through API 36, at least one 4 GB device, a 6/8 GB
@@ -147,34 +153,38 @@ REMAINING WORK - PRIORITY 1: EDITOR/RENDERER FEATURES
 REMAINING WORK - PRIORITY 1: ADVANCED AUDIO
 --------------------------------------------
 
-[IMPLEMENTED / DEVICE QA OPEN] 1. Audio looping in export.
+[IMPLEMENTED / API 34 EMULATOR PASS] 1. Audio looping in export.
       Trimmed local audio can now repeat from its selected source window until
       the video timeline ends. Preview follows the same loop behavior, export
       creates bounded repeated Media3 items (including a final partial cycle),
       and pathological sub-millisecond/very-short loops are gated by a segment
-      count limit. JVM regressions and debug assembly pass; the new device MP4
-      regression still needs to be run on an emulator/physical device.
-[IMPLEMENTED / DEVICE QA OPEN] 2. Audio ducking against foreground tracks.
+      count limit. JVM regressions pass and the combined loop/fade/crossfade/
+      ducking MP4 export passes on the API 34 audit34 emulator. Physical-device
+      listening/device-matrix QA remains open.
+[IMPLEMENTED / API 34 EMULATOR PASS] 2. Audio ducking against foreground tracks.
       Preview and export share the same bounded ducking windows. Background
       tracks marked for auto-ducking reduce gain under audible primary clip
-      audio and non-ducking foreground audio; JVM regressions pass, while a
-      real-device MP4 listening/export check is still pending.
-[IMPLEMENTED / DEVICE QA OPEN] 3. Audio crossfade between tracks/clips.
+      audio and non-ducking foreground audio; JVM regressions and the combined
+      real MP4 export path pass on the API 34 emulator. Physical-device listening
+      QA remains pending.
+[IMPLEMENTED / API 34 EMULATOR PASS] 3. Audio crossfade between tracks/clips.
       Audio tracks apply bounded edge crossfade envelopes in preview and export.
       Loop-segment export now keeps one whole-track fade timeline so fade-in does
-      not restart at every repeated source segment; device export QA is pending.
+      not restart at every repeated source segment; the combined MP4 export path
+      passes on the API 34 emulator. Physical-device listening QA remains open.
 [OPEN] 4. Noise reduction and wind-noise reduction with real processors.
 [OPEN] 5. Voice effects/voice changer with real audio processing.
 [OPEN] 6. Audio-speed automation with correct timing and pitch behavior.
-[IMPLEMENTED / DEVICE QA OPEN] 7. Measured waveform rendering from decoded audio.
+[IMPLEMENTED / API 34 EMULATOR PASS] 7. Measured waveform rendering from decoded audio.
       Local audio/video sources are decoded through MediaExtractor/MediaCodec
       into bounded peak envelopes, cached in memory and on disk, and reused for
       trims/zoom changes without re-decoding. Timeline rendering preserves peaks
       while zoomed out, aligns constant/curved-speed source audio, repeats looped
       audio waveforms through project end, and cancels extraction when the
       composable leaves composition. JVM extraction/resampling/cache regressions
-      pass and the Android test APK builds; the real device WAV extraction/cache
-      regression still needs to run on an emulator/physical device.
+      pass and the connected Android suite including the WAV extraction/cache
+      regression passes on the API 34 audit34 emulator. Physical-device coverage
+      remains open.
 
 Each processor needs preview/export parity, cancellation behavior, memory
 limits, and device verification. A UI toggle or metadata-only setting is not

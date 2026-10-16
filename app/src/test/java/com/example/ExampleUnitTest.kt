@@ -13,6 +13,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -1175,5 +1176,87 @@ class ExampleUnitTest {
     assertEquals(0L, clip.effectiveTrimStartMs)
     assertEquals(10_000L, clip.effectiveTrimEndMs)
     assertEquals(10_000L, TimelineMapper(listOf(clip)).totalDurationMs)
+  }
+
+  @Test
+  fun exportDeviceReadinessBlocksMissingCodecStorageAndCriticalHeat() {
+    val healthy = ExportDeviceSnapshot(
+      h264EncoderAvailable = true,
+      aacEncoderAvailable = true,
+      cacheFreeBytes = MIN_EXPORT_START_FREE_BYTES * 4,
+      mediaFreeBytes = MIN_EXPORT_START_FREE_BYTES * 4,
+      isLowRamDevice = false,
+      thermalStatus = android.os.PowerManager.THERMAL_STATUS_NONE
+    )
+    assertNull(evaluateExportDeviceReadiness(healthy, requiresAudioEncoder = true).blockingReason)
+
+    assertTrue(
+      evaluateExportDeviceReadiness(
+        healthy.copy(h264EncoderAvailable = false),
+        requiresAudioEncoder = false
+      ).blockingReason!!.contains("H.264")
+    )
+    assertTrue(
+      evaluateExportDeviceReadiness(
+        healthy.copy(aacEncoderAvailable = false),
+        requiresAudioEncoder = true
+      ).blockingReason!!.contains("AAC")
+    )
+    assertTrue(
+      evaluateExportDeviceReadiness(
+        healthy.copy(cacheFreeBytes = MIN_EXPORT_START_FREE_BYTES - 1L),
+        requiresAudioEncoder = false
+      ).blockingReason!!.contains("128 MB")
+    )
+    assertTrue(
+      evaluateExportDeviceReadiness(
+        healthy.copy(thermalStatus = android.os.PowerManager.THERMAL_STATUS_CRITICAL),
+        requiresAudioEncoder = false
+      ).blockingReason!!.contains("too hot")
+    )
+  }
+
+  @Test
+  fun exportDeviceReadinessWarnsWithoutBlockingLowRamOrSevereHeat() {
+    val readiness = evaluateExportDeviceReadiness(
+      ExportDeviceSnapshot(
+        h264EncoderAvailable = true,
+        aacEncoderAvailable = true,
+        cacheFreeBytes = MIN_EXPORT_START_FREE_BYTES * 2,
+        mediaFreeBytes = MIN_EXPORT_START_FREE_BYTES * 2,
+        isLowRamDevice = true,
+        thermalStatus = android.os.PowerManager.THERMAL_STATUS_SEVERE
+      ),
+      requiresAudioEncoder = true
+    )
+
+    assertNull(readiness.blockingReason)
+    assertTrue(readiness.warnings.any { it.contains("low-memory") })
+    assertTrue(readiness.warnings.any { it.contains("running hot") })
+    assertTrue(readiness.warnings.any { it.contains("storage") })
+  }
+
+  @Test
+  fun publicationStorageKeepsRoomForTheFinishedCopy() {
+    val outputBytes = 80L * 1024L * 1024L
+    assertNull(
+      publicationStorageBlockingReason(
+        mediaFreeBytes = outputBytes + EXPORT_PUBLISH_RESERVE_BYTES,
+        outputBytes = outputBytes
+      )
+    )
+    assertTrue(
+      publicationStorageBlockingReason(
+        mediaFreeBytes = outputBytes + EXPORT_PUBLISH_RESERVE_BYTES - 1L,
+        outputBytes = outputBytes
+      )!!.contains("not enough free storage")
+    )
+  }
+
+  @Test
+  fun exportFailureNamesAreMappedToActionableDeviceErrors() {
+    assertTrue(userFacingExportFailure("ERROR_CODE_DECODING_FORMAT_UNSUPPORTED").contains("decode"))
+    assertTrue(userFacingExportFailure("ERROR_CODE_ENCODER_INIT_FAILED").contains("encoder"))
+    assertTrue(userFacingExportFailure("ERROR_CODE_MUXING_FAILED").contains("MP4"))
   }
 }

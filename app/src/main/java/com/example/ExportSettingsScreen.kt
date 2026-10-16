@@ -63,6 +63,9 @@ fun ExportSettingsScreen(
     val uri = outputUri
     val metadata = outputMetadata
     val unsupportedReasons = editorState.exportUnsupportedReasons()
+    val deviceReadiness = remember(editorState) {
+        inspectExportDeviceReadiness(context, editorState)
+    }
     fun cancelExport() {
         activeExportHandle?.cancel()
         activeExportHandle = null
@@ -156,6 +159,41 @@ fun ExportSettingsScreen(
                 }
                 item {
                     Text("${clips.size} source clip(s) · ${formatExportDuration(videoDurationMs)}", style = MaterialTheme.typography.titleMedium)
+                }
+                item {
+                    val blocked = deviceReadiness.blockingReason
+                    Surface(
+                        color = if (blocked != null) {
+                            MaterialTheme.colorScheme.errorContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        },
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text("Device readiness", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                blocked ?: "No export startup blocker was detected. Clipp rechecks device conditions when export starts.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (blocked != null) {
+                                    MaterialTheme.colorScheme.onErrorContainer
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                            deviceReadiness.warnings.forEach { warning ->
+                                Text(
+                                    warning,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
                 }
                 if (errorMessage != null) {
                     item {
