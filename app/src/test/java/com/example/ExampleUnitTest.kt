@@ -1265,4 +1265,81 @@ class ExampleUnitTest {
     assertTrue(userFacingExportFailure("ERROR_CODE_ENCODER_INIT_FAILED").contains("encoder"))
     assertTrue(userFacingExportFailure("ERROR_CODE_MUXING_FAILED").contains("MP4"))
   }
+
+  @Test
+  fun exportSourcePlanResolvesAudioLinkedToPrimaryClip() {
+    val clip = MediaClip(
+      id = "primary-audio-source",
+      sourceUri = "content://media/video/primary",
+      originalDurationMs = 2_000L,
+      trimEndMs = 2_000L
+    )
+    val state = EditorState(
+      clips = listOf(clip),
+      audioClips = listOf(
+        AudioClip(
+          sourceClipId = clip.id,
+          startTimeOnTimelineMs = 0L,
+          sourceDurationMs = 2_000L,
+          trimEndMs = 2_000L
+        )
+      )
+    )
+
+    val plan = state.exportSourcePlan()
+
+    assertNull(plan.blockingReason)
+    assertTrue(
+      plan.references.contains(
+        ExportSourceReference(clip.sourceUri, ExportSourceKind.PRIMARY_CLIP)
+      )
+    )
+    assertTrue(
+      plan.references.contains(
+        ExportSourceReference(clip.sourceUri, ExportSourceKind.AUDIO)
+      )
+    )
+  }
+
+  @Test
+  fun exportSourcePlanBlocksMissingLinkedAudioClip() {
+    val clip = MediaClip(
+      id = "primary",
+      sourceUri = "content://media/video/primary",
+      originalDurationMs = 2_000L,
+      trimEndMs = 2_000L
+    )
+    val state = EditorState(
+      clips = listOf(clip),
+      audioClips = listOf(
+        AudioClip(
+          sourceClipId = "missing-clip",
+          startTimeOnTimelineMs = 0L,
+          sourceDurationMs = 1_000L,
+          trimEndMs = 1_000L
+        )
+      )
+    )
+
+    val plan = state.exportSourcePlan()
+
+    assertTrue(plan.blockingReason!!.contains("audio source", ignoreCase = true))
+  }
+
+  @Test
+  fun exportSourcePlanBlocksBlankPrimarySource() {
+    val state = EditorState(
+      clips = listOf(
+        MediaClip(
+          sourceUri = "",
+          originalDurationMs = 1_000L,
+          trimEndMs = 1_000L
+        )
+      )
+    )
+
+    val plan = state.exportSourcePlan()
+
+    assertTrue(plan.blockingReason!!.contains("source clip", ignoreCase = true))
+  }
 }

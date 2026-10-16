@@ -47,6 +47,198 @@ class ExportInstrumentedTest {
     }
 
     @Test
+    fun missingPrimarySourceIsBlockedBeforeTransformerStarts() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val missing = File(context.cacheDir, "missing-primary-${System.nanoTime()}.mp4")
+        val before = exportTempFiles(context)
+        val exporter = VideoExporter(context)
+        val clip = MediaClip(
+            sourceUri = Uri.fromFile(missing).toString(),
+            originalDurationMs = 1_000L,
+            trimEndMs = 1_000L
+        )
+
+        try {
+            val result = awaitExport(exporter, listOf(clip), "Clipp_missing_primary.mp4")
+            assertNull(result.uri)
+            assertTrue(result.error.orEmpty().contains("source clip", ignoreCase = true))
+            assertEquals(before, exportTempFiles(context))
+        } finally {
+            exporter.close()
+        }
+    }
+
+    @Test
+    fun missingVisibleOverlayIsBlockedBeforeTransformerStarts() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val base = File.createTempFile("clipp-preflight-overlay-base-", ".png", context.cacheDir)
+        val missingOverlay = File(context.cacheDir, "missing-overlay-${System.nanoTime()}.png")
+        writeSolidPng(base, android.graphics.Color.BLUE)
+        val clip = MediaClip(
+            sourceUri = Uri.fromFile(base).toString(),
+            originalDurationMs = 1_000L,
+            trimEndMs = 1_000L,
+            isPhoto = true
+        )
+        val state = EditorState(
+            clips = listOf(clip),
+            overlays = listOf(
+                OverlayClip(
+                    sourceUri = Uri.fromFile(missingOverlay).toString(),
+                    originalDurationMs = 1_000L,
+                    isPhoto = true,
+                    trimEndMs = 1_000L
+                )
+            )
+        )
+        val before = exportTempFiles(context)
+        val exporter = VideoExporter(context)
+
+        try {
+            val result = awaitExport(exporter, listOf(clip), "Clipp_missing_overlay.mp4", state)
+            assertNull(result.uri)
+            assertTrue(result.error.orEmpty().contains("overlay source", ignoreCase = true))
+            assertEquals(before, exportTempFiles(context))
+        } finally {
+            exporter.close()
+            base.delete()
+        }
+    }
+
+    @Test
+    fun missingAudioSourceIsBlockedBeforeTransformerStarts() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val base = File.createTempFile("clipp-preflight-audio-base-", ".png", context.cacheDir)
+        val missingAudio = File(context.cacheDir, "missing-audio-${System.nanoTime()}.wav")
+        writeSolidPng(base, android.graphics.Color.BLUE)
+        val clip = MediaClip(
+            sourceUri = Uri.fromFile(base).toString(),
+            originalDurationMs = 1_000L,
+            trimEndMs = 1_000L,
+            isPhoto = true,
+            isMuted = true
+        )
+        val state = EditorState(
+            clips = listOf(clip),
+            audioClips = listOf(
+                AudioClip(
+                    sourceUri = Uri.fromFile(missingAudio).toString(),
+                    startTimeOnTimelineMs = 0L,
+                    sourceDurationMs = 1_000L,
+                    trimEndMs = 1_000L
+                )
+            )
+        )
+        val before = exportTempFiles(context)
+        val exporter = VideoExporter(context)
+
+        try {
+            val result = awaitExport(exporter, listOf(clip), "Clipp_missing_audio.mp4", state)
+            assertNull(result.uri)
+            assertTrue(result.error.orEmpty().contains("audio source", ignoreCase = true))
+            assertEquals(before, exportTempFiles(context))
+        } finally {
+            exporter.close()
+            base.delete()
+        }
+    }
+
+    @Test
+    fun layeredEightSecondExportPublishesStableMp4WithAudio() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val red = File.createTempFile("clipp-stress-red-", ".png", context.cacheDir)
+        val blue = File.createTempFile("clipp-stress-blue-", ".png", context.cacheDir)
+        val green = File.createTempFile("clipp-stress-green-", ".png", context.cacheDir)
+        val overlay = File.createTempFile("clipp-stress-overlay-", ".png", context.cacheDir)
+        val audio = File.createTempFile("clipp-stress-audio-", ".wav", context.cacheDir)
+        writeSolidPng(red, android.graphics.Color.RED)
+        writeSolidPng(blue, android.graphics.Color.BLUE)
+        writeSolidPng(green, android.graphics.Color.GREEN)
+        writeSolidPng(overlay, android.graphics.Color.WHITE)
+        writeMonoWav(audio, durationMs = 8_000L)
+
+        val clips = listOf(
+            MediaClip(
+                sourceUri = Uri.fromFile(red).toString(),
+                originalDurationMs = 2_500L,
+                trimEndMs = 2_500L,
+                isPhoto = true,
+                isMuted = true,
+                effects = listOf(
+                    AppliedEffect(
+                        type = EffectType.LIGHT_LEAK,
+                        intensity = 0.7f,
+                        startTimeMs = 500L,
+                        endTimeMs = 1_500L
+                    )
+                )
+            ),
+            MediaClip(
+                sourceUri = Uri.fromFile(blue).toString(),
+                originalDurationMs = 3_000L,
+                trimEndMs = 3_000L,
+                isPhoto = true,
+                isMuted = true
+            ),
+            MediaClip(
+                sourceUri = Uri.fromFile(green).toString(),
+                originalDurationMs = 2_500L,
+                trimEndMs = 2_500L,
+                isPhoto = true,
+                isMuted = true,
+                effects = listOf(AppliedEffect(type = EffectType.MIRROR, intensity = 1f))
+            )
+        )
+        val state = EditorState(
+            clips = clips,
+            overlays = listOf(
+                OverlayClip(
+                    sourceUri = Uri.fromFile(overlay).toString(),
+                    originalDurationMs = 6_000L,
+                    isPhoto = true,
+                    trimEndMs = 6_000L,
+                    startTimeOnTimelineMs = 1_000L,
+                    posX = 0.85f,
+                    posY = 0.15f,
+                    scaleX = 0.15f,
+                    scaleY = 0.15f,
+                    opacity = 0.8f
+                )
+            ),
+            audioClips = listOf(
+                AudioClip(
+                    sourceUri = Uri.fromFile(audio).toString(),
+                    startTimeOnTimelineMs = 0L,
+                    sourceDurationMs = 8_000L,
+                    trimEndMs = 8_000L,
+                    volume = 0.65f,
+                    audioEffects = AudioEffects(fadeInMs = 250L, fadeOutMs = 250L)
+                )
+            )
+        )
+        val exporter = VideoExporter(context)
+        var result: Outcome? = null
+
+        try {
+            result = awaitExport(exporter, clips, "Clipp_instrumented_layered_stress.mp4", state)
+            assertSuccessful(result!!)
+            assertPublishedMp4(context, result!!, requireAudio = true)
+            assertTrue(result!!.metadata!!.durationMs in 7_500L..8_500L)
+            assertFrameHasDominantColor(context, result!!, 200_000L, expected = "red")
+            assertFrameHasDominantColor(context, result!!, 3_500_000L, expected = "blue")
+            assertFrameHasDominantColor(context, result!!, 6_500_000L, expected = "green")
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            red.delete()
+            blue.delete()
+            green.delete()
+            overlay.delete()
+            audio.delete()
+        }
+    }
+
+    @Test
     fun localPhotoIsRenderedAndPublishedAsValidatedMp4() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val source = File.createTempFile("clipp-export-fixture-", ".png", context.cacheDir)
@@ -1211,6 +1403,14 @@ class ExportInstrumentedTest {
         }
         assertTrue("Export did not complete", completed.await(60, TimeUnit.SECONDS))
         return outcome.get() ?: error("Export completed without a result")
+    }
+
+    private fun exportTempFiles(context: android.content.Context): Set<String> {
+        return context.cacheDir.listFiles()
+            ?.filter { it.isFile && it.name.startsWith("export-") && it.name.endsWith(".mp4") }
+            ?.map { it.name }
+            ?.toSet()
+            .orEmpty()
     }
 
     private fun assertSuccessful(result: Outcome) {

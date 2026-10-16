@@ -1,10 +1,10 @@
 CLIPP - CURRENT STATUS AND REMAINING WORK
 ==========================================
-Report date: 2026-09-13
+Report date: 2026-10-17
 Repository: https://github.com/Prem736raj/clipp
-Checkout: C:\Users\prem7\Downloads\clipp-main
-Branch: audit/production-hardening-2026-09-06
-Implementation baseline reviewed: 3dfc8d5
+Checkout: P:\Projects\clipp
+Branch: main
+Implementation baseline reviewed: Phase 6 working tree based on c842054
 
 EXECUTIVE ANSWER
 ----------------
@@ -73,16 +73,18 @@ IMPORTANT VALIDATION LIMIT
 ---------------------------
 The current renderer/export branch has passed the JVM suite and the API 34
 connected Android regression suite, including real MP4 export checks. This is
-emulator evidence only. Physical-device coverage, the broader Android/API,
-GPU/codec matrix, long-export stress, and real-user workflow QA remain open.
+emulator evidence only. Phase 6 also passes an 8-second layered export with
+three clips, a timed visual effect, an image overlay, and separate audio.
+Physical-device coverage, the broader Android/API/GPU/codec matrix, truly long
+exports, and real-user workflow QA remain open.
 
 REMAINING WORK - PRIORITY 0: RELEASE BLOCKERS
 ----------------------------------------------
 These must be completed before calling the app production-ready:
 
 [CURRENT SUITE PASS / RE-RUN AFTER FUTURE CHANGES] 1. Run current automated tests after the latest renderer changes.
-      On 2026-10-17 the current debug JVM suite passed 56/56 and the API 34
-      connected Android suite passed 24/24 on the audit34 emulator. Re-run both
+      On 2026-10-17 the current debug JVM suite passed 59/59 and the API 34
+      connected Android suite passed 28/28 on the audit34 emulator. Re-run both
       suites after future renderer/export changes and fix any regressions.
 
 [PARTIAL / API 34 EMULATOR PASS] 2. Run real export QA on physical/emulated devices.
@@ -93,8 +95,10 @@ These must be completed before calling the app production-ready:
       current API 34 emulator suite verifies codec/storage readiness, MediaStore
       publication, a real MP4 export containing looped audio plus fade,
       crossfade, and ducking, and a timed visual-effect export that proves
-      normal -> mirror -> letterbox -> normal frame behavior. Physical-device
-      and broader media-matrix QA remain open.
+      normal -> mirror -> letterbox -> normal frame behavior. Phase 6 adds
+      early-readability checks for primary, overlay, and audio sources plus an
+      8-second layered export with audio and representative-frame validation.
+      Physical-device and broader media-matrix QA remain open.
 
 [OPEN] 3. Complete the device/performance matrix.
       Test Android 7/8 through API 36, at least one 4 GB device, a 6/8 GB
@@ -102,15 +106,23 @@ These must be completed before calling the app production-ready:
       time, scrolling, long timelines, multiple overlays, and long exports.
       Fix OOM, ANR, thermal, and encoder compatibility issues.
 
-[OPEN] 4. Build and verify the signed release artifact.
+[PARTIAL / RELEASE GUARD VERIFIED] 4. Build and verify the signed release artifact.
       Configure an owner-supplied upload keystore outside the repository,
       build a minified/R8 release, generate a signed AAB, install it, and
-      verify that no secrets or debug-only behavior are shipped.
+      verify that no secrets or debug-only behavior are shipped. On 2026-10-17
+      `:app:bundleRelease` was intentionally invoked without signing variables
+      and correctly stopped at the external-signing guard requiring
+      KEYSTORE_PATH, STORE_PASSWORD, KEY_ALIAS, and KEY_PASSWORD. The owner
+      keystore/signing run remains open.
 
-[OPEN] 5. Complete real-user workflow QA.
+[PARTIAL / AUTOMATED MISSING-MEDIA PASS] 5. Complete real-user workflow QA.
       Test import, edit, save, close, reopen, relink/missing media, export,
       share, cancel, retry, delete project, microphone denial, storage full,
       corrupt media, theme changes, deep links, shortcuts, and batch export.
+      Automated API 34 tests now verify missing/unreadable primary, visible
+      overlay, and audio files fail before export creates its temporary MP4;
+      interactive relink/recovery and the rest of this workflow matrix remain
+      open.
 
 [OPEN] 6. Complete accessibility and UX QA.
       Verify TalkBack labels, minimum touch targets, dark/light contrast,

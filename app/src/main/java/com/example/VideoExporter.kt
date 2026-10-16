@@ -151,6 +151,7 @@ class VideoExporter(context: Context) {
     private var transformer: Transformer? = null
     private var temporaryOutput: File? = null
     private var publishedAppFile: File? = null
+    private var startupJob: Job? = null
     private var progressJob: Job? = null
 
     fun export(
@@ -180,121 +181,136 @@ class VideoExporter(context: Context) {
             onError("Export blocked: $reason")
             return ExportHandle { canceled.set(true) }
         }
-        val outputFile = File(appContext.cacheDir, "export-${UUID.randomUUID()}.mp4")
-        temporaryOutput = outputFile
-        val exportClips = canonicalState.clips
-        val editedItems = mutableListOf<EditedMediaItem>()
-        var clipStartMs = 0L
-        exportClips.forEachIndexed { index, clip ->
-            clip.toExportSpeedSegments().forEach { segment ->
-                segment.toEditedMediaItem(
-                    state = canonicalState,
-                    clipIndex = index,
-                    clipStartMs = clipStartMs
-                )?.let {
-                    editedItems += it
-                    clipStartMs += segment.durationMs
+        startupJob?.cancel()
+        startupJob = scope.launch {
+            val sourceBlockingReason = withContext(Dispatchers.IO) {
+                canonicalState.exportSourceBlockingReason(appContext)
+            }
+            if (canceled.get()) return@launch
+            sourceBlockingReason?.let { reason ->
+                onError("Export blocked: $reason")
+                return@launch
+            }
+
+            val outputFile = File(appContext.cacheDir, "export-${UUID.randomUUID()}.mp4")
+            temporaryOutput = outputFile
+            val exportClips = canonicalState.clips
+            val editedItems = mutableListOf<EditedMediaItem>()
+            var clipStartMs = 0L
+            exportClips.forEachIndexed { index, clip ->
+                clip.toExportSpeedSegments().forEach { segment ->
+                    segment.toEditedMediaItem(
+                        state = canonicalState,
+                        clipIndex = index,
+                        clipStartMs = clipStartMs
+                    )?.let {
+                        editedItems += it
+                        clipStartMs += segment.durationMs
+                    }
                 }
             }
-        }
-        if (editedItems.isEmpty()) {
-            onError("There are no exportable clips in this project")
-            return ExportHandle { canceled.set(true) }
-        }
+            if (editedItems.isEmpty()) {
+                cleanupTemporaryOutput()
+                onError("There are no exportable clips in this project")
+                return@launch
+            }
 
-        val sequences = mutableListOf(EditedMediaItemSequence(editedItems))
-        sequences += buildAudioSequences(canonicalState, exportClips, clipStartMs)
-        val composition = Composition.Builder(sequences).build()
+            val sequences = mutableListOf(EditedMediaItemSequence(editedItems))
+            sequences += buildAudioSequences(canonicalState, exportClips, clipStartMs)
+            val composition = Composition.Builder(sequences).build()
 
-        val builtTransformer = Transformer.Builder(appContext)
-            .setVideoMimeType(MimeTypes.VIDEO_H264)
-            .setAudioMimeType(MimeTypes.AUDIO_AAC)
-            .setListener(object : Transformer.Listener {
-                override fun onCompleted(composition: Composition, exportResult: ExportResult) {
-                    progressJob?.cancel()
-                    if (canceled.get()) {
-                        cleanupTemporaryOutput()
-                        return
-                    }
-                    publicationStorageBlockingReason(appContext, outputFile.length())?.let { reason ->
-                        cleanupTemporaryOutput()
-                        onError(reason)
-                        return
-                    }
-                    scope.launch {
-                        val published = withContext(Dispatchers.IO) {
-                            publishAndValidate(outputFile, outputName)
-                        }
+            val builtTransformer = Transformer.Builder(appContext)
+                .setVideoMimeType(MimeTypes.VIDEO_H264)
+                .setAudioMimeType(MimeTypes.AUDIO_AAC)
+                .setListener(object : Transformer.Listener {
+                    override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                        progressJob?.cancel()
                         if (canceled.get()) {
-                            published?.let { deletePublished(it) }
                             cleanupTemporaryOutput()
-                        } else if (published == null) {
+                            return
+                        }
+                        publicationStorageBlockingReason(appContext, outputFile.length())?.let { reason ->
                             cleanupTemporaryOutput()
-                            onError("Clipp could not publish a valid MP4")
-                        } else {
-                            cleanupTemporaryOutput()
-                            onProgress(100)
-                            onSuccess(
-                                published.first,
-                                ExportMetadata(
-                                    durationMs = published.second,
-                                    fileSizeBytes = published.third
+                            onError(reason)
+                            return
+                        }
+                        scope.launch {
+                            val published = withContext(Dispatchers.IO) {
+                                publishAndValidate(outputFile, outputName)
+                            }
+                            if (canceled.get()) {
+                                published?.let { deletePublished(it) }
+                                cleanupTemporaryOutput()
+                            } else if (published == null) {
+                                cleanupTemporaryOutput()
+                                onError("Clipp could not publish a valid MP4")
+                            } else {
+                                cleanupTemporaryOutput()
+                                onProgress(100)
+                                onSuccess(
+                                    published.first,
+                                    ExportMetadata(
+                                        durationMs = published.second,
+                                        fileSizeBytes = published.third
+                                    )
                                 )
-                            )
+                            }
                         }
                     }
-                }
 
-                override fun onError(
-                    composition: Composition,
-                    exportResult: ExportResult,
-                    exportException: ExportException
-                ) {
+                    override fun onError(
+                        composition: Composition,
+                        exportResult: ExportResult,
+                        exportException: ExportException
+                    ) {
+                        progressJob?.cancel()
+                        cleanupTemporaryOutput()
+                        if (BuildConfig.DEBUG) {
+                            Log.e("ClippExporter", "Media3 export failed", exportException)
+                        }
+                        if (!canceled.get()) {
+                            onError(userFacingExportFailure(exportException.getErrorCodeName()))
+                        }
+                    }
+                })
+                .build()
+            transformer = builtTransformer
+
+            progressJob = scope.launch {
+                val holder = ProgressHolder()
+                while (isActive && !canceled.get()) {
+                    val state = builtTransformer.getProgress(holder)
+                    if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
+                        onProgress(holder.progress.coerceIn(0, 99))
+                    }
+                    delay(250)
+                }
+            }
+
+            runCatching { builtTransformer.start(composition, outputFile.absolutePath) }
+                .onFailure {
                     progressJob?.cancel()
                     cleanupTemporaryOutput()
-                    if (BuildConfig.DEBUG) {
-                        Log.e("ClippExporter", "Media3 export failed", exportException)
-                    }
+                    if (BuildConfig.DEBUG) Log.e("ClippExporter", "Could not start export", it)
                     if (!canceled.get()) {
-                        onError(userFacingExportFailure(exportException.getErrorCodeName()))
+                        val detail = it.message?.takeIf(String::isNotBlank) ?: it::class.simpleName
+                        onError("Could not start export${detail?.let { value -> ": $value" } ?: ""}")
                     }
                 }
-            })
-            .build()
-        transformer = builtTransformer
-
-        progressJob = scope.launch {
-            val holder = ProgressHolder()
-            while (isActive && !canceled.get()) {
-                val state = builtTransformer.getProgress(holder)
-                if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
-                    onProgress(holder.progress.coerceIn(0, 99))
-                }
-                delay(250)
-            }
         }
-
-        runCatching { builtTransformer.start(composition, outputFile.absolutePath) }
-            .onFailure {
-                progressJob?.cancel()
-                cleanupTemporaryOutput()
-                if (BuildConfig.DEBUG) Log.e("ClippExporter", "Could not start export", it)
-                if (!canceled.get()) {
-                    val detail = it.message?.takeIf(String::isNotBlank) ?: it::class.simpleName
-                    onError("Could not start export${detail?.let { value -> ": $value" } ?: ""}")
-                }
-            }
 
         return ExportHandle {
             if (canceled.compareAndSet(false, true)) {
+                startupJob?.cancel()
                 progressJob?.cancel()
-                runCatching { builtTransformer.cancel() }
+                runCatching { transformer?.cancel() }
                 cleanupTemporaryOutput()
             }
         }
     }
 
     fun close() {
+        startupJob?.cancel()
         progressJob?.cancel()
         runCatching { transformer?.cancel() }
         cleanupTemporaryOutput()
