@@ -115,14 +115,19 @@ These must be completed before calling the app production-ready:
       KEYSTORE_PATH, STORE_PASSWORD, KEY_ALIAS, and KEY_PASSWORD. The owner
       keystore/signing run remains open.
 
-[PARTIAL / AUTOMATED MISSING-MEDIA PASS] 5. Complete real-user workflow QA.
+[PARTIAL / AUTOMATED RELINK + CANCEL/RETRY PASS] 5. Complete real-user workflow QA.
       Test import, edit, save, close, reopen, relink/missing media, export,
       share, cancel, retry, delete project, microphone denial, storage full,
       corrupt media, theme changes, deep links, shortcuts, and batch export.
       Automated API 34 tests now verify missing/unreadable primary, visible
       overlay, and audio files fail before export creates its temporary MP4;
-      interactive relink/recovery and the rest of this workflow matrix remain
-      open.
+      saved-project primary media can be detected, relinked with edit metadata
+      preserved, and exported successfully; cancel-before-start leaves no
+      stale temp output and an immediate retry succeeds. The editor now exposes
+      an interactive relink flow for restored history and legacy path-only
+      projects. Physical-device relink/document-provider UX, share/delete,
+      microphone denial, storage-full, corrupt-media, theme/back-navigation,
+      and broader end-to-end workflow coverage remain open.
 
 [OPEN] 6. Complete accessibility and UX QA.
       Verify TalkBack labels, minimum touch targets, dark/light contrast,
@@ -305,9 +310,10 @@ Coming later or still gated:
 FINAL RELEASE DECISION
 ----------------------
 Do not label the current app production-ready yet. A debug build passing is
-only a compilation/package signal. The latest renderer changes still need
-device export verification, and the signed release, accessibility, security,
-Play Store, and full real-user QA gates remain open.
+only one release signal. The current automated API 34 suite covers export,
+missing-media relink, and cancel/retry regressions, but physical-device/device-
+matrix QA plus the signed release, accessibility, security, Play Store, and
+remaining real-user workflow gates are still open.
 
 Recommended launch strategy:
 1. Ship a narrow, honest, account-free local v1 after Priority 0 is closed.

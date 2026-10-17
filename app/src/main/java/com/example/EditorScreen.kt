@@ -648,6 +648,103 @@ fun EditorScreen(
     var currentIsEraser by remember { mutableStateOf(false) }
     var undoStack by documentState.undoStack
     var redoStack by documentState.redoStack
+    var missingMediaIssues by remember { mutableStateOf<List<ProjectMediaIssue>>(emptyList()) }
+    var relinkTarget by remember { mutableStateOf<ProjectMediaIssue?>(null) }
+    var relinkError by remember { mutableStateOf<String?>(null) }
+
+    fun snapshotEditorState(): EditorState = EditorState(
+        clips = clips,
+        canvasSettings = canvasSettings,
+        overlays = overlays,
+        texts = texts,
+        captions = captions,
+        captionSettings = captionSettings,
+        stickers = stickers,
+        drawings = drawings,
+        frames = frames,
+        audioClips = audioClips,
+        layerOrder = layerOrder
+    )
+
+    fun applyEditorStateSnapshot(state: EditorState) {
+        clips = state.clips
+        canvasSettings = state.canvasSettings
+        overlays = state.overlays
+        texts = state.texts
+        captions = state.captions
+        captionSettings = state.captionSettings
+        stickers = state.stickers
+        drawings = state.drawings
+        frames = state.frames
+        audioClips = state.audioClips
+        layerOrder = state.layerOrder
+    }
+
+    val relinkMediaPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { replacementUri ->
+        val issue = relinkTarget
+        if (replacementUri != null && issue != null) {
+            scope.launch {
+                val validationError = ProjectMediaRecovery.validateReplacement(context, issue, replacementUri)
+                if (validationError != null) {
+                    relinkError = validationError
+                    return@launch
+                }
+                runCatching {
+                    context.contentResolver.takePersistableUriPermission(
+                        replacementUri,
+                        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                }
+
+                val relinkedHistory = ProjectMediaRecovery.relink(
+                    EditorHistoryModel(
+                        undoStack = undoStack,
+                        redoStack = redoStack,
+                        currentState = snapshotEditorState()
+                    ),
+                    issue,
+                    replacementUri.toString()
+                )
+                val repairedState = relinkedHistory.restoredEditorState() ?: return@launch
+                undoStack = relinkedHistory.undoStack.takeLast(MAX_EDITOR_HISTORY_DEPTH)
+                redoStack = relinkedHistory.redoStack.takeLast(MAX_EDITOR_HISTORY_DEPTH)
+                applyEditorStateSnapshot(repairedState)
+
+                project?.let { currentProject ->
+                    val historyJson = runCatching {
+                        editorHistoryMoshi.adapter(EditorHistoryModel::class.java).toJson(relinkedHistory)
+                    }.getOrDefault(currentProject.historyState)
+                    val oldUri = issue.sourceUri
+                    val updatedProject = currentProject.copy(
+                        sourceMediaPaths = currentProject.sourceMediaPaths.map { path ->
+                            if (oldUri.isNotBlank() && path == oldUri) replacementUri.toString() else path
+                        },
+                        thumbnailUri = if (oldUri.isNotBlank() && currentProject.thumbnailUri == oldUri) {
+                            replacementUri.toString()
+                        } else {
+                            currentProject.thumbnailUri
+                        },
+                        historyState = historyJson,
+                        isDirty = true,
+                        lastEdited = System.currentTimeMillis()
+                    )
+                    projectViewModel.updateProject(updatedProject)
+                    project = updatedProject
+                }
+
+                missingMediaIssues = ProjectMediaRecovery.audit(context, repairedState)
+                relinkTarget = null
+                relinkError = null
+                android.widget.Toast.makeText(
+                    context,
+                    if (missingMediaIssues.isEmpty()) "Project media restored" else "Media relinked",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
     
     LaunchedEffect(overlays, texts, stickers, drawings, frames) {
         val allIds = overlays.map { it.id } + texts.map { it.id } + stickers.map { it.id } + drawings.map { it.id } + frames.map { it.id }
@@ -1025,8 +1122,13 @@ fun EditorScreen(
             // Check if undoStack is empty to avoid overwriting a restored project
             if (undoStack.isEmpty()) {
                 val initialClips = mutableListOf<MediaClip>()
+                val unreadableIssues = mutableListOf<ProjectMediaIssue>()
                 for (path in paths) {
-                    val metadata = MediaMetadataReader.read(context, android.net.Uri.parse(path)) ?: continue
+                    val metadata = MediaMetadataReader.read(context, android.net.Uri.parse(path))
+                    if (metadata == null) {
+                        unreadableIssues += ProjectMediaRecovery.legacyVisualIssue(path)
+                        continue
+                    }
                     val isPhoto = metadata.mimeType.startsWith("image/")
                     val durationMs = if (isPhoto) PHOTO_DEFAULT_DURATION_MS else metadata.durationMs
                     if (durationMs > 0L) {
@@ -1038,7 +1140,9 @@ fun EditorScreen(
                         ))
                     }
                 }
-                if (initialClips.isNotEmpty()) {
+                if (unreadableIssues.isNotEmpty()) {
+                    missingMediaIssues = unreadableIssues
+                } else if (initialClips.isNotEmpty()) {
                     saveState(initialClips, canvasSettings, "Initial import")
                 }
             }
@@ -1048,8 +1152,13 @@ fun EditorScreen(
     val exoPlaylistTokens = clips.map {
         "${it.id}|${it.sourceUri}|${it.trimStartMs}|${it.trimEndMs}|${it.isPhoto}|${it.playbackSpeed}|${it.speedCurve}"
     }.joinToString(",")
-    LaunchedEffect(exoPlaylistTokens) {
-        if (clips.isNotEmpty()) {
+    LaunchedEffect(exoPlaylistTokens, missingMediaIssues) {
+        if (missingMediaIssues.isNotEmpty()) {
+            exoPlayer.pause()
+            bgExoPlayer.pause()
+            exoPlayer.clearMediaItems()
+            bgExoPlayer.clearMediaItems()
+        } else if (clips.isNotEmpty()) {
             val mediaItems = clips.map { clip ->
                 val builder = MediaItem.Builder().setUri(android.net.Uri.parse(clip.sourceUri))
                 if (clip.isPhoto) {
@@ -1094,17 +1203,8 @@ fun EditorScreen(
                         undoStack = historyModel.undoStack.takeLast(MAX_EDITOR_HISTORY_DEPTH)
                         redoStack = historyModel.redoStack.takeLast(MAX_EDITOR_HISTORY_DEPTH)
                         historyModel.restoredEditorState()?.let { restoredState ->
-                            clips = restoredState.clips
-                            canvasSettings = restoredState.canvasSettings
-                            overlays = restoredState.overlays
-                            texts = restoredState.texts
-                            captions = restoredState.captions
-                            captionSettings = restoredState.captionSettings
-                            stickers = restoredState.stickers
-                            drawings = restoredState.drawings
-                            frames = restoredState.frames
-                            audioClips = restoredState.audioClips
-                            layerOrder = restoredState.layerOrder
+                            missingMediaIssues = ProjectMediaRecovery.audit(context, restoredState)
+                            applyEditorStateSnapshot(restoredState)
                         }
                     }
                 } catch (e: Exception) { e.printStackTrace() }
@@ -7166,6 +7266,48 @@ fun EditorScreen(
                         }
                     }
                     }
+                }
+            }
+        )
+    }
+
+    if (missingMediaIssues.isNotEmpty()) {
+        val issue = missingMediaIssues.first()
+        AlertDialog(
+            onDismissRequest = {},
+            icon = { Icon(Icons.Filled.Warning, contentDescription = null) },
+            title = { Text("Missing project media") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "${issue.displayLabel} is unavailable. Relink the original or a compatible replacement to keep all existing edits."
+                    )
+                    if (missingMediaIssues.size > 1) {
+                        Text("${missingMediaIssues.size} missing media source(s) remain.")
+                    }
+                    if (relinkError != null) {
+                        Text(
+                            relinkError!!,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        relinkTarget = issue
+                        relinkError = null
+                        relinkMediaPicker.launch(issue.acceptedMimeTypes())
+                    }
+                ) {
+                    Text("Relink")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onBack) {
+                    Text("Back to Projects")
                 }
             }
         )

@@ -144,6 +144,109 @@ class ExportInstrumentedTest {
     }
 
     @Test
+    fun missingSavedProjectMediaCanBeRelinkedAndExportedWithEditsPreserved() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val missing = File(context.cacheDir, "missing-relink-${System.nanoTime()}.png")
+        val replacement = File.createTempFile("clipp-relink-replacement-", ".png", context.cacheDir)
+        writeSolidPng(replacement, android.graphics.Color.rgb(30, 180, 80))
+        val clip = MediaClip(
+            id = "recoverable-clip",
+            sourceUri = Uri.fromFile(missing).toString(),
+            originalDurationMs = 1_500L,
+            trimStartMs = 200L,
+            trimEndMs = 1_300L,
+            isPhoto = true,
+            rotation = 12f,
+            filterType = FilterType.WARM,
+            filterIntensity = 0.4f
+        )
+        val originalState = EditorState(clips = listOf(clip))
+        val history = EditorHistoryModel(
+            undoStack = listOf(HistoryAction(originalState, "before missing source")),
+            currentState = originalState
+        )
+
+        var result: Outcome? = null
+        val exporter = VideoExporter(context)
+        try {
+            val issues = runBlocking { ProjectMediaRecovery.audit(context, history.restoredEditorState()!!) }
+            assertEquals(1, issues.size)
+            val repairedHistory = ProjectMediaRecovery.relink(
+                history,
+                issues.single(),
+                Uri.fromFile(replacement).toString()
+            )
+            val repaired = repairedHistory.restoredEditorState()!!
+            assertTrue(runBlocking { ProjectMediaRecovery.audit(context, repaired) }.isEmpty())
+            assertEquals("recoverable-clip", repaired.clips.single().id)
+            assertEquals(200L, repaired.clips.single().trimStartMs)
+            assertEquals(1_300L, repaired.clips.single().trimEndMs)
+            assertEquals(12f, repaired.clips.single().rotation)
+            assertEquals(FilterType.WARM, repaired.clips.single().filterType)
+            assertEquals(0.4f, repaired.clips.single().filterIntensity)
+            assertEquals(
+                Uri.fromFile(replacement).toString(),
+                repairedHistory.undoStack.single().state.clips.single().sourceUri
+            )
+
+            result = awaitExport(
+                exporter,
+                repaired.clips,
+                "Clipp_relinked_saved_project.mp4",
+                repaired
+            )
+            assertSuccessful(result!!)
+            assertPublishedMp4(context, result!!)
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            replacement.delete()
+        }
+    }
+
+    @Test
+    fun cancelBeforeExportStartupLeavesNoTempFileAndRetrySucceeds() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val source = File.createTempFile("clipp-cancel-retry-", ".png", context.cacheDir)
+        writeSolidPng(source, android.graphics.Color.rgb(80, 100, 220))
+        val clip = MediaClip(
+            sourceUri = Uri.fromFile(source).toString(),
+            originalDurationMs = 1_200L,
+            trimEndMs = 1_200L,
+            isPhoto = true
+        )
+        val exporter = VideoExporter(context)
+        val before = exportTempFiles(context)
+        val canceledCallback = CountDownLatch(1)
+        var retry: Outcome? = null
+
+        try {
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                val handle = exporter.export(
+                    clips = listOf(clip),
+                    outputName = "Clipp_canceled_before_start.mp4",
+                    onProgress = {},
+                    onSuccess = { _, _ -> canceledCallback.countDown() },
+                    onError = { canceledCallback.countDown() }
+                )
+                handle.cancel()
+            }
+            Thread.sleep(500)
+            assertEquals("Canceled export unexpectedly completed a callback", 1L, canceledCallback.count)
+            assertEquals(before, exportTempFiles(context))
+
+            retry = awaitExport(exporter, listOf(clip), "Clipp_retry_after_cancel.mp4")
+            assertSuccessful(retry!!)
+            assertPublishedMp4(context, retry!!)
+            assertEquals(before, exportTempFiles(context))
+        } finally {
+            retry?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            source.delete()
+        }
+    }
+
+    @Test
     fun layeredEightSecondExportPublishesStableMp4WithAudio() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val red = File.createTempFile("clipp-stress-red-", ".png", context.cacheDir)
