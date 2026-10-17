@@ -3,11 +3,15 @@ package com.example
 import com.example.R
 import com.example.viewmodel.EditorDocumentState
 import android.Manifest
+import android.app.Activity
+import android.content.ContextWrapper
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaRecorder
 import android.os.Build
 import android.content.Context
 import android.net.Uri
+import android.provider.Settings
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -114,6 +118,7 @@ import androidx.compose.runtime.*
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.core.app.ActivityCompat
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -141,6 +146,12 @@ import java.io.File
 import java.util.UUID
 
 import androidx.compose.ui.geometry.Rect
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
 
 @Composable
 fun AudioPlayerComponent(
@@ -574,6 +585,8 @@ fun EditorScreen(
 ) {
     var project by remember { mutableStateOf<ProjectEntity?>(null) }
     var showSavedIndicator by remember { mutableStateOf(false) }
+    var showMicrophonePermissionDialog by remember { mutableStateOf(false) }
+    var microphonePermissionPermanentlyDenied by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val view = androidx.compose.ui.platform.LocalView.current
@@ -1089,14 +1102,55 @@ fun EditorScreen(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
+            showMicrophonePermissionDialog = false
+            microphonePermissionPermanentlyDenied = false
             if (startVoiceoverRecording()) exoPlayer.play()
         } else {
-            android.widget.Toast.makeText(
-                context,
-                "Microphone permission is required for voiceover.",
-                android.widget.Toast.LENGTH_LONG
-            ).show()
+            val activity = context.findActivity()
+            microphonePermissionPermanentlyDenied = activity != null &&
+                !ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.RECORD_AUDIO)
+            showMicrophonePermissionDialog = true
         }
+    }
+
+    if (showMicrophonePermissionDialog) {
+        AlertDialog(
+            onDismissRequest = { showMicrophonePermissionDialog = false },
+            icon = { Icon(Icons.Filled.Mic, contentDescription = null) },
+            title = { Text("Microphone access needed") },
+            text = {
+                Text(
+                    if (microphonePermissionPermanentlyDenied) {
+                        "Voiceover recording needs microphone access. Enable Microphone for Clipp in Android settings, then return here."
+                    } else {
+                        "Voiceover recording needs microphone access. Allow it to record audio directly into your project."
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showMicrophonePermissionDialog = false
+                        if (microphonePermissionPermanentlyDenied) {
+                            val settingsIntent = Intent(
+                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.fromParts("package", context.packageName, null)
+                            )
+                            runCatching { context.startActivity(settingsIntent) }
+                        } else {
+                            recordAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                    }
+                ) {
+                    Text(if (microphonePermissionPermanentlyDenied) "Open settings" else "Try again")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showMicrophonePermissionDialog = false }) {
+                    Text("Not now")
+                }
+            }
+        )
     }
 
     LaunchedEffect(mainPlaybackEnded) {

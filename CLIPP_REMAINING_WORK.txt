@@ -115,7 +115,7 @@ These must be completed before calling the app production-ready:
       KEYSTORE_PATH, STORE_PASSWORD, KEY_ALIAS, and KEY_PASSWORD. The owner
       keystore/signing run remains open.
 
-[PARTIAL / AUTOMATED RELINK + CANCEL/RETRY PASS] 5. Complete real-user workflow QA.
+[PARTIAL / LOCAL WORKFLOW HARDENING + AUTOMATED RELINK/CANCEL/RETRY PASS] 5. Complete real-user workflow QA.
       Test import, edit, save, close, reopen, relink/missing media, export,
       share, cancel, retry, delete project, microphone denial, storage full,
       corrupt media, theme changes, deep links, shortcuts, and batch export.
@@ -125,14 +125,17 @@ These must be completed before calling the app production-ready:
       preserved, and exported successfully; cancel-before-start leaves no
       stale temp output and an immediate retry succeeds. The editor now exposes
       an interactive relink flow for restored history and legacy path-only
-      projects. Physical-device relink/document-provider UX, share/delete,
-      microphone denial, storage-full, corrupt-media, theme/back-navigation,
-      and broader end-to-end workflow coverage remain open.
+      projects. Project deletion now requires confirmation, sharing carries a
+      robust URI read grant, and microphone denial has retry/settings recovery.
+      Physical-device relink/document-provider UX, storage-full, corrupt-media,
+      theme/back-navigation, and broader end-to-end workflow coverage remain open.
 
-[OPEN] 6. Complete accessibility and UX QA.
+[PARTIAL / PRIMARY TOUCH-TARGET + ERROR-RECOVERY HARDENING] 6. Complete accessibility and UX QA.
       Verify TalkBack labels, minimum touch targets, dark/light contrast,
       selected states, 1.0x-2.0x font scaling, keyboard/back behavior, loading
-      states, and actionable error messages.
+      states, and actionable error messages. Layer visibility/lock buttons now
+      meet a 48dp touch target and microphone denial is actionable; full TalkBack,
+      contrast, font-scaling, keyboard/back, and physical-device UX QA remains.
 
 [OPEN] 7. Finish privacy, dependency, security, and Play checks.
       Reconcile the manifest, privacy policy, Data Safety form, SDK behavior,

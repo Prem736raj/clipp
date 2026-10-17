@@ -235,7 +235,7 @@ fun LayerManagementPanel(
                                 Text(item.name, modifier = Modifier.weight(1f), fontSize = 14.sp)
                                 
                                 // Visibility Toggle
-                                IconButton(onClick = { onUpdateVisibility(item.id, !item.isVisible) }, modifier = Modifier.size(32.dp)) {
+                                IconButton(onClick = { onUpdateVisibility(item.id, !item.isVisible) }, modifier = Modifier.size(48.dp)) {
                                     Icon(
                                         if (item.isVisible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff, 
                                         contentDescription = "Toggle Visibility",
@@ -245,7 +245,7 @@ fun LayerManagementPanel(
                                 }
                                 
                                 // Lock Toggle
-                                IconButton(onClick = { onUpdateLock(item.id, !item.isLocked) }, modifier = Modifier.size(32.dp)) {
+                                IconButton(onClick = { onUpdateLock(item.id, !item.isLocked) }, modifier = Modifier.size(48.dp)) {
                                     Icon(
                                         if (item.isLocked) Icons.Filled.Lock else Icons.Filled.LockOpen, 
                                         contentDescription = "Toggle Lock",

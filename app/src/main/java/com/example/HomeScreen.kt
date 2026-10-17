@@ -52,6 +52,7 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
     var searchQuery by remember { mutableStateOf("") }
     var selectedProject by remember { mutableStateOf<ProjectEntity?>(null) }
     var showBottomSheet by remember { mutableStateOf(false) }
+    var projectPendingDeletion by remember { mutableStateOf<ProjectEntity?>(null) }
 
     val folders by projectViewModel.foldersState.collectAsState(initial = emptyList())
     var currentFolderId by remember { mutableStateOf<String?>(null) }
@@ -120,6 +121,33 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
             dismissButton = {
                 TextButton(onClick = { showCrashRecovery = false }) {
                     Text("Dismiss")
+                }
+            }
+        )
+    }
+
+    projectPendingDeletion?.let { projectToDelete ->
+        AlertDialog(
+            onDismissRequest = { projectPendingDeletion = null },
+            icon = { Icon(Icons.Filled.Delete, contentDescription = null) },
+            title = { Text("Delete project?") },
+            text = {
+                Text("Delete \"${projectToDelete.name}\" and its Clipp-owned project files? This cannot be undone.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        projectViewModel.deleteProject(projectToDelete)
+                        if (selectedProject?.id == projectToDelete.id) selectedProject = null
+                        projectPendingDeletion = null
+                    }
+                ) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { projectPendingDeletion = null }) {
+                    Text("Cancel")
                 }
             }
         )
@@ -485,7 +513,7 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
 
                     item {
                         BottomSheetItem(icon = Icons.Filled.Delete, text = "Delete", isDestructive = true) {
-                            projectViewModel.deleteProject(selectedProject!!)
+                            projectPendingDeletion = selectedProject
                             showBottomSheet = false
                         }
                     }
