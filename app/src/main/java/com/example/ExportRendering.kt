@@ -31,6 +31,7 @@ import androidx.media3.effect.ScaleAndRotateTransformation
 import androidx.media3.effect.TextureOverlay
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -793,7 +794,9 @@ private class ShakeTransformation(
 private data class LayerMotion(
     val alpha: Float = 1f,
     val scale: Float = 1f,
-    val rotationDegrees: Float = 0f
+    val rotationDegrees: Float = 0f,
+    val offsetX: Float = 0f,
+    val offsetY: Float = 0f
 )
 
 private fun easedProgress(value: Float): Float = sin(value.coerceIn(0f, 1f) * PI.toFloat() / 2f)
@@ -814,6 +817,8 @@ private fun textLayerMotion(
     var alpha = 1f
     var scale = 1f
     var rotation = 0f
+    var offsetX = 0f
+    var offsetY = 0f
     val inDelay = animInDelayMs.coerceAtLeast(0L)
     val inDuration = animInDurationMs.coerceAtLeast(1L)
 
@@ -824,9 +829,33 @@ private fun textLayerMotion(
             val ease = easedProgress(progress)
             when (animIn) {
                 TextAnimIn.FADE_IN -> alpha = ease
+                TextAnimIn.SLIDE_IN_UP -> {
+                    alpha = ease
+                    offsetY += (1f - ease) * 0.5f
+                }
+                TextAnimIn.SLIDE_IN_DOWN -> {
+                    alpha = ease
+                    offsetY -= (1f - ease) * 0.5f
+                }
+                TextAnimIn.SLIDE_IN_LEFT -> {
+                    alpha = ease
+                    offsetX += (1f - ease) * 0.5f
+                }
+                TextAnimIn.SLIDE_IN_RIGHT -> {
+                    alpha = ease
+                    offsetX -= (1f - ease) * 0.5f
+                }
                 TextAnimIn.SCALE_IN -> {
                     alpha = ease
                     scale *= ease.coerceAtLeast(0.001f)
+                }
+                TextAnimIn.BOUNCE_IN -> {
+                    val bounce = if (progress < 0.5f) {
+                        4f * progress * progress * progress
+                    } else {
+                        1f - Math.pow((-2f * progress + 2f).toDouble(), 3.0).toFloat() / 2f
+                    }
+                    scale *= bounce.coerceAtLeast(0.001f)
                 }
                 TextAnimIn.ROTATE_IN -> {
                     alpha = ease
@@ -847,8 +876,16 @@ private fun textLayerMotion(
         val loopProgress = ((relativeTimeMs - loopStartsAt) % animLoopDurationMs).toFloat() / animLoopDurationMs
         when (animLoop) {
             TextAnimLoop.PULSE -> scale *= 1f + 0.1f * sin(loopProgress * PI.toFloat() * 2f)
+            TextAnimLoop.BOUNCE -> offsetY -= 0.05f * sin(loopProgress * PI.toFloat())
+            TextAnimLoop.SHAKE -> if (loopProgress < 0.2f) {
+                offsetX += 0.02f * sin(loopProgress * PI.toFloat() * 10f)
+            }
             TextAnimLoop.WAVE -> rotation += 5f * sin(loopProgress * PI.toFloat() * 2f)
             TextAnimLoop.SWING -> rotation += 15f * sin(loopProgress * PI.toFloat() * 2f)
+            TextAnimLoop.FLOAT -> {
+                offsetY += 0.02f * sin(loopProgress * PI.toFloat() * 2f)
+                offsetX += 0.01f * cos(loopProgress * PI.toFloat() * 2f)
+            }
             else -> Unit
         }
     }
@@ -861,17 +898,44 @@ private fun textLayerMotion(
         val outDuration = animOutDurationMs.coerceAtLeast(1L)
         val progress = ((relativeTimeMs - exitStart - outDelay).toFloat() / outDuration).coerceIn(0f, 1f)
         val inverseEase = 1f - easedProgress(progress)
+        val ease = 1f - inverseEase
         when (animOut) {
             TextAnimOut.FADE_OUT -> alpha *= inverseEase
+            TextAnimOut.SLIDE_OUT_UP -> {
+                alpha *= inverseEase
+                offsetY -= ease * 0.5f
+            }
+            TextAnimOut.SLIDE_OUT_DOWN -> {
+                alpha *= inverseEase
+                offsetY += ease * 0.5f
+            }
+            TextAnimOut.SLIDE_OUT_LEFT -> {
+                alpha *= inverseEase
+                offsetX -= ease * 0.5f
+            }
+            TextAnimOut.SLIDE_OUT_RIGHT -> {
+                alpha *= inverseEase
+                offsetX += ease * 0.5f
+            }
             TextAnimOut.SCALE_OUT -> {
                 alpha *= inverseEase
                 scale *= inverseEase.coerceAtLeast(0.001f)
+            }
+            TextAnimOut.BOUNCE_OUT -> {
+                scale *= inverseEase.coerceAtLeast(0.001f)
+                offsetY += ease * 0.2f
             }
             else -> Unit
         }
     }
 
-    return LayerMotion(alpha = alpha.coerceIn(0f, 1f), scale = scale, rotationDegrees = rotation)
+    return LayerMotion(
+        alpha = alpha.coerceIn(0f, 1f),
+        scale = scale,
+        rotationDegrees = rotation,
+        offsetX = offsetX,
+        offsetY = offsetY
+    )
 }
 
 private fun overlaySettings(
@@ -1438,8 +1502,8 @@ private fun buildTextSettings(text: TextOverlay, globalTimeMs: Long): OverlaySet
         animOutDelayMs = text.animOutDelayMs
     )
     return overlaySettings(
-        posX = text.keyframes.getValueAtTime("posX", relative, text.posX),
-        posY = text.keyframes.getValueAtTime("posY", relative, text.posY),
+        posX = text.keyframes.getValueAtTime("posX", relative, text.posX) + motion.offsetX,
+        posY = text.keyframes.getValueAtTime("posY", relative, text.posY) + motion.offsetY,
         scaleX = 0.55f * text.keyframes.getValueAtTime("scale", relative, text.scale) * motion.scale,
         scaleY = 0.55f * text.keyframes.getValueAtTime("scale", relative, text.scale) * motion.scale,
         rotation = text.keyframes.getValueAtTime("rotation", relative, text.rotation) + motion.rotationDegrees,
@@ -1463,8 +1527,8 @@ private fun buildStickerSettings(sticker: StickerOverlay, globalTimeMs: Long): O
         animOutDelayMs = sticker.animOutDelayMs
     )
     return overlaySettings(
-        posX = sticker.keyframes.getValueAtTime("posX", relative, sticker.posX),
-        posY = sticker.keyframes.getValueAtTime("posY", relative, sticker.posY),
+        posX = sticker.keyframes.getValueAtTime("posX", relative, sticker.posX) + motion.offsetX,
+        posY = sticker.keyframes.getValueAtTime("posY", relative, sticker.posY) + motion.offsetY,
         scaleX = 0.28f * sticker.keyframes.getValueAtTime("scale", relative, sticker.scale) * motion.scale,
         scaleY = 0.28f * sticker.keyframes.getValueAtTime("scale", relative, sticker.scale) * motion.scale,
         rotation = sticker.keyframes.getValueAtTime("rotation", relative, sticker.rotation) + motion.rotationDegrees,

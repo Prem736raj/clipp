@@ -85,19 +85,32 @@ internal object FeatureCapabilityRegistry {
     internal val exportSupportedTextAnimIn = setOf(
         TextAnimIn.NONE,
         TextAnimIn.FADE_IN,
+        TextAnimIn.SLIDE_IN_UP,
+        TextAnimIn.SLIDE_IN_DOWN,
+        TextAnimIn.SLIDE_IN_LEFT,
+        TextAnimIn.SLIDE_IN_RIGHT,
         TextAnimIn.SCALE_IN,
+        TextAnimIn.BOUNCE_IN,
         TextAnimIn.ROTATE_IN
     )
     internal val exportSupportedTextAnimLoop = setOf(
         TextAnimLoop.NONE,
         TextAnimLoop.PULSE,
+        TextAnimLoop.BOUNCE,
+        TextAnimLoop.SHAKE,
         TextAnimLoop.WAVE,
-        TextAnimLoop.SWING
+        TextAnimLoop.SWING,
+        TextAnimLoop.FLOAT
     )
     internal val exportSupportedTextAnimOut = setOf(
         TextAnimOut.NONE,
         TextAnimOut.FADE_OUT,
-        TextAnimOut.SCALE_OUT
+        TextAnimOut.SLIDE_OUT_UP,
+        TextAnimOut.SLIDE_OUT_DOWN,
+        TextAnimOut.SLIDE_OUT_LEFT,
+        TextAnimOut.SLIDE_OUT_RIGHT,
+        TextAnimOut.SCALE_OUT,
+        TextAnimOut.BOUNCE_OUT
     )
 
     /** The small, honest launch matrix shown on the export surface. */

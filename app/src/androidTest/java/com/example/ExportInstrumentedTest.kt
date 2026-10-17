@@ -816,9 +816,9 @@ class ExportInstrumentedTest {
                     text = "Animated",
                     durationMs = 1_000L,
                     posY = 0.35f,
-                    animIn = TextAnimIn.FADE_IN,
-                    animLoop = TextAnimLoop.PULSE,
-                    animOut = TextAnimOut.SCALE_OUT
+                    animIn = TextAnimIn.SLIDE_IN_LEFT,
+                    animLoop = TextAnimLoop.FLOAT,
+                    animOut = TextAnimOut.SLIDE_OUT_RIGHT
                 )
             ),
             stickers = listOf(
@@ -829,9 +829,9 @@ class ExportInstrumentedTest {
                     durationMs = 1_000L,
                     posX = 0.2f,
                     posY = 0.75f,
-                    animIn = TextAnimIn.ROTATE_IN,
-                    animLoop = TextAnimLoop.SWING,
-                    animOut = TextAnimOut.FADE_OUT
+                    animIn = TextAnimIn.BOUNCE_IN,
+                    animLoop = TextAnimLoop.SHAKE,
+                    animOut = TextAnimOut.BOUNCE_OUT
                 )
             ),
             overlays = listOf(

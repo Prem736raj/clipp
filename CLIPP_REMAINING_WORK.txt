@@ -156,11 +156,13 @@ REMAINING WORK - PRIORITY 1: EDITOR/RENDERER FEATURES
       effects with deterministic, exportable renderers. Do not expose a
       preview-only effect as export-ready.
 
-[OPEN] 3. Advanced text and sticker parity.
-      Implement export-parity for slide, typewriter, blur/glitch/bounce and
-      other currently preview-only text/sticker animations. Add full overlay
-      border/shadow behavior and real 3D-text depth if those controls remain
-      in the product.
+[PARTIAL / DETERMINISTIC TRANSFORMS VERIFIED] 3. Advanced text and sticker parity.
+      Slide entrances/exits, bounce entrance/exit, bounce/shake/float loops,
+      plus the previously supported fade/scale/rotate/pulse/wave/swing set now
+      export through the same normalized transform timing used by preview and
+      have an API 34 MP4 regression. Typewriter, blur/glow, flicker/glitch,
+      dissolve/blur-out, full overlay border/shadow behavior, and real 3D-text
+      depth remain gated until deterministic export implementations exist.
 
 [OPEN] 4. Advanced transition support.
       Extend transition timing and compositor coverage to speed-curved clips,
@@ -301,7 +303,8 @@ Export-ready today (implementation status):
 Coming later or still gated:
 - Noise reduction, voice changer, and audio-speed automation.
 - Oil-painting and other currently unimplemented advanced visual effects.
-- Advanced text/sticker animation, 3D text, border/shadow parity.
+- Dynamic text/sticker bitmap/shader animation (typewriter, blur/glow,
+  flicker/glitch/dissolve), 3D text, and border/shadow parity.
 - Transitions on speed-curved clips and any unsupported source combination.
 - Automatic captions, TTS, AI editing, cloud/accounts, billing, and remote
   templates.

@@ -594,7 +594,20 @@ class ExampleUnitTest {
 
     assertFalse(EditorState(clips = listOf(clip), texts = listOf(text), stickers = listOf(sticker), overlays = listOf(imageOverlay)).hasUnsupportedExportEdits())
     assertFalse(EditorState(clips = listOf(clip), overlays = listOf(imageOverlay.copy(isPhoto = false, isGif = true))).hasUnsupportedExportEdits())
+    assertFalse(EditorState(clips = listOf(clip), texts = listOf(text.copy(animIn = TextAnimIn.SLIDE_IN_LEFT))).hasUnsupportedExportEdits())
+    assertFalse(EditorState(clips = listOf(clip), texts = listOf(text.copy(animIn = TextAnimIn.BOUNCE_IN))).hasUnsupportedExportEdits())
+    assertFalse(EditorState(clips = listOf(clip), stickers = listOf(sticker.copy(animLoop = TextAnimLoop.BOUNCE))).hasUnsupportedExportEdits())
+    assertFalse(EditorState(clips = listOf(clip), stickers = listOf(sticker.copy(animLoop = TextAnimLoop.SHAKE))).hasUnsupportedExportEdits())
+    assertFalse(EditorState(clips = listOf(clip), stickers = listOf(sticker.copy(animLoop = TextAnimLoop.FLOAT))).hasUnsupportedExportEdits())
+    assertFalse(EditorState(clips = listOf(clip), texts = listOf(text.copy(animOut = TextAnimOut.SLIDE_OUT_RIGHT))).hasUnsupportedExportEdits())
+    assertFalse(EditorState(clips = listOf(clip), texts = listOf(text.copy(animOut = TextAnimOut.BOUNCE_OUT))).hasUnsupportedExportEdits())
     assertTrue(EditorState(clips = listOf(clip), texts = listOf(text.copy(animIn = TextAnimIn.TYPEWRITER))).hasUnsupportedExportEdits())
+    assertTrue(EditorState(clips = listOf(clip), texts = listOf(text.copy(animIn = TextAnimIn.BLUR_IN))).hasUnsupportedExportEdits())
+    assertTrue(EditorState(clips = listOf(clip), texts = listOf(text.copy(animIn = TextAnimIn.GLITCH_IN))).hasUnsupportedExportEdits())
+    assertTrue(EditorState(clips = listOf(clip), stickers = listOf(sticker.copy(animLoop = TextAnimLoop.GLOW))).hasUnsupportedExportEdits())
+    assertTrue(EditorState(clips = listOf(clip), stickers = listOf(sticker.copy(animLoop = TextAnimLoop.FLICKER))).hasUnsupportedExportEdits())
+    assertTrue(EditorState(clips = listOf(clip), texts = listOf(text.copy(animOut = TextAnimOut.DISSOLVE))).hasUnsupportedExportEdits())
+    assertTrue(EditorState(clips = listOf(clip), texts = listOf(text.copy(animOut = TextAnimOut.BLUR_OUT))).hasUnsupportedExportEdits())
     assertFalse(EditorState(clips = listOf(clip), overlays = listOf(imageOverlay.copy(entranceAnim = OverlayAnim.SLIDE))).hasUnsupportedExportEdits())
   }
 
