@@ -69,6 +69,32 @@ class ExportInstrumentedTest {
     }
 
     @Test
+    fun corruptNonEmptyPrimarySourceIsBlockedBeforeTransformerStarts() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val corrupt = File.createTempFile("clipp-corrupt-primary-", ".mp4", context.cacheDir).apply {
+            writeBytes("this is not a valid video container".toByteArray())
+        }
+        val before = exportTempFiles(context)
+        val exporter = VideoExporter(context)
+        val clip = MediaClip(
+            sourceUri = Uri.fromFile(corrupt).toString(),
+            originalDurationMs = 1_000L,
+            trimEndMs = 1_000L,
+            isPhoto = false
+        )
+
+        try {
+            val result = awaitExport(exporter, listOf(clip), "Clipp_corrupt_primary.mp4")
+            assertNull(result.uri)
+            assertTrue(result.error.orEmpty().contains("corrupt or unsupported", ignoreCase = true))
+            assertEquals(before, exportTempFiles(context))
+        } finally {
+            exporter.close()
+            corrupt.delete()
+        }
+    }
+
+    @Test
     fun missingVisibleOverlayIsBlockedBeforeTransformerStarts() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val base = File.createTempFile("clipp-preflight-overlay-base-", ".png", context.cacheDir)

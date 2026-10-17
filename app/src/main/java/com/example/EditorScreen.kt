@@ -1261,7 +1261,11 @@ fun EditorScreen(
                             applyEditorStateSnapshot(restoredState)
                         }
                     }
-                } catch (e: Exception) { e.printStackTrace() }
+                } catch (e: Exception) {
+                    if (BuildConfig.DEBUG) {
+                        android.util.Log.e("ClippEditor", "Could not restore project history", e)
+                    }
+                }
             }
             
             // Opening a project is not an edit. Keep the persisted dirty flag so

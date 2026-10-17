@@ -4,7 +4,7 @@ Report date: 2026-10-17
 Repository: https://github.com/Prem736raj/clipp
 Checkout: P:\Projects\clipp
 Branch: main
-Implementation baseline reviewed: Phase 6 working tree based on c842054
+Implementation baseline reviewed: Phase 10 working tree based on Phase 9 commit 297c070
 
 EXECUTIVE ANSWER
 ----------------
@@ -73,18 +73,20 @@ IMPORTANT VALIDATION LIMIT
 ---------------------------
 The current renderer/export branch has passed the JVM suite and the API 34
 connected Android regression suite, including real MP4 export checks. This is
-emulator evidence only. Phase 6 also passes an 8-second layered export with
-three clips, a timed visual effect, an image overlay, and separate audio.
-Physical-device coverage, the broader Android/API/GPU/codec matrix, truly long
-exports, and real-user workflow QA remain open.
+emulator evidence only. Phase 10 also verifies corrupt/unsupported media is
+blocked before export startup and adds safe app-owned orphan cleanup. The
+8-second layered export with three clips, a timed visual effect, an image
+overlay, and separate audio remains covered. Physical-device coverage, the
+broader Android/API/GPU/codec matrix, truly long exports, and real-user
+workflow QA remain open.
 
 REMAINING WORK - PRIORITY 0: RELEASE BLOCKERS
 ----------------------------------------------
 These must be completed before calling the app production-ready:
 
 [CURRENT SUITE PASS / RE-RUN AFTER FUTURE CHANGES] 1. Run current automated tests after the latest renderer changes.
-      On 2026-10-17 the current debug JVM suite passed 59/59 and the API 34
-      connected Android suite passed 28/28 on the audit34 emulator. Re-run both
+      On 2026-10-17 the current debug JVM suite passed 65/65 and the API 34
+      connected Android suite passed 31/31 on the audit34 emulator. Re-run both
       suites after future renderer/export changes and fix any regressions.
 
 [PARTIAL / API 34 EMULATOR PASS] 2. Run real export QA on physical/emulated devices.
@@ -126,8 +128,9 @@ These must be completed before calling the app production-ready:
       stale temp output and an immediate retry succeeds. The editor now exposes
       an interactive relink flow for restored history and legacy path-only
       projects. Project deletion now requires confirmation, sharing carries a
-      robust URI read grant, and microphone denial has retry/settings recovery.
-      Physical-device relink/document-provider UX, storage-full, corrupt-media,
+      robust URI read grant, microphone denial has retry/settings recovery, and
+      corrupt-but-readable media is rejected before a temporary export starts.
+      Physical-device relink/document-provider UX, storage-full behavior,
       theme/back-navigation, and broader end-to-end workflow coverage remain open.
 
 [PARTIAL / PRIMARY TOUCH-TARGET + ERROR-RECOVERY HARDENING] 6. Complete accessibility and UX QA.
@@ -137,10 +140,15 @@ These must be completed before calling the app production-ready:
       meet a 48dp touch target and microphone denial is actionable; full TalkBack,
       contrast, font-scaling, keyboard/back, and physical-device UX QA remains.
 
-[OPEN] 7. Finish privacy, dependency, security, and Play checks.
+[PARTIAL / LOCAL MANIFEST + LOGGING AUDIT] 7. Finish privacy, dependency, security, and Play checks.
       Reconcile the manifest, privacy policy, Data Safety form, SDK behavior,
       network endpoints, logging, permissions, dependency vulnerabilities,
-      store assets, content rating, and Play pre-launch report.
+      store assets, content rating, and Play pre-launch report. The local audit
+      confirms backup remains disabled, the FileProvider is non-exported, and
+      RECORD_AUDIO is the only declared runtime permission. Previously
+      unconditional stack traces in reviewed user workflows are now debug-only.
+      Dependency vulnerability scanning, policy/privacy reconciliation, store
+      assets/content rating, and Play pre-launch review remain open.
 
 REMAINING WORK - PRIORITY 1: EDITOR/RENDERER FEATURES
 -------------------------------------------------------
@@ -278,10 +286,14 @@ REMAINING WORK - PRIORITY 3: ENGINEERING QUALITY
       and bitmap pressure, tune export memory, and fix frame-time/OOM issues
       found by measurement.
 
-[OPEN] 3. Storage and project-file audit.
+[PARTIAL / SAFE ORPHAN CLEANUP + OWNED-FILE ACCOUNTING] 3. Storage and project-file audit.
       Verify cache/project/voiceover/temp/thumbnail accounting, orphan cleanup,
       export cleanup, migration recovery, and safe deletion of app-owned files
-      without touching original gallery media.
+      without touching original gallery media. Phase 10 adds an explicit cleanup
+      path restricted to known Clipp-owned directories plus stale export temp
+      MP4s. Automated tests verify referenced owned files, unrelated cache files,
+      and external media are preserved while orphaned owned files are deleted.
+      Migration recovery and broader device/storage-pressure validation remain open.
 
 [OPEN] 4. Test-suite expansion.
       Add critical timeline, migration, repository, URI, export-model, data
@@ -317,9 +329,10 @@ FINAL RELEASE DECISION
 ----------------------
 Do not label the current app production-ready yet. A debug build passing is
 only one release signal. The current automated API 34 suite covers export,
-missing-media relink, and cancel/retry regressions, but physical-device/device-
-matrix QA plus the signed release, accessibility, security, Play Store, and
-remaining real-user workflow gates are still open.
+missing-media relink, cancel/retry, and corrupt-media preflight regressions,
+but physical-device/device-matrix QA plus the signed release, full accessibility,
+dependency/policy security review, Play Store, and remaining real-user workflow
+gates are still open.
 
 Recommended launch strategy:
 1. Ship a narrow, honest, account-free local v1 after Priority 0 is closed.

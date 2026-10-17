@@ -1,6 +1,8 @@
 package com.example
 
 import android.content.Context
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.net.Uri
 import java.io.File
 
@@ -12,7 +14,8 @@ internal enum class ExportSourceKind {
 
 internal data class ExportSourceReference(
     val uri: String,
-    val kind: ExportSourceKind
+    val kind: ExportSourceKind,
+    val expectsImage: Boolean? = null
 )
 
 internal data class ExportSourcePlan(
@@ -29,7 +32,11 @@ internal fun EditorState.exportSourcePlan(): ExportSourcePlan {
                 blockingReason = "A source clip is missing or no longer readable. Re-link it and try again."
             )
         }
-        references += ExportSourceReference(clip.sourceUri, ExportSourceKind.PRIMARY_CLIP)
+        references += ExportSourceReference(
+            clip.sourceUri,
+            ExportSourceKind.PRIMARY_CLIP,
+            expectsImage = clip.isPhoto
+        )
     }
 
     overlays
@@ -41,7 +48,11 @@ internal fun EditorState.exportSourcePlan(): ExportSourcePlan {
                     blockingReason = "An overlay source is missing or no longer readable. Re-link it and try again."
                 )
             }
-            references += ExportSourceReference(overlay.sourceUri, ExportSourceKind.OVERLAY)
+            references += ExportSourceReference(
+                overlay.sourceUri,
+                ExportSourceKind.OVERLAY,
+                expectsImage = overlay.isPhoto || overlay.isGif
+            )
         }
 
     val projectDurationMs = clips.sumOf { it.durationMs }
@@ -65,19 +76,67 @@ internal fun EditorState.exportSourcePlan(): ExportSourcePlan {
     return ExportSourcePlan(references.distinct())
 }
 
-internal fun EditorState.exportSourceBlockingReason(context: Context): String? {
+internal suspend fun EditorState.exportSourceBlockingReason(context: Context): String? {
     val plan = exportSourcePlan()
     plan.blockingReason?.let { return it }
-    val unreadable = plan.references.firstOrNull { !isExportSourceReadable(context, it.uri) } ?: return null
-    return when (unreadable.kind) {
+    val unreadable = plan.references.firstOrNull { !isExportSourceReadable(context, it.uri) }
+    if (unreadable != null) {
+        return when (unreadable.kind) {
+            ExportSourceKind.PRIMARY_CLIP ->
+                "A source clip is missing or no longer readable. Re-link it and try again."
+            ExportSourceKind.OVERLAY ->
+                "An overlay source is missing or no longer readable. Re-link it and try again."
+            ExportSourceKind.AUDIO ->
+                "An audio source is missing or no longer readable. Re-link it and try again."
+        }
+    }
+
+    val invalid = plan.references.firstOrNull { !isExportSourceDecodable(context, it) } ?: return null
+    return when (invalid.kind) {
         ExportSourceKind.PRIMARY_CLIP ->
-            "A source clip is missing or no longer readable. Re-link it and try again."
+            "A source clip is corrupt or unsupported. Replace or re-link it and try again."
         ExportSourceKind.OVERLAY ->
-            "An overlay source is missing or no longer readable. Re-link it and try again."
+            "An overlay source is corrupt or unsupported. Replace or re-link it and try again."
         ExportSourceKind.AUDIO ->
-            "An audio source is missing or no longer readable. Re-link it and try again."
+            "An audio source is corrupt, unsupported, or contains no audio track. Replace or re-link it and try again."
     }
 }
+
+private suspend fun isExportSourceDecodable(
+    context: Context,
+    reference: ExportSourceReference
+): Boolean {
+    val uri = Uri.parse(reference.uri)
+    return when (reference.kind) {
+        ExportSourceKind.AUDIO -> hasAudioTrack(context, uri)
+        ExportSourceKind.PRIMARY_CLIP, ExportSourceKind.OVERLAY -> {
+            val metadata = MediaMetadataReader.read(context, uri) ?: return false
+            when (reference.expectsImage) {
+                true -> metadata.mimeType.startsWith("image/")
+                false -> metadata.mimeType.startsWith("video/")
+                null -> true
+            }
+        }
+    }
+}
+
+private fun hasAudioTrack(context: Context, uri: Uri): Boolean = runCatching {
+    val extractor = MediaExtractor()
+    try {
+        if (uri.scheme == "file" && !uri.path.isNullOrBlank()) {
+            extractor.setDataSource(uri.path!!)
+        } else {
+            extractor.setDataSource(context, uri, null)
+        }
+        (0 until extractor.trackCount).any { index ->
+            extractor.getTrackFormat(index)
+                .getString(MediaFormat.KEY_MIME)
+                ?.startsWith("audio/") == true
+        }
+    } finally {
+        extractor.release()
+    }
+}.getOrDefault(false)
 
 private fun isExportSourceReadable(context: Context, sourceUri: String): Boolean {
     return runCatching {

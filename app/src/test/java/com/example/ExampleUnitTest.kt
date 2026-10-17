@@ -1304,7 +1304,11 @@ class ExampleUnitTest {
     assertNull(plan.blockingReason)
     assertTrue(
       plan.references.contains(
-        ExportSourceReference(clip.sourceUri, ExportSourceKind.PRIMARY_CLIP)
+        ExportSourceReference(
+          clip.sourceUri,
+          ExportSourceKind.PRIMARY_CLIP,
+          expectsImage = false
+        )
       )
     )
     assertTrue(
