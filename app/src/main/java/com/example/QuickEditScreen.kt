@@ -16,17 +16,24 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.RotateLeft
+import androidx.compose.material.icons.automirrored.filled.RotateRight
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Flip
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -43,6 +50,59 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlin.math.max
+import kotlin.math.min
+
+internal const val QUICK_TRIM_MIN_DURATION_MS = 250L
+internal val QUICK_EDIT_SPEED_PRESETS = listOf(0.5f, 1f, 1.5f, 2f)
+
+internal data class QuickTrimSelection(
+    val startMs: Long,
+    val endMs: Long
+) {
+    val durationMs: Long get() = (endMs - startMs).coerceAtLeast(0L)
+}
+
+internal fun normalizeQuickTrimSelection(
+    durationMs: Long,
+    requestedStartMs: Long,
+    requestedEndMs: Long,
+    minimumDurationMs: Long = QUICK_TRIM_MIN_DURATION_MS
+): QuickTrimSelection {
+    val safeDurationMs = durationMs.coerceAtLeast(0L)
+    if (safeDurationMs == 0L) return QuickTrimSelection(0L, 0L)
+
+    val safeMinimumMs = minimumDurationMs
+        .coerceAtLeast(1L)
+        .coerceAtMost(safeDurationMs)
+    val clampedStartMs = requestedStartMs.coerceIn(0L, safeDurationMs)
+    val clampedEndMs = requestedEndMs.coerceIn(0L, safeDurationMs)
+    var startMs = min(clampedStartMs, clampedEndMs)
+    var endMs = max(clampedStartMs, clampedEndMs)
+
+    if (endMs - startMs < safeMinimumMs) {
+        if (startMs + safeMinimumMs <= safeDurationMs) {
+            endMs = startMs + safeMinimumMs
+        } else {
+            startMs = (safeDurationMs - safeMinimumMs).coerceAtLeast(0L)
+            endMs = safeDurationMs
+        }
+    }
+
+    return QuickTrimSelection(startMs, endMs)
+}
+
+internal fun normalizeQuickRotation(rotation: Float): Float {
+    val normalized = rotation % 360f
+    return if (normalized < 0f) normalized + 360f else normalized
+}
+
+internal fun quickEditOutputDurationMs(sourceDurationMs: Long, playbackSpeed: Float): Long {
+    val safeDurationMs = sourceDurationMs.coerceAtLeast(0L)
+    val safeSpeed = playbackSpeed.takeIf { it.isFinite() }?.coerceIn(0.1f, 10f) ?: 1f
+    if (safeDurationMs == 0L) return 0L
+    return (safeDurationMs / safeSpeed).toLong().coerceAtLeast(1L)
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,6 +116,11 @@ fun QuickEditScreen(videoUri: String?, onClose: () -> Unit, onExportComplete: ()
     var outputUri by remember { mutableStateOf<Uri?>(null) }
     var outputMetadata by remember { mutableStateOf<ExportMetadata?>(null) }
     var activeExportHandle by remember { mutableStateOf<ExportHandle?>(null) }
+    var trimSelection by remember { mutableStateOf(QuickTrimSelection(0L, 0L)) }
+    var muteOriginalAudio by remember { mutableStateOf(false) }
+    var playbackSpeed by remember { mutableStateOf(1f) }
+    var rotation by remember { mutableStateOf(0f) }
+    var mirrorHorizontal by remember { mutableStateOf(false) }
 
     DisposableEffect(exporter) {
         onDispose { exporter.close() }
@@ -77,6 +142,15 @@ fun QuickEditScreen(videoUri: String?, onClose: () -> Unit, onExportComplete: ()
                     originalDurationMs = metadata.durationMs,
                     trimEndMs = metadata.durationMs
                 )
+                trimSelection = normalizeQuickTrimSelection(
+                    durationMs = metadata.durationMs,
+                    requestedStartMs = 0L,
+                    requestedEndMs = metadata.durationMs
+                )
+                muteOriginalAudio = false
+                playbackSpeed = 1f
+                rotation = 0f
+                mirrorHorizontal = false
             }
         }
     }
@@ -136,6 +210,163 @@ fun QuickEditScreen(videoUri: String?, onClose: () -> Unit, onExportComplete: ()
                         Text(sourceError ?: "Opening video...", color = Color.White)
                     }
                 }
+
+                sourceClip?.let { clip ->
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text("Trim range", fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    "${formatQuickTrimTime(trimSelection.startMs)} – ${formatQuickTrimTime(trimSelection.endMs)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text(
+                                formatQuickTrimTime(quickEditOutputDurationMs(trimSelection.durationMs, playbackSpeed)),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+
+                        RangeSlider(
+                            value = trimSelection.startMs.toFloat()..trimSelection.endMs.toFloat(),
+                            onValueChange = { requestedRange ->
+                                trimSelection = normalizeQuickTrimSelection(
+                                    durationMs = clip.originalDurationMs,
+                                    requestedStartMs = requestedRange.start.toLong(),
+                                    requestedEndMs = requestedRange.endInclusive.toLong()
+                                )
+                            },
+                            valueRange = 0f..clip.originalDurationMs.toFloat().coerceAtLeast(1f),
+                            enabled = !isExporting
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.AutoMirrored.Filled.VolumeOff, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Column {
+                                    Text("Mute original audio")
+                                    Text(
+                                        "Export only the video track",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = muteOriginalAudio,
+                                onCheckedChange = { muteOriginalAudio = it },
+                                enabled = !isExporting
+                            )
+                        }
+
+                        Text("Speed", fontWeight = FontWeight.SemiBold)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            QUICK_EDIT_SPEED_PRESETS.forEach { speed ->
+                                OutlinedButton(
+                                    onClick = { playbackSpeed = speed },
+                                    modifier = Modifier.weight(1f),
+                                    enabled = !isExporting
+                                ) {
+                                    Text(
+                                        if (speed == 1f) "1×" else "${speed}×",
+                                        color = if (playbackSpeed == speed) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurface
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        Text("Transform", fontWeight = FontWeight.SemiBold)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { rotation = normalizeQuickRotation(rotation - 90f) },
+                                modifier = Modifier.weight(1f),
+                                enabled = !isExporting
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.RotateLeft, contentDescription = null)
+                                Spacer(Modifier.width(6.dp))
+                                Text("Left")
+                            }
+                            OutlinedButton(
+                                onClick = { rotation = normalizeQuickRotation(rotation + 90f) },
+                                modifier = Modifier.weight(1f),
+                                enabled = !isExporting
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.RotateRight, contentDescription = null)
+                                Spacer(Modifier.width(6.dp))
+                                Text("Right")
+                            }
+                            OutlinedButton(
+                                onClick = { mirrorHorizontal = !mirrorHorizontal },
+                                modifier = Modifier.weight(1f),
+                                enabled = !isExporting
+                            ) {
+                                Icon(Icons.Filled.Flip, contentDescription = null)
+                                Spacer(Modifier.width(6.dp))
+                                Text(if (mirrorHorizontal) "Mirrored" else "Mirror")
+                            }
+                        }
+
+                        if (rotation != 0f) {
+                            Text(
+                                "Rotation: ${rotation.toInt()}°",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        val isDefaultSelection = trimSelection.startMs == 0L &&
+                            trimSelection.endMs == clip.originalDurationMs &&
+                            !muteOriginalAudio &&
+                            playbackSpeed == 1f &&
+                            rotation == 0f &&
+                            !mirrorHorizontal
+                        if (!isDefaultSelection) {
+                            OutlinedButton(
+                                onClick = {
+                                    trimSelection = normalizeQuickTrimSelection(
+                                        durationMs = clip.originalDurationMs,
+                                        requestedStartMs = 0L,
+                                        requestedEndMs = clip.originalDurationMs
+                                    )
+                                    muteOriginalAudio = false
+                                    playbackSpeed = 1f
+                                    rotation = 0f
+                                    mirrorHorizontal = false
+                                },
+                                enabled = !isExporting
+                            ) {
+                                Icon(Icons.Filled.RestartAlt, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Reset edits")
+                            }
+                        }
+                    }
+                }
+
                 Surface(
                     color = MaterialTheme.colorScheme.secondaryContainer,
                     shape = RoundedCornerShape(12.dp),
@@ -145,7 +376,7 @@ fun QuickEditScreen(videoUri: String?, onClose: () -> Unit, onExportComplete: ()
                         Icon(Icons.Filled.Info, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            "Quick Edit currently exports the original video as a verified MP4. Trimming and visual tools will be enabled when their renderer is ready.",
+                            "Trim, change speed, rotate, mirror, or mute the original audio, then export a verified MP4.",
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
@@ -160,10 +391,22 @@ fun QuickEditScreen(videoUri: String?, onClose: () -> Unit, onExportComplete: ()
                 Button(
                     onClick = {
                         val clip = sourceClip ?: return@Button
+                        val trimmedClip = clip.copy(
+                            trimStartMs = trimSelection.startMs,
+                            trimEndMs = trimSelection.endMs,
+                            isMuted = muteOriginalAudio,
+                            playbackSpeed = playbackSpeed,
+                            rotation = rotation,
+                            flipHorizontal = mirrorHorizontal
+                        ).normalized()
+                        if (trimmedClip.durationMs <= 0L) {
+                            Toast.makeText(context, "Choose a valid trim range", Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
                         isExporting = true
                         progress = 0
                         activeExportHandle = exporter.export(
-                            clips = listOf(clip),
+                            clips = listOf(trimmedClip),
                             onProgress = { progress = it },
                             onSuccess = { uri, metadata ->
                                 isExporting = false
@@ -184,7 +427,7 @@ fun QuickEditScreen(videoUri: String?, onClose: () -> Unit, onExportComplete: ()
                 ) {
                     Icon(Icons.Filled.Download, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text(if (isExporting) "Rendering..." else "Export MP4")
+                    Text(if (isExporting) "Rendering..." else "Export Video")
                 }
                 OutlinedButton(
                     onClick = { if (isExporting) cancelExport() else onClose() },
@@ -200,4 +443,13 @@ fun QuickEditScreen(videoUri: String?, onClose: () -> Unit, onExportComplete: ()
             }
         }
     }
+}
+
+internal fun formatQuickTrimTime(durationMs: Long): String {
+    val safeMs = durationMs.coerceAtLeast(0L)
+    val totalSeconds = safeMs / 1_000L
+    val minutes = totalSeconds / 60L
+    val seconds = totalSeconds % 60L
+    val tenths = (safeMs % 1_000L) / 100L
+    return "%02d:%02d.%d".format(minutes, seconds, tenths)
 }

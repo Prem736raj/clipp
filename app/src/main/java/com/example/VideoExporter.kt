@@ -9,13 +9,20 @@ import android.provider.MediaStore
 import android.util.Log
 import androidx.core.content.FileProvider
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.audio.SonicAudioProcessor
 import androidx.media3.effect.SpeedChangeEffect
+import androidx.media3.effect.Presentation
 import androidx.media3.transformer.Composition
+import androidx.media3.transformer.Codec
+import androidx.media3.transformer.DefaultEncoderFactory
+import androidx.media3.transformer.EncoderSelector
+import androidx.media3.transformer.AudioEncoderSettings
+import androidx.media3.transformer.VideoEncoderSettings
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.Effects
@@ -36,6 +43,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import com.google.common.collect.ImmutableList
 import kotlin.math.PI
 import kotlin.math.pow
 import kotlin.math.roundToInt
@@ -160,7 +168,8 @@ class VideoExporter(context: Context) {
         editorState: EditorState = EditorState(clips = clips),
         onProgress: (Int) -> Unit,
         onSuccess: (Uri, ExportMetadata) -> Unit,
-        onError: (String) -> Unit
+        onError: (String) -> Unit,
+        exportSettings: ExportSettings? = null
     ): ExportHandle {
         val canceled = AtomicBoolean(false)
 
@@ -171,7 +180,7 @@ class VideoExporter(context: Context) {
             .copy(clips = clips)
             .toTimelineProject()
             .toEditorState()
-        val unsupportedReasons = canonicalState.exportUnsupportedReasons()
+        val unsupportedReasons = canonicalState.exportUnsupportedReasons(exportSettings)
         if (unsupportedReasons.isNotEmpty()) {
             onError("Export blocked: ${unsupportedReasons.joinToString(", ")}")
             return ExportHandle { canceled.set(true) }
@@ -184,6 +193,15 @@ class VideoExporter(context: Context) {
         startupJob?.cancel()
         startupJob = scope.launch {
             val sourceBlockingReason = withContext(Dispatchers.IO) {
+                exportSettings?.let { settings ->
+                    settings.validationError()?.let { return@withContext it }
+                    val dimensions = settings.dimensions(canonicalState.canvasSettings.aspectOption.ratio)
+                    val canEncode = runCatching {
+                        EncoderSelector.DEFAULT.selectEncoderInfos(MimeTypes.VIDEO_H264)
+                            .any { it.supportsExportSettings(settings, dimensions) }
+                    }.getOrDefault(false)
+                    if (!canEncode) return@withContext "These export settings are not supported by this device. Try a lower resolution, frame rate, or bitrate."
+                }
                 canonicalState.exportSourceBlockingReason(appContext)
             }
             if (canceled.get()) return@launch
@@ -202,7 +220,8 @@ class VideoExporter(context: Context) {
                     segment.toEditedMediaItem(
                         state = canonicalState,
                         clipIndex = index,
-                        clipStartMs = clipStartMs
+                        clipStartMs = clipStartMs,
+                        exportSettings = exportSettings
                     )?.let {
                         editedItems += it
                         clipStartMs += segment.durationMs
@@ -217,11 +236,41 @@ class VideoExporter(context: Context) {
 
             val sequences = mutableListOf(EditedMediaItemSequence(editedItems))
             sequences += buildAudioSequences(canonicalState, exportClips, clipStartMs)
-            val composition = Composition.Builder(sequences).build()
+            val compositionBuilder = Composition.Builder(sequences)
+            if (exportSettings != null) {
+                val dimensions = exportSettings.dimensions(canonicalState.canvasSettings.aspectOption.ratio)
+                compositionBuilder.setEffects(Effects(emptyList(), listOf(
+                    Presentation.createForWidthAndHeight(
+                        dimensions.width, dimensions.height, Presentation.LAYOUT_SCALE_TO_FIT
+                    ),
+                    ExportFrameRateEffect(exportSettings.frameRate)
+                )))
+            }
+            val composition = compositionBuilder.build()
 
-            val builtTransformer = Transformer.Builder(appContext)
+            val transformerBuilder = Transformer.Builder(appContext)
                 .setVideoMimeType(MimeTypes.VIDEO_H264)
                 .setAudioMimeType(MimeTypes.AUDIO_AAC)
+            if (exportSettings != null) {
+                val dimensions = exportSettings.dimensions(canonicalState.canvasSettings.aspectOption.ratio)
+                val encoderFactory: Codec.EncoderFactory = DefaultEncoderFactory.Builder(appContext)
+                        .setEnableFallback(false)
+                        .setVideoEncoderSelector { mimeType ->
+                            ImmutableList.copyOf(EncoderSelector.DEFAULT.selectEncoderInfos(mimeType)
+                                .filter { it.supportsExportSettings(exportSettings, dimensions) })
+                        }
+                        .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder()
+                            .setBitrate(exportSettings.videoBitrate).build())
+                        .setRequestedAudioEncoderSettings(AudioEncoderSettings.Builder()
+                            .setBitrate(EXPORT_AUDIO_BITRATE).build())
+                        .build()
+                transformerBuilder.setEncoderFactory(object : Codec.EncoderFactory by encoderFactory {
+                    override fun createForVideoEncoding(format: Format): Codec =
+                        encoderFactory.createForVideoEncoding(format.buildUpon()
+                            .setFrameRate(exportSettings.frameRate.toFloat()).build())
+                })
+            }
+            val builtTransformer = transformerBuilder
                 .setListener(object : Transformer.Listener {
                     override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                         progressJob?.cancel()
@@ -320,7 +369,8 @@ class VideoExporter(context: Context) {
     private fun MediaClip.toEditedMediaItem(
         state: EditorState,
         clipIndex: Int,
-        clipStartMs: Long
+        clipStartMs: Long,
+        exportSettings: ExportSettings? = null
     ): EditedMediaItem? {
         val normalized = normalized()
         if (normalized.sourceUri.isBlank()) return null
@@ -388,7 +438,7 @@ class VideoExporter(context: Context) {
         if (normalized.isPhoto) {
             editedItem
                 .setDurationUs(imageDurationMs * 1_000L)
-                .setFrameRate(30)
+                .setFrameRate(exportSettings?.frameRate ?: 30)
         }
         if (videoEffects.isNotEmpty() || audioProcessors.isNotEmpty()) {
             editedItem.setEffects(Effects(audioProcessors, videoEffects))

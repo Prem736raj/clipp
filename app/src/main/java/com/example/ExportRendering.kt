@@ -2045,7 +2045,7 @@ internal fun buildExportVideoEffects(
     return effects
 }
 
-internal fun EditorState.exportUnsupportedReasons(): List<String> {
+internal fun EditorState.exportUnsupportedReasons(exportSettings: ExportSettings? = null): List<String> {
     val reasons = mutableListOf<String>()
     clips.forEachIndexed { index, clip ->
         if (clip.hasUnsupportedExportEdits()) reasons += "an unsupported clip edit"
@@ -2145,7 +2145,9 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
         }) {
         reasons += "audio loop is too short for this project"
     }
-    if (canvasSettings.aspectOption != AspectRatioOption.R_16_9 ||
+    // Explicit quality exports apply a Presentation with the canvas dimensions.
+    // The legacy automatic path still has no custom-aspect renderer.
+    if ((exportSettings == null && canvasSettings.aspectOption != AspectRatioOption.R_16_9) ||
         canvasSettings.fitMode != FitMode.Fit ||
         canvasSettings.backgroundType != BackgroundType.Blur
     ) reasons += "custom canvas output"

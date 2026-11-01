@@ -24,6 +24,99 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class ExportInstrumentedTest {
     @Test
+    fun selectedQualityProducesPortraitMp4WithRequestedFrameRateAndAudio() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val source = File.createTempFile("clipp-quality-", ".png", context.cacheDir)
+        val audio = File.createTempFile("clipp-quality-", ".wav", context.cacheDir)
+        writeSolidPng(source, android.graphics.Color.BLUE)
+        writeMonoWav(audio, 2_000L)
+        val clip = MediaClip(sourceUri = Uri.fromFile(source).toString(),
+            originalDurationMs = 2_000L, trimEndMs = 2_000L, isPhoto = true)
+        val state = EditorState(
+            clips = listOf(clip),
+            canvasSettings = CanvasSettingsState(aspectOption = AspectRatioOption.R_9_16),
+            audioClips = listOf(AudioClip(sourceUri = Uri.fromFile(audio).toString(),
+                startTimeOnTimelineMs = 0L, sourceDurationMs = 2_000L, trimEndMs = 2_000L))
+        )
+        val settings = ExportSettings(ExportResolution.SD, 24, 2_000_000)
+        assertNull(inspectExportQualitySupport(state.canvasSettings.aspectOption.ratio).blockingReason(settings))
+        val exporter = VideoExporter(context)
+        var result: Outcome? = null
+        try {
+            result = awaitExport(exporter, listOf(clip), "Clipp_quality_portrait.mp4", state, settings)
+            assertSuccessful(result)
+            assertPublishedMp4(context, result, requireAudio = true)
+            assertVideoQuality(context, result.uri!!, settings.dimensions(9f / 16f), 24f)
+            assertFrameHasDominantColor(context, result, 500_000L, "blue")
+            assertFramePixelHasDominantColor(context, result, 500_000L, 0.5f, 0.03f, "black")
+        } finally {
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            source.delete()
+            audio.delete()
+        }
+    }
+
+    @Test
+    fun selectedFrameRateReducesVideoCadenceWithoutChangingDuration() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val source = File.createTempFile("clipp-quality-video-", ".png", context.cacheDir)
+        writeSolidPng(source, android.graphics.Color.RED)
+        val photo = MediaClip(sourceUri = Uri.fromFile(source).toString(),
+            originalDurationMs = 2_000L, trimEndMs = 2_000L, isPhoto = true)
+        val canvas = CanvasSettingsState(aspectOption = AspectRatioOption.R_1_1)
+        val sourceSettings = ExportSettings(ExportResolution.SD, 60, 2_000_000)
+        val targetSettings = sourceSettings.copy(frameRate = 24)
+        val exporter = VideoExporter(context)
+        var sourceResult: Outcome? = null
+        var result: Outcome? = null
+        var preservedResult: Outcome? = null
+        try {
+            sourceResult = awaitExport(exporter, listOf(photo), "Clipp_quality_60fps.mp4",
+                EditorState(clips = listOf(photo), canvasSettings = canvas), sourceSettings)
+            assertSuccessful(sourceResult)
+            assertVideoQuality(context, sourceResult.uri!!, ExportDimensions(480, 480), 60f)
+            val video = MediaClip(sourceUri = sourceResult.uri.toString(),
+                originalDurationMs = 2_000L, trimEndMs = 2_000L, isMuted = true)
+            result = awaitExport(exporter, listOf(video), "Clipp_quality_24fps.mp4",
+                EditorState(clips = listOf(video), canvasSettings = canvas), targetSettings)
+            assertSuccessful(result)
+            assertVideoQuality(context, result.uri!!, ExportDimensions(480, 480), 24f)
+            assertTrue("Frame rate conversion changed duration: ${result.metadata?.durationMs}",
+                result.metadata!!.durationMs in 1_900L..2_100L)
+            val lowerRateVideo = video.copy(sourceUri = result.uri.toString())
+            preservedResult = awaitExport(exporter, listOf(lowerRateVideo), "Clipp_quality_preserved.mp4",
+                EditorState(clips = listOf(lowerRateVideo), canvasSettings = canvas), sourceSettings)
+            assertSuccessful(preservedResult)
+            assertVideoQuality(context, preservedResult.uri!!, ExportDimensions(480, 480), 24f)
+        } finally {
+            preservedResult?.uri?.let { context.contentResolver.delete(it, null, null) }
+            result?.uri?.let { context.contentResolver.delete(it, null, null) }
+            sourceResult?.uri?.let { context.contentResolver.delete(it, null, null) }
+            exporter.close()
+            source.delete()
+        }
+    }
+
+    @Test
+    fun invalidExportQualityIsBlockedWithoutCreatingTemporaryOutput() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val before = exportTempFiles(context)
+        val exporter = VideoExporter(context)
+        val clip = MediaClip(sourceUri = "content://clipp/quality-validation",
+            originalDurationMs = 1_000L, trimEndMs = 1_000L, isPhoto = true)
+        try {
+            val result = awaitExport(exporter, listOf(clip), "Clipp_invalid_quality.mp4",
+                exportSettings = ExportSettings(frameRate = 120))
+            assertNull(result.uri)
+            assertTrue(result.error.orEmpty().contains("frame rate"))
+            assertEquals(before, exportTempFiles(context))
+        } finally {
+            exporter.close()
+        }
+    }
+
+    @Test
     fun deviceExportReadinessHasRequiredCodecsAndStorage() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val snapshot = captureExportDeviceSnapshot(context)
@@ -1510,7 +1603,8 @@ class ExportInstrumentedTest {
         exporter: VideoExporter,
         clips: List<MediaClip>,
         outputName: String,
-        editorState: EditorState = EditorState(clips = clips)
+        editorState: EditorState = EditorState(clips = clips),
+        exportSettings: ExportSettings? = null
     ): Outcome {
         val completed = CountDownLatch(1)
         val outcome = AtomicReference<Outcome>()
@@ -1519,6 +1613,7 @@ class ExportInstrumentedTest {
                 clips = clips,
                 outputName = outputName,
                 editorState = editorState,
+                exportSettings = exportSettings,
                 onProgress = {},
                 onSuccess = { uri, metadata ->
                     outcome.set(Outcome(uri = uri, metadata = metadata))
@@ -1532,6 +1627,46 @@ class ExportInstrumentedTest {
         }
         assertTrue("Export did not complete", completed.await(60, TimeUnit.SECONDS))
         return outcome.get() ?: error("Export completed without a result")
+    }
+
+    private fun assertVideoQuality(
+        context: android.content.Context,
+        uri: Uri,
+        dimensions: ExportDimensions,
+        frameRate: Float
+    ) {
+        val retriever = android.media.MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(context, uri)
+            val frame = retriever.getFrameAtTime(500_000L) ?: error("No decoded output frame")
+            try {
+                assertEquals(dimensions.width, frame.width)
+                assertEquals(dimensions.height, frame.height)
+            } finally {
+                frame.recycle()
+            }
+        } finally {
+            retriever.release()
+        }
+        val extractor = android.media.MediaExtractor()
+        try {
+            extractor.setDataSource(context, uri, null)
+            val track = (0 until extractor.trackCount).first {
+                extractor.getTrackFormat(it).getString(android.media.MediaFormat.KEY_MIME)?.startsWith("video/") == true
+            }
+            assertEquals("video/avc", extractor.getTrackFormat(track).getString(android.media.MediaFormat.KEY_MIME))
+            extractor.selectTrack(track)
+            val timestamps = mutableListOf<Long>()
+            while (extractor.sampleTime >= 0L) {
+                timestamps += extractor.sampleTime
+                if (!extractor.advance()) break
+            }
+            assertTrue("Not enough video frames", timestamps.size > 10)
+            val actualRate = (timestamps.size - 1) * 1_000_000f / (timestamps.last() - timestamps.first())
+            assertEquals("Incorrect MP4 sample cadence", frameRate, actualRate, 1.0f)
+        } finally {
+            extractor.release()
+        }
     }
 
     private fun exportTempFiles(context: android.content.Context): Set<String> {

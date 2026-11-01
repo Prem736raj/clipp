@@ -1,0 +1,20 @@
+{
+  "apk": "P:\\Projects\\clipp\\app\\build\\outputs\\apk\\debug\\app-debug.apk",
+  "bytes": 27925940,
+  "sha256": "8b74501cd833c595fbc884fcf6fe05abb9276b3fa47d383e1046fadaa7a7e37c",
+  "jvm": {
+    "tests": 79,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "final_live_editor": {
+    "tests": 3,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "existing_android_regressions_passed": 34,
+  "android_environment": "audit34, Android 14 / API 34, 360x800 / 160 dpi",
+  "note": "Unfiltered Android run:36/37; only restored-editor harness rewind selector failed. Corrected selector, final focused live-editor run:3/3. Same app APK; no production source changes between runs. Physical phone retest pending."
+}

@@ -28,22 +28,18 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+import com.example.data.FolderEntity
 import com.example.data.ProjectEntity
 import com.example.data.ProjectStorage
 import com.example.viewmodel.ProjectViewModel
-
-private fun durationLabelToMs(label: String): Long {
-    val parts = label.split(":")
-    if (parts.size != 2) return 0L
-    val minutes = parts[0].toLongOrNull() ?: return 0L
-    val seconds = parts[1].toLongOrNull() ?: return 0L
-    return (minutes * 60L + seconds.coerceIn(0L, 59L)) * 1000L
-}
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, onProjectClick: (String) -> Unit, projectViewModel: ProjectViewModel) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val libraryPrefs = remember {
+        context.getSharedPreferences("clipp_library_prefs", android.content.Context.MODE_PRIVATE)
+    }
     val actualProjectSizes = remember(projects) {
         projects.associate { project ->
             project.id to ProjectStorage.calculateOwnedSizeBytes(context, project)
@@ -53,17 +49,36 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
     var selectedProject by remember { mutableStateOf<ProjectEntity?>(null) }
     var showBottomSheet by remember { mutableStateOf(false) }
     var projectPendingDeletion by remember { mutableStateOf<ProjectEntity?>(null) }
+    var projectPendingRename by remember { mutableStateOf<ProjectEntity?>(null) }
+    var projectPendingTagEdit by remember { mutableStateOf<ProjectEntity?>(null) }
+    var projectDetails by remember { mutableStateOf<ProjectEntity?>(null) }
 
     val folders by projectViewModel.foldersState.collectAsState(initial = emptyList())
     var currentFolderId by remember { mutableStateOf<String?>(null) }
-    var sortBy by remember { mutableStateOf("Last Edited") } // Name, Date Created, Last Edited, Size, Duration
-    var showArchived by remember { mutableStateOf(false) }
-    var viewMode by remember { mutableStateOf("Grid") } // Grid, List
+    var sortOption by remember { mutableStateOf(ProjectSortOption.LAST_EDITED) }
+    var sortDescending by remember { mutableStateOf(true) }
+    var archiveFilter by remember { mutableStateOf(ProjectArchiveFilter.ACTIVE) }
+    var stateFilter by remember { mutableStateOf(ProjectStateFilter.ALL) }
+    var editedRecentlyOnly by remember { mutableStateOf(false) }
+    var viewMode by remember { mutableStateOf(libraryPrefs.getString("view_mode", "Grid") ?: "Grid") }
     var selectedTag by remember { mutableStateOf<String?>(null) }
     var showCreateFolderDialog by remember { mutableStateOf(false) }
-
+    var showManageFoldersSheet by remember { mutableStateOf(false) }
+    var folderPendingRename by remember { mutableStateOf<FolderEntity?>(null) }
+    var folderPendingDeletion by remember { mutableStateOf<FolderEntity?>(null) }
+    var selectedProjectIds by remember { mutableStateOf(emptySet<String>()) }
+    var batchDeletePending by remember { mutableStateOf(false) }
     var showCrashRecovery by remember { mutableStateOf(false) }
-    
+
+    val allTags = remember(projects) {
+        projects.flatMap { projectTags(it.tags) }
+            .distinctBy { it.lowercase() }
+            .sortedBy { it.lowercase() }
+    }
+    val selectedProjects = projects.filter { it.id in selectedProjectIds }
+    val selectionMode = selectedProjectIds.isNotEmpty()
+
+
     var showPreReviewDialog by remember { mutableStateOf(false) }
     var showFeedbackDialog by remember { mutableStateOf(false) }
     
@@ -91,7 +106,7 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
     )
     
     PrivacyConsentDialog(onDismiss = {})
-    
+
     LaunchedEffect(Unit) {
         val prefs = context.getSharedPreferences("clipp_crash_prefs", android.content.Context.MODE_PRIVATE)
         if (prefs.getBoolean("has_crashed", false)) {
@@ -99,20 +114,20 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
             prefs.edit().putBoolean("has_crashed", false).apply()
         }
     }
-    
+
     if (showCrashRecovery) {
         AlertDialog(
             onDismissRequest = { showCrashRecovery = false },
             title = { Text("We recovered your last session") },
             text = { Text("Clipp closed unexpectedly. The last saved project state may still be available. Would you like to open your most recently edited project?") },
             confirmButton = {
-                TextButton(onClick = { 
+                TextButton(onClick = {
                     showCrashRecovery = false
                     val lastProject = projects.maxByOrNull { it.lastEdited }
                     if (lastProject != null) {
-                         onProjectClick(lastProject.id)
+                        onProjectClick(lastProject.id)
                     } else {
-                         android.widget.Toast.makeText(context, "No recent project found.", android.widget.Toast.LENGTH_SHORT).show()
+                        android.widget.Toast.makeText(context, "No recent project found.", android.widget.Toast.LENGTH_SHORT).show()
                     }
                 }) {
                     Text("Restore Session")
@@ -153,21 +168,194 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
         )
     }
 
-    val filteredProjects = projects.filter {
-        it.name.contains(searchQuery, ignoreCase = true) &&
-        (showArchived || !it.isArchived) &&
-        (currentFolderId == null || it.folderId == currentFolderId) &&
-        (selectedTag == null || it.tags.contains(selectedTag!!, ignoreCase = true))
-    }.sortedWith { p1, p2 ->
-        when (sortBy) {
-            "Name" -> p1.name.compareTo(p2.name)
-            "Date Created" -> p2.creationDate.compareTo(p1.creationDate)
-            "Size" -> (actualProjectSizes[p2.id] ?: p2.sizeBytes).compareTo(actualProjectSizes[p1.id] ?: p1.sizeBytes)
-            "Duration" -> durationLabelToMs(p2.duration).compareTo(durationLabelToMs(p1.duration))
-            // Default "Last Edited"
-            else -> p2.lastEdited.compareTo(p1.lastEdited)
-        }
+    projectPendingRename?.let { projectToRename ->
+        var name by remember(projectToRename.id) { mutableStateOf(projectToRename.name) }
+        AlertDialog(
+            onDismissRequest = { projectPendingRename = null },
+            title = { Text("Rename project") },
+            text = {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Project name") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = name.trim().isNotEmpty() && name.trim() != projectToRename.name,
+                    onClick = {
+                        projectViewModel.updateProject(
+                            projectToRename.copy(name = name.trim(), lastEdited = System.currentTimeMillis())
+                        )
+                        projectPendingRename = null
+                    }
+                ) { Text("Rename") }
+            },
+            dismissButton = {
+                TextButton(onClick = { projectPendingRename = null }) { Text("Cancel") }
+            }
+        )
     }
+
+    projectPendingTagEdit?.let { projectToEdit ->
+        var tagsText by remember(projectToEdit.id) { mutableStateOf(projectToEdit.tags) }
+        AlertDialog(
+            onDismissRequest = { projectPendingTagEdit = null },
+            title = { Text("Edit tags") },
+            text = {
+                Column {
+                    Text(
+                        "Use commas to separate tags. Tags become searchable and available as filters.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = tagsText,
+                        onValueChange = { tagsText = it },
+                        label = { Text("Tags") },
+                        placeholder = { Text("Client Work, Urgent") }
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    projectViewModel.updateProject(
+                        projectToEdit.copy(tags = normalizeTags(tagsText), lastEdited = System.currentTimeMillis())
+                    )
+                    projectPendingTagEdit = null
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { projectPendingTagEdit = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    projectDetails?.let { project ->
+        val folderName = folders.firstOrNull { it.id == project.folderId }?.name ?: "None"
+        val size = actualProjectSizes[project.id] ?: project.sizeBytes
+        AlertDialog(
+            onDismissRequest = { projectDetails = null },
+            title = { Text(project.name) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DetailRow("Status", project.projectState)
+                    DetailRow("Duration", project.duration)
+                    DetailRow("Format", "${project.aspectRatio} · ${project.resolution} · ${project.frameRate}")
+                    DetailRow("Source media", project.sourceMediaPaths.size.toString())
+                    DetailRow("Folder", folderName)
+                    DetailRow("Tags", project.tags.ifBlank { "None" })
+                    DetailRow("Storage", formatBytes(size))
+                    DetailRow(
+                        "Created",
+                        java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT)
+                            .format(java.util.Date(project.creationDate))
+                    )
+                    DetailRow(
+                        "Last edited",
+                        java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT)
+                            .format(java.util.Date(project.lastEdited))
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { projectDetails = null }) { Text("Done") }
+            }
+        )
+    }
+
+    if (batchDeletePending) {
+        AlertDialog(
+            onDismissRequest = { batchDeletePending = false },
+            icon = { Icon(Icons.Filled.DeleteSweep, contentDescription = null) },
+            title = { Text("Delete ${selectedProjects.size} projects?") },
+            text = { Text("Their Clipp-owned project files will also be removed. This cannot be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    selectedProjects.forEach(projectViewModel::deleteProject)
+                    selectedProjectIds = emptySet()
+                    batchDeletePending = false
+                }) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { batchDeletePending = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    folderPendingRename?.let { folder ->
+        var folderName by remember(folder.id) { mutableStateOf(folder.name) }
+        AlertDialog(
+            onDismissRequest = { folderPendingRename = null },
+            title = { Text("Rename folder") },
+            text = {
+                OutlinedTextField(
+                    value = folderName,
+                    onValueChange = { folderName = it },
+                    label = { Text("Folder name") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = folderName.trim().isNotEmpty() && folderName.trim() != folder.name,
+                    onClick = {
+                        projectViewModel.renameFolder(folder, folderName)
+                        folderPendingRename = null
+                    }
+                ) { Text("Rename") }
+            },
+            dismissButton = {
+                TextButton(onClick = { folderPendingRename = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    folderPendingDeletion?.let { folder ->
+        AlertDialog(
+            onDismissRequest = { folderPendingDeletion = null },
+            icon = { Icon(Icons.Filled.FolderDelete, contentDescription = null) },
+            title = { Text("Delete folder?") },
+            text = { Text("Projects in \"${folder.name}\" will stay in Clipp and move back to All projects.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    projectViewModel.deleteFolder(folder)
+                    if (currentFolderId == folder.id) currentFolderId = null
+                    folderPendingDeletion = null
+                }) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { folderPendingDeletion = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    val filteredProjects = filterAndSortProjects(
+        projects = projects,
+        filter = ProjectLibraryFilter(
+            query = searchQuery,
+            folderId = currentFolderId,
+            tag = selectedTag,
+            archiveFilter = archiveFilter,
+            stateFilter = stateFilter,
+            editedRecentlyOnly = editedRecentlyOnly,
+            sortOption = sortOption,
+            descending = sortDescending
+        ),
+        actualSizes = actualProjectSizes
+    )
+    val activeFilterCount = listOf(
+        selectedTag != null,
+        archiveFilter != ProjectArchiveFilter.ACTIVE,
+        stateFilter != ProjectStateFilter.ALL,
+        editedRecentlyOnly
+    ).count { it }
 
     val greeting = remember {
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
@@ -246,6 +434,13 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
                     .padding(horizontal = 16.dp),
                 placeholder = { Text("Search projects...") },
                 leadingIcon = { Icon(Icons.Filled.Search, contentDescription = "Search") },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(Icons.Filled.Close, contentDescription = "Clear search")
+                        }
+                    }
+                },
                 shape = RoundedCornerShape(16.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = MaterialTheme.colorScheme.primary,
@@ -288,6 +483,15 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
                         leadingIcon = { Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp)) }
                     )
                 }
+                if (folders.isNotEmpty()) {
+                    item {
+                        AssistChip(
+                            onClick = { showManageFoldersSheet = true },
+                            label = { Text("Manage") },
+                            leadingIcon = { Icon(Icons.Filled.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                        )
+                    }
+                }
             }
 
             Row(
@@ -301,17 +505,27 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
                         TextButton(onClick = { expandedSort = true }) {
                             Icon(Icons.Filled.Sort, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text(sortBy)
+                            Text(sortOption.label)
                             Icon(Icons.Filled.ArrowDropDown, contentDescription = null, modifier = Modifier.size(16.dp))
                         }
                         DropdownMenu(expanded = expandedSort, onDismissRequest = { expandedSort = false }) {
-                            listOf("Name", "Date Created", "Last Edited", "Size", "Duration").forEach { option ->
+                            ProjectSortOption.entries.forEach { option ->
                                 DropdownMenuItem(
-                                    text = { Text(option) },
-                                    onClick = { sortBy = option; expandedSort = false }
+                                    text = { Text(option.label) },
+                                    leadingIcon = {
+                                        if (sortOption == option) Icon(Icons.Filled.Check, contentDescription = null)
+                                    },
+                                    onClick = { sortOption = option; expandedSort = false }
                                 )
                             }
                         }
+                    }
+
+                    IconButton(onClick = { sortDescending = !sortDescending }) {
+                        Icon(
+                            imageVector = if (sortDescending) Icons.Filled.ArrowDownward else Icons.Filled.ArrowUpward,
+                            contentDescription = if (sortDescending) "Sort descending" else "Sort ascending"
+                        )
                     }
 
                     var expandedFilter by remember { mutableStateOf(false) }
@@ -319,26 +533,55 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
                         TextButton(onClick = { expandedFilter = true }) {
                             Icon(Icons.Filled.FilterList, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text(selectedTag ?: "Filter")
+                            Text(if (activeFilterCount == 0) "Filter" else "Filter ($activeFilterCount)")
                         }
                         DropdownMenu(expanded = expandedFilter, onDismissRequest = { expandedFilter = false }) {
-                            DropdownMenuItem(text = { Text("All") }, onClick = { selectedTag = null; expandedFilter = false })
-                            listOf("In Progress", "Published", "Client Work").forEach { tag ->
+                            Text("Visibility", style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+                            ProjectArchiveFilter.entries.forEach { option ->
                                 DropdownMenuItem(
-                                    text = { Text(tag) },
-                                    onClick = { selectedTag = tag; expandedFilter = false }
+                                    text = { Text(option.label) },
+                                    leadingIcon = { if (archiveFilter == option) Icon(Icons.Filled.Check, contentDescription = null) },
+                                    onClick = { archiveFilter = option; expandedFilter = false }
+                                )
+                            }
+                            HorizontalDivider()
+                            Text("Status", style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+                            ProjectStateFilter.entries.forEach { option ->
+                                DropdownMenuItem(
+                                    text = { Text(option.label) },
+                                    leadingIcon = { if (stateFilter == option) Icon(Icons.Filled.Check, contentDescription = null) },
+                                    onClick = { stateFilter = option; expandedFilter = false }
                                 )
                             }
                             HorizontalDivider()
                             DropdownMenuItem(
-                                text = { Text(if (showArchived) "Hide Archived" else "Show Archived") },
-                                onClick = { showArchived = !showArchived; expandedFilter = false }
+                                text = { Text("Edited in last 7 days") },
+                                leadingIcon = { if (editedRecentlyOnly) Icon(Icons.Filled.Check, contentDescription = null) },
+                                onClick = { editedRecentlyOnly = !editedRecentlyOnly; expandedFilter = false }
                             )
+                            if (allTags.isNotEmpty()) {
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text("Any tag") },
+                                    leadingIcon = { if (selectedTag == null) Icon(Icons.Filled.Check, contentDescription = null) },
+                                    onClick = { selectedTag = null; expandedFilter = false }
+                                )
+                                allTags.forEach { tag ->
+                                    DropdownMenuItem(
+                                        text = { Text("Tag: $tag") },
+                                        leadingIcon = { if (selectedTag.equals(tag, ignoreCase = true)) Icon(Icons.Filled.Check, contentDescription = null) },
+                                        onClick = { selectedTag = tag; expandedFilter = false }
+                                    )
+                                }
+                            }
                         }
                     }
                 }
                 Row {
-                    IconButton(onClick = { viewMode = if (viewMode == "Grid") "List" else "Grid" }) {
+                    IconButton(onClick = {
+                        viewMode = if (viewMode == "Grid") "List" else "Grid"
+                        libraryPrefs.edit().putString("view_mode", viewMode).apply()
+                    }) {
                         Icon(
                             imageVector = if (viewMode == "Grid") Icons.Filled.ViewList else Icons.Filled.GridView,
                             contentDescription = "Toggle View"
@@ -347,15 +590,105 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
                 }
             }
 
+            if (selectionMode) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = { selectedProjectIds = emptySet() }) {
+                        Icon(Icons.Filled.Close, contentDescription = "Exit selection")
+                    }
+                    Text("${selectedProjects.size} selected", fontWeight = FontWeight.SemiBold)
+                    TextButton(onClick = { selectedProjectIds = filteredProjects.map { it.id }.toSet() }) {
+                        Text("Select all")
+                    }
+                    IconButton(onClick = {
+                        val shouldUnarchive = selectedProjects.all { it.isArchived }
+                        projectViewModel.updateProjects(
+                            selectedProjects.map { it.copy(isArchived = !shouldUnarchive, lastEdited = System.currentTimeMillis()) }
+                        )
+                    }) {
+                        Icon(
+                            if (selectedProjects.all { it.isArchived }) Icons.Filled.Unarchive else Icons.Filled.Archive,
+                            contentDescription = "Archive selection"
+                        )
+                    }
+                    IconButton(onClick = {
+                        val markDraft = selectedProjects.all { it.projectState.equals("Completed", ignoreCase = true) }
+                        projectViewModel.updateProjects(
+                            selectedProjects.map {
+                                it.copy(projectState = if (markDraft) "Draft" else "Completed", lastEdited = System.currentTimeMillis())
+                            }
+                        )
+                    }) {
+                        Icon(Icons.Filled.TaskAlt, contentDescription = "Change project status")
+                    }
+                    var batchMoveExpanded by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(onClick = { batchMoveExpanded = true }) {
+                            Icon(Icons.Filled.DriveFileMove, contentDescription = "Move selection")
+                        }
+                        DropdownMenu(expanded = batchMoveExpanded, onDismissRequest = { batchMoveExpanded = false }) {
+                            DropdownMenuItem(
+                                text = { Text("No folder") },
+                                onClick = {
+                                    projectViewModel.updateProjects(selectedProjects.map { it.copy(folderId = null, lastEdited = System.currentTimeMillis()) })
+                                    batchMoveExpanded = false
+                                }
+                            )
+                            folders.forEach { folder ->
+                                DropdownMenuItem(
+                                    text = { Text(folder.name) },
+                                    onClick = {
+                                        projectViewModel.updateProjects(selectedProjects.map { it.copy(folderId = folder.id, lastEdited = System.currentTimeMillis()) })
+                                        batchMoveExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    var batchTagExpanded by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(onClick = { batchTagExpanded = true }) {
+                            Icon(Icons.Filled.Label, contentDescription = "Tag selection")
+                        }
+                        DropdownMenu(expanded = batchTagExpanded, onDismissRequest = { batchTagExpanded = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Clear tags") },
+                                onClick = {
+                                    projectViewModel.updateProjects(selectedProjects.map { it.copy(tags = "", lastEdited = System.currentTimeMillis()) })
+                                    batchTagExpanded = false
+                                }
+                            )
+                            allTags.forEach { tag ->
+                                DropdownMenuItem(
+                                    text = { Text(tag) },
+                                    onClick = {
+                                        projectViewModel.updateProjects(selectedProjects.map { it.copy(tags = tag, lastEdited = System.currentTimeMillis()) })
+                                        batchTagExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    IconButton(onClick = { batchDeletePending = true }) {
+                        Icon(Icons.Filled.DeleteSweep, contentDescription = "Delete selection", tint = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+
             Spacer(modifier = Modifier.height(8.dp))
 
             val displayedProjects = filteredProjects
 
-            if (displayedProjects.isEmpty() && searchQuery.isEmpty() && currentFolderId == null) {
+            if (projects.isEmpty()) {
                 EmptyStateView(onCreateClick = onNavigateToCreate)
             } else if (displayedProjects.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("No projects found", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("No projects match these filters", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             } else {
                 if (viewMode == "Grid") {
@@ -369,8 +702,13 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
                         items(displayedProjects) { project ->
                             ProjectCard(
                                 project = project,
+                                selected = project.id in selectedProjectIds,
+                                selectionMode = selectionMode,
                                 onClick = { onProjectClick(project.id) },
-                                onLongPress = {
+                                onSelectionToggle = {
+                                    selectedProjectIds = selectedProjectIds.toggle(project.id)
+                                },
+                                onMore = {
                                     selectedProject = project
                                     showBottomSheet = true
                                 }
@@ -387,8 +725,13 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
                         items(displayedProjects) { project ->
                             ProjectListItem(
                                 project = project.copy(sizeBytes = actualProjectSizes[project.id] ?: project.sizeBytes),
+                                selected = project.id in selectedProjectIds,
+                                selectionMode = selectionMode,
                                 onClick = { onProjectClick(project.id) },
-                                onLongPress = {
+                                onSelectionToggle = {
+                                    selectedProjectIds = selectedProjectIds.toggle(project.id)
+                                },
+                                onMore = {
                                     selectedProject = project
                                     showBottomSheet = true
                                 }
@@ -429,6 +772,49 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
             )
         }
 
+        if (showManageFoldersSheet) {
+            ModalBottomSheet(
+                onDismissRequest = { showManageFoldersSheet = false },
+                containerColor = MaterialTheme.colorScheme.surface
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .padding(bottom = 24.dp)
+                ) {
+                    Text("Manage folders", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(12.dp))
+                    folders.forEach { folder ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Filled.Folder, contentDescription = null)
+                            Spacer(Modifier.width(12.dp))
+                            Text(folder.name, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            IconButton(onClick = {
+                                showManageFoldersSheet = false
+                                folderPendingRename = folder
+                            }) {
+                                Icon(Icons.Filled.Edit, contentDescription = "Rename ${folder.name}")
+                            }
+                            IconButton(onClick = {
+                                showManageFoldersSheet = false
+                                folderPendingDeletion = folder
+                            }) {
+                                Icon(
+                                    Icons.Filled.Delete,
+                                    contentDescription = "Delete ${folder.name}",
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if (showBottomSheet && selectedProject != null) {
             ModalBottomSheet(
                 onDismissRequest = { showBottomSheet = false },
@@ -451,6 +837,33 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
                     item { HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant) }
 
                     item {
+                        BottomSheetItem(icon = Icons.Filled.Edit, text = "Rename") {
+                            projectPendingRename = selectedProject
+                            showBottomSheet = false
+                        }
+                    }
+
+                    item {
+                        BottomSheetItem(
+                            icon = if (selectedProject!!.projectState.equals("Completed", ignoreCase = true)) Icons.Filled.EditNote else Icons.Filled.TaskAlt,
+                            text = if (selectedProject!!.projectState.equals("Completed", ignoreCase = true)) "Mark as Draft" else "Mark as Completed"
+                        ) {
+                            val newState = if (selectedProject!!.projectState.equals("Completed", ignoreCase = true)) "Draft" else "Completed"
+                            projectViewModel.updateProject(
+                                selectedProject!!.copy(projectState = newState, lastEdited = System.currentTimeMillis())
+                            )
+                            showBottomSheet = false
+                        }
+                    }
+
+                    item {
+                        BottomSheetItem(icon = Icons.Filled.Info, text = "Project details") {
+                            projectDetails = selectedProject
+                            showBottomSheet = false
+                        }
+                    }
+
+                    item {
                         var moveExpanded by remember { mutableStateOf(false) }
                         Box {
                             BottomSheetItem(icon = Icons.Filled.DriveFileMove, text = "Move to Folder") {
@@ -460,7 +873,7 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
                                 DropdownMenuItem(
                                     text = { Text("None") },
                                     onClick = { 
-                                        projectViewModel.updateProject(selectedProject!!.copy(folderId = null))
+                                        projectViewModel.updateProject(selectedProject!!.copy(folderId = null, lastEdited = System.currentTimeMillis()))
                                         showBottomSheet = false
                                         moveExpanded = false
                                     }
@@ -469,7 +882,7 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
                                     DropdownMenuItem(
                                         text = { Text(folder.name) },
                                         onClick = { 
-                                            projectViewModel.updateProject(selectedProject!!.copy(folderId = folder.id))
+                                            projectViewModel.updateProject(selectedProject!!.copy(folderId = folder.id, lastEdited = System.currentTimeMillis()))
                                             showBottomSheet = false
                                             moveExpanded = false
                                         }
@@ -480,24 +893,9 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
                     }
                     
                     item {
-                        var labelExpanded by remember { mutableStateOf(false) }
-                        Box {
-                            BottomSheetItem(icon = Icons.Filled.Label, text = "Set Label") {
-                                labelExpanded = true
-                            }
-                            DropdownMenu(expanded = labelExpanded, onDismissRequest = { labelExpanded = false }) {
-                                listOf("In Progress" to Color.Blue, "Published" to Color.Green, "Client Work" to Color.Magenta, "None" to Color.Transparent).forEach { (tag, color) ->
-                                    DropdownMenuItem(
-                                        text = { Text(tag) },
-                                        leadingIcon = { Icon(Icons.Filled.Circle, contentDescription = null, tint = color, modifier = Modifier.size(12.dp)) },
-                                        onClick = { 
-                                            projectViewModel.updateProject(selectedProject!!.copy(tags = if (tag == "None") "" else tag))
-                                            showBottomSheet = false
-                                            labelExpanded = false
-                                        }
-                                    )
-                                }
-                            }
+                        BottomSheetItem(icon = Icons.Filled.Label, text = "Edit tags") {
+                            projectPendingTagEdit = selectedProject
+                            showBottomSheet = false
                         }
                     }
 
@@ -506,7 +904,12 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
                             icon = if (selectedProject!!.isArchived) Icons.Filled.Unarchive else Icons.Filled.Archive,
                             text = if (selectedProject!!.isArchived) "Unarchive" else "Archive"
                         ) {
-                            projectViewModel.updateProject(selectedProject!!.copy(isArchived = !selectedProject!!.isArchived))
+                            projectViewModel.updateProject(
+                                selectedProject!!.copy(
+                                    isArchived = !selectedProject!!.isArchived,
+                                    lastEdited = System.currentTimeMillis()
+                                )
+                            )
                             showBottomSheet = false
                         }
                     }
@@ -525,14 +928,25 @@ fun HomeScreen(onNavigateToCreate: () -> Unit, projects: List<ProjectEntity>, on
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ProjectListItem(project: ProjectEntity, onClick: () -> Unit, onLongPress: () -> Unit) {
+fun ProjectListItem(
+    project: ProjectEntity,
+    selected: Boolean,
+    selectionMode: Boolean,
+    onClick: () -> Unit,
+    onSelectionToggle: () -> Unit,
+    onMore: () -> Unit
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .height(80.dp)
+            .then(
+                if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp))
+                else Modifier
+            )
             .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongPress
+                onClick = { if (selectionMode) onSelectionToggle() else onClick() },
+                onLongClick = onSelectionToggle
             ),
         shape = RoundedCornerShape(12.dp)
     ) {
@@ -570,6 +984,14 @@ fun ProjectListItem(project: ProjectEntity, onClick: () -> Unit, onLongPress: ()
                         fontWeight = FontWeight.Bold
                     )
                 }
+                if (selected) {
+                    Icon(
+                        Icons.Filled.CheckCircle,
+                        contentDescription = "Selected",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.align(Alignment.TopStart).padding(6.dp)
+                    )
+                }
             }
 
             // Info
@@ -603,7 +1025,7 @@ fun ProjectListItem(project: ProjectEntity, onClick: () -> Unit, onLongPress: ()
                 }
             }
             
-            IconButton(onClick = onLongPress) {
+            IconButton(onClick = onMore) {
                 Icon(Icons.Filled.MoreVert, contentDescription = "Options")
             }
         }
@@ -626,16 +1048,51 @@ fun BottomSheetItem(icon: ImageVector, text: String, isDestructive: Boolean = fa
     }
 }
 
+@Composable
+private fun DetailRow(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(16.dp))
+        Text(
+            value,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.End,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+private fun formatBytes(bytes: Long): String = when {
+    bytes < 1024L -> "$bytes B"
+    bytes < 1024L * 1024L -> "${bytes / 1024L} KB"
+    bytes < 1024L * 1024L * 1024L -> "${bytes / (1024L * 1024L)} MB"
+    else -> "${"%.1f".format(bytes.toDouble() / (1024L * 1024L * 1024L))} GB"
+}
+
+private fun Set<String>.toggle(id: String): Set<String> = if (id in this) this - id else this + id
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ProjectCard(project: ProjectEntity, onClick: () -> Unit, onLongPress: () -> Unit) {
+fun ProjectCard(
+    project: ProjectEntity,
+    selected: Boolean,
+    selectionMode: Boolean,
+    onClick: () -> Unit,
+    onSelectionToggle: () -> Unit,
+    onMore: () -> Unit
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .aspectRatio(0.8f)
+            .then(
+                if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(16.dp))
+                else Modifier
+            )
             .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongPress
+                onClick = { if (selectionMode) onSelectionToggle() else onClick() },
+                onLongClick = onSelectionToggle
             ),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -684,6 +1141,24 @@ fun ProjectCard(project: ProjectEntity, onClick: () -> Unit, onLongPress: () -> 
                         text = project.duration,
                         color = Color.White,
                         style = MaterialTheme.typography.labelSmall
+                    )
+                }
+                IconButton(
+                    onClick = onMore,
+                    modifier = Modifier.align(Alignment.TopEnd)
+                ) {
+                    Icon(
+                        Icons.Filled.MoreVert,
+                        contentDescription = "Project options",
+                        tint = Color.White
+                    )
+                }
+                if (selected) {
+                    Icon(
+                        Icons.Filled.CheckCircle,
+                        contentDescription = "Selected",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
                     )
                 }
             }

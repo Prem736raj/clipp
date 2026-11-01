@@ -64,6 +64,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Arrangement
@@ -93,20 +94,7 @@ class MainActivity : ComponentActivity() {
     val incomingLaunch = IncomingLaunchParser.parse(intent)
     val sharedMediaUris = incomingLaunch.mediaUris
     val incomingIntentFlags = intent?.flags ?: 0
-    val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
-    Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-        val prefs = getSharedPreferences("clipp_crash_prefs", android.content.Context.MODE_PRIVATE)
-        if (getSharedPreferences("clipp_privacy", android.content.Context.MODE_PRIVATE)
-                .getBoolean("crash_reporting_enabled", true)) {
-            prefs.edit().putBoolean("has_crashed", true).putString("crash_log", throwable.message ?: "Unknown error").commit()
-        } else {
-            prefs.edit().clear().commit()
-        }
-
-        // Let Android's default handler terminate the crashed process. Relaunching
-        // MainActivity here can create an endless crash loop and hide the real stack.
-        defaultHandler?.uncaughtException(thread, throwable)
-    }
+    CrashDiagnostics.install(applicationContext)
 
     val shortcutAction = incomingLaunch.shortcutAction
     
@@ -247,7 +235,7 @@ fun ClippApp(
     NavHost(
       navController = navController,
       startDestination = "splash",
-      modifier = Modifier.padding(innerPadding),
+      modifier = Modifier.padding(innerPadding).consumeWindowInsets(innerPadding),
       enterTransition = {
         slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, animationSpec = tween(300))
       },
@@ -264,7 +252,7 @@ fun ClippApp(
       composable("splash") {
         CinematicSplashScreen(
           onSplashComplete = {
-            val destination = if (hasCompletedOnboarding) "permissions" else "onboarding"
+            val destination = if (hasCompletedOnboarding) Screen.Home.route else "onboarding"
             navController.navigate(destination) {
               // Pop up to the splash route to remove it from backstack
               popUpTo("splash") { inclusive = true }
@@ -504,35 +492,45 @@ fun ClippApp(
 
   // Recovery Dialog
   val dirtyProject by projectViewModel.dirtyProject.collectAsState()
+  var crashedProject by remember { mutableStateOf<com.example.data.ProjectEntity?>(null) }
+  LaunchedEffect(Unit) {
+      val prefs = context.getSharedPreferences("clipp_crash_prefs", android.content.Context.MODE_PRIVATE)
+      if (prefs.getBoolean("has_crashed", false)) {
+          crashedProject = projectViewModel.getLatestProject()
+          prefs.edit().putBoolean("has_crashed", false).apply()
+      }
+  }
+  val recoveryProject = dirtyProject ?: crashedProject
   var showRecoveryDialog by remember { mutableStateOf(false) }
   var promptedRecoveryProjectId by remember { mutableStateOf<String?>(null) }
 
-  LaunchedEffect(currentDestination, dirtyProject?.id) {
+  LaunchedEffect(currentDestination, recoveryProject?.id) {
       val isLaunchSurface = currentDestination == Screen.Home.route ||
           currentDestination == Screen.Projects.route
-      val candidate = dirtyProject
+      val candidate = recoveryProject
       if (isLaunchSurface && candidate != null && promptedRecoveryProjectId != candidate.id) {
           promptedRecoveryProjectId = candidate.id
           showRecoveryDialog = true
       }
   }
 
-  if (showRecoveryDialog && dirtyProject != null) {
+  if (showRecoveryDialog && recoveryProject != null) {
       AlertDialog(
           onDismissRequest = { /* Force user to choose */ },
           title = { Text("Recover Unsaved Project") },
-          text = { Text("We found an unsaved project '${dirtyProject!!.name}'. Would you like to recover it?") },
+          text = { Text("We found an unsaved project '${recoveryProject!!.name}'. Would you like to recover it?") },
           confirmButton = {
               TextButton(onClick = {
                   showRecoveryDialog = false
-                  navController.navigate("editor/${dirtyProject!!.id}")
+                  crashedProject = null
+                  navController.navigate("editor/${recoveryProject!!.id}")
               }) {
                   Text("Recover")
               }
           },
           dismissButton = {
               TextButton(onClick = {
-                  val cleanedProject = dirtyProject!!.copy(isDirty = false)
+                  val cleanedProject = recoveryProject!!.copy(isDirty = false)
                   projectViewModel.updateProject(cleanedProject)
                   showRecoveryDialog = false
               }) {

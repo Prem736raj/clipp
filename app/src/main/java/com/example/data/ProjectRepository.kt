@@ -38,6 +38,10 @@ class ProjectRepository(private val projectDao: ProjectDao) {
         projectDao.insertFolder(folder)
     }
 
+    suspend fun updateFolder(folder: FolderEntity) {
+        projectDao.updateFolder(folder)
+    }
+
     suspend fun deleteFolder(folder: FolderEntity) {
         projectDao.deleteFolder(folder)
     }

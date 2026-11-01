@@ -40,6 +40,9 @@ interface ProjectDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertFolder(folder: FolderEntity)
 
+    @Update
+    suspend fun updateFolder(folder: FolderEntity)
+
     @Delete
     suspend fun deleteFolder(folder: FolderEntity)
 

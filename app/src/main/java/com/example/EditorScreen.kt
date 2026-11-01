@@ -6,7 +6,9 @@ import android.Manifest
 import android.app.Activity
 import android.content.ContextWrapper
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.media.MediaRecorder
 import android.os.Build
 import android.content.Context
@@ -16,6 +18,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import androidx.compose.ui.platform.testTag
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -110,6 +113,10 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.ScreenRotation
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
@@ -126,6 +133,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
@@ -165,7 +173,15 @@ fun AudioPlayerComponent(
 ) {
     val context = LocalContext.current
     val exoPlayer = remember {
-        androidx.media3.exoplayer.ExoPlayer.Builder(context).build().apply {
+        val trackSelector = androidx.media3.exoplayer.trackselection.DefaultTrackSelector(context).apply {
+            setParameters(
+                buildUponParameters()
+                    .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_VIDEO, true)
+            )
+        }
+        androidx.media3.exoplayer.ExoPlayer.Builder(context)
+            .setTrackSelector(trackSelector)
+            .build().apply {
             repeatMode = if (clip.isLooped) androidx.media3.common.Player.REPEAT_MODE_ALL else androidx.media3.common.Player.REPEAT_MODE_OFF
             setSeekParameters(androidx.media3.exoplayer.SeekParameters.EXACT)
         }
@@ -205,8 +221,11 @@ fun AudioPlayerComponent(
     LaunchedEffect(actualUri) {
         if (actualUri != null) {
             val mi = androidx.media3.common.MediaItem.fromUri(actualUri)
+            exoPlayer.stop()
             exoPlayer.setMediaItem(mi)
-            exoPlayer.prepare()
+        } else {
+            exoPlayer.stop()
+            exoPlayer.clearMediaItems()
         }
     }
     
@@ -219,12 +238,19 @@ fun AudioPlayerComponent(
         } else {
             clip.durationMs
         }
-        if (relativeTimeMs >= 0 && relativeTimeMs < activeDurationMs) {
+        val isActive = relativeTimeMs >= 0 && relativeTimeMs < activeDurationMs
+        val isNearStart = relativeTimeMs in -1_500L until 0L
+
+        if (isActive || isNearStart) {
+            if (exoPlayer.playbackState == Player.STATE_IDLE) {
+                exoPlayer.prepare()
+            }
+
             val srcPos = if (clip.isLooped) {
                 val cycleLength = if (clip.trimEndMs > clip.trimStartMs) clip.trimEndMs - clip.trimStartMs else 1L
-                clip.trimStartMs + (relativeTimeMs % cycleLength)
+                clip.trimStartMs + (relativeTimeMs.coerceAtLeast(0L) % cycleLength)
             } else {
-                clip.trimStartMs + relativeTimeMs
+                clip.trimStartMs + relativeTimeMs.coerceAtLeast(0L)
             }
             
             exoPlayer.volume = smoothedVolume
@@ -233,13 +259,18 @@ fun AudioPlayerComponent(
                 exoPlayer.seekTo(srcPos)
             }
             
-            if (isPlaying) {
+            if (isActive && isPlaying) {
                 exoPlayer.play()
             } else {
                 exoPlayer.pause()
             }
         } else {
             exoPlayer.pause()
+            if (exoPlayer.playbackState != Player.STATE_IDLE) {
+                // Release codecs for clips that are not near the playhead. The media item stays
+                // assigned and will be prepared again shortly before this clip becomes active.
+                exoPlayer.stop()
+            }
         }
     }
 }
@@ -589,12 +620,20 @@ fun EditorScreen(
     var microphonePermissionPermanentlyDenied by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val isLandscapeEditor = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
     val view = androidx.compose.ui.platform.LocalView.current
     val performanceMode = remember { com.example.viewmodel.PerformanceModeManager.getMode(context) }
     val performanceProfile = remember(performanceMode) {
         com.example.viewmodel.EditorPerformanceProfile.forMode(performanceMode)
     }
     val isBudgetMode = performanceMode == com.example.viewmodel.PerformanceMode.BETTER_PERFORMANCE
+
+    DisposableEffect(Unit) {
+        onDispose {
+            context.findActivity()?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
     
     DisposableEffect(Unit) {
         val entryTime = System.currentTimeMillis()
@@ -616,7 +655,6 @@ fun EditorScreen(
     
     var isPlaying by remember { mutableStateOf(false) }
     val skipHeavyEffects = isBudgetMode && isPlaying
-    var currentTime by remember { mutableStateOf("00:00") }
     
     val documentState = remember { EditorDocumentState() }
     var clips by documentState.clips
@@ -1031,6 +1069,9 @@ fun EditorScreen(
     var isFullscreen by remember { mutableStateOf(false) }
     var showFullscreenControls by remember { mutableStateOf(false) }
     var mainPlaybackEnded by remember { mutableStateOf(false) }
+    var previewError by remember { mutableStateOf<String?>(null) }
+    var previewBuffering by remember { mutableStateOf(false) }
+    val needsVideoBackground = canvasSettings.fitMode == FitMode.Fit && canvasSettings.backgroundType == BackgroundType.Blur && !isBudgetMode
     
     
     val exoPlayer = remember {
@@ -1048,10 +1089,19 @@ fun EditorScreen(
                 override fun onIsPlayingChanged(playing: Boolean) {
                     isPlaying = playing
                 }
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    isPlaying = false
+                    previewBuffering = false
+                    previewError = "This video could not be played. Try again, or replace this clip with a compatible video."
+                    CrashDiagnostics.record(context.applicationContext, "Editor preview: ${error.errorCodeName}", error)
+                }
+                override fun onRenderedFirstFrame() { previewError = null }
                 override fun onPlaybackStateChanged(playbackState: Int) {
+                    previewBuffering = playbackState == Player.STATE_BUFFERING
                     if (playbackState == Player.STATE_ENDED) {
                         mainPlaybackEnded = true
                         isPlaying = false
+                        currentPositionMs = 0L
                         seekTo(0)
                         pause()
                     }
@@ -1090,8 +1140,21 @@ fun EditorScreen(
         }
     }
     
-    DisposableEffect(Unit) {
-        onDispose { 
+    val editorLifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(editorLifecycle, exoPlayer) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
+                exoPlayer.pause()
+                bgExoPlayer.pause()
+                overlayExoPlayer.pause()
+                if (isRecordingVoiceover) stopVoiceoverRecording()
+            }
+        }
+        editorLifecycle.lifecycle.addObserver(observer)
+        onDispose { editorLifecycle.lifecycle.removeObserver(observer) }
+    }
+    DisposableEffect(exoPlayer) {
+        onDispose {
             exoPlayer.release() 
             bgExoPlayer.release()
             overlayExoPlayer.release()
@@ -1206,8 +1269,9 @@ fun EditorScreen(
     val exoPlaylistTokens = clips.map {
         "${it.id}|${it.sourceUri}|${it.trimStartMs}|${it.trimEndMs}|${it.isPhoto}|${it.playbackSpeed}|${it.speedCurve}"
     }.joinToString(",")
-    LaunchedEffect(exoPlaylistTokens, missingMediaIssues) {
-        if (missingMediaIssues.isNotEmpty()) {
+    LaunchedEffect(exoPlaylistTokens, missingMediaIssues, needsVideoBackground) {
+        previewError = null
+        if (missingMediaIssues.isNotEmpty() || clips.isEmpty()) {
             exoPlayer.pause()
             bgExoPlayer.pause()
             exoPlayer.clearMediaItems()
@@ -1233,14 +1297,19 @@ fun EditorScreen(
             exoPlayer.setMediaItems(mediaItems)
             exoPlayer.prepare()
             
-            bgExoPlayer.setMediaItems(mediaItems)
-            bgExoPlayer.prepare()
+            if (needsVideoBackground) {
+                bgExoPlayer.setMediaItems(mediaItems)
+                bgExoPlayer.prepare()
+            } else {
+                bgExoPlayer.stop()
+                bgExoPlayer.clearMediaItems()
+            }
             
             seekToGlobal(globalPos, exoPlayer)
-            seekToGlobal(globalPos, bgExoPlayer)
+            if (needsVideoBackground) seekToGlobal(globalPos, bgExoPlayer)
             if (wasPlaying) {
                 exoPlayer.play()
-                bgExoPlayer.play()
+                if (needsVideoBackground) bgExoPlayer.play()
             }
         }
     }
@@ -1294,66 +1363,72 @@ fun EditorScreen(
         }
     }
 
-    LaunchedEffect(Unit) {
+    // Media3 runs on Android's real clock; do not tie position publication to
+    // the Compose animation/coroutine clock. Rebind when the loaded mapper changes.
+    DisposableEffect(exoPlayer, timelineMapper, needsVideoBackground) {
+        val playbackHandler = android.os.Handler(android.os.Looper.getMainLooper())
         var lastUiUpdateAtMs = 0L
-        while (true) {
-            val bgSyncThresh = 200L
-            if (bgExoPlayer.currentWindowIndex != exoPlayer.currentWindowIndex || Math.abs(exoPlayer.currentPosition - bgExoPlayer.currentPosition) > bgSyncThresh) {
-                bgExoPlayer.seekTo(exoPlayer.currentWindowIndex, exoPlayer.currentPosition)
-            }
-            if (exoPlayer.isPlaying != bgExoPlayer.isPlaying) {
-                if (exoPlayer.isPlaying) bgExoPlayer.play() else bgExoPlayer.pause()
-            }
-            if (exoPlayer.playbackParameters != bgExoPlayer.playbackParameters) {
-                bgExoPlayer.playbackParameters = exoPlayer.playbackParameters
-            }
+        val playbackTicker = object : Runnable {
+            override fun run() {
+                if (needsVideoBackground && bgExoPlayer.mediaItemCount > 0) {
+                    val bgSyncThresh = 200L
+                    if (bgExoPlayer.currentWindowIndex != exoPlayer.currentWindowIndex || Math.abs(exoPlayer.currentPosition - bgExoPlayer.currentPosition) > bgSyncThresh) {
+                        bgExoPlayer.seekTo(exoPlayer.currentWindowIndex, exoPlayer.currentPosition)
+                    }
+                    if (exoPlayer.isPlaying != bgExoPlayer.isPlaying) {
+                        if (exoPlayer.isPlaying) bgExoPlayer.play() else bgExoPlayer.pause()
+                    }
+                    if (exoPlayer.playbackParameters != bgExoPlayer.playbackParameters) {
+                        bgExoPlayer.playbackParameters = exoPlayer.playbackParameters
+                    }
 
-            var nextGlobalPositionMs: Long? = null
-            if (clips.isNotEmpty()) {
-                val windowIndex = exoPlayer.currentWindowIndex
-                if (windowIndex in clips.indices) {
-                    val clip = clips[windowIndex]
-                    val srcDur = Math.max(1L, clip.trimEndMs - clip.trimStartMs)
-                    val currentFraction = (exoPlayer.currentPosition.toFloat() / srcDur).coerceIn(0f, 1f)
-                    
-                    val currentSpeed = if (clip.speedCurve != null && clip.speedCurve.points.isNotEmpty()) {
-                        clip.speedCurve.getSpeedAt(currentFraction)
-                    } else {
-                        clip.playbackSpeed
-                    }
-                    
-                    val params = androidx.media3.common.PlaybackParameters(currentSpeed, if (clip.maintainPitch) 1f else currentSpeed)
-                    if (exoPlayer.playbackParameters.speed != params.speed || exoPlayer.playbackParameters.pitch != params.pitch) {
-                        exoPlayer.playbackParameters = params
-                    }
-                    if (isPlaying) {
-                        nextGlobalPositionMs = timelineMapper.globalPositionForPlayer(
-                            windowIndex,
-                            exoPlayer.currentPosition
-                        )
-                    }
                 }
-            } else if (isPlaying) {
-                nextGlobalPositionMs = exoPlayer.currentPosition
+                var nextGlobalPositionMs: Long? = null
+                if (clips.isNotEmpty()) {
+                    val windowIndex = exoPlayer.currentWindowIndex
+                    if (windowIndex in clips.indices) {
+                        val clip = clips[windowIndex]
+                        val srcDur = Math.max(1L, clip.trimEndMs - clip.trimStartMs)
+                        val currentFraction = (exoPlayer.currentPosition.toFloat() / srcDur).coerceIn(0f, 1f)
+                    
+                        val currentSpeed = if (clip.speedCurve != null && clip.speedCurve.points.isNotEmpty()) {
+                            clip.speedCurve.getSpeedAt(currentFraction)
+                        } else {
+                            clip.playbackSpeed
+                        }
+                    
+                        val params = androidx.media3.common.PlaybackParameters(currentSpeed, if (clip.maintainPitch) 1f else currentSpeed)
+                        if (exoPlayer.playbackParameters.speed != params.speed || exoPlayer.playbackParameters.pitch != params.pitch) {
+                            exoPlayer.playbackParameters = params
+                        }
+                        if (exoPlayer.isPlaying) {
+                            nextGlobalPositionMs = timelineMapper.globalPositionForPlayer(
+                                windowIndex,
+                                exoPlayer.currentPosition
+                            )
+                        }
+                    }
+                } else if (exoPlayer.isPlaying) {
+                    nextGlobalPositionMs = exoPlayer.currentPosition
+                }
+                val nowMs = android.os.SystemClock.elapsedRealtime()
+                val uiIntervalMs = com.example.viewmodel.PlaybackUiCadence.intervalMs(performanceMode, exoPlayer.isPlaying)
+                if (exoPlayer.isPlaying && nextGlobalPositionMs != null && nowMs - lastUiUpdateAtMs >= uiIntervalMs) {
+                    currentPositionMs = nextGlobalPositionMs
+                    lastUiUpdateAtMs = nowMs
+                }
+                playbackHandler.postDelayed(this, 50L)
             }
-            val nowMs = android.os.SystemClock.elapsedRealtime()
-            val uiIntervalMs = com.example.viewmodel.PlaybackUiCadence.intervalMs(performanceMode, isPlaying)
-            if (isPlaying && nextGlobalPositionMs != null && nowMs - lastUiUpdateAtMs >= uiIntervalMs) {
-                currentPositionMs = nextGlobalPositionMs
-                val secs = currentPositionMs / 1000
-                val m = secs / 60
-                val s = secs % 60
-                currentTime = String.format("%02d:%02d", m, s)
-                lastUiUpdateAtMs = nowMs
-            }
-            delay(50)
         }
+        playbackHandler.post(playbackTicker)
+        onDispose { playbackHandler.removeCallbacks(playbackTicker) }
     }
-    
+
     // Also track scroll for timeline
     val timelineScrollState = rememberScrollState()
     
     // Format duration string
+    val currentTime = String.format("%02d:%02d", currentPositionMs / 60000, currentPositionMs / 1000 % 60)
     val durationSecs = videoDurationMs / 1000
     val durationText = String.format("%02d:%02d", durationSecs / 60, durationSecs % 60)
 
@@ -1466,7 +1541,14 @@ fun EditorScreen(
             topBar = {
             if (!isScreenshotMode) {
                 TopAppBar(
-                    title = { Text(project?.name ?: "Loading...", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) },
+                    title = {
+                        Text(
+                            project?.name ?: "Loading...",
+                            style = if (isLandscapeEditor) MaterialTheme.typography.titleSmall else MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
+                        )
+                    },
                     navigationIcon = {
                         IconButton(onClick = {
                             project?.let {
@@ -1837,6 +1919,25 @@ fun EditorScreen(
                         Text("Export", fontWeight = FontWeight.Bold)
                     }
 
+                    IconButton(
+                        onClick = {
+                            context.findActivity()?.requestedOrientation = if (isLandscapeEditor) {
+                                ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                            } else {
+                                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                            }
+                        }
+                    ) {
+                        Icon(
+                            Icons.Filled.ScreenRotation,
+                            contentDescription = if (isLandscapeEditor) {
+                                "Switch to portrait editor"
+                            } else {
+                                "Switch to landscape editor"
+                            }
+                        )
+                    }
+
                     var showMoreMenu by remember { mutableStateOf(false) }
                     Box {
                         IconButton(onClick = { showMoreMenu = true }) {
@@ -1868,8 +1969,11 @@ fun EditorScreen(
                 modifier = Modifier.fillMaxWidth().navigationBarsPadding()
             ) {
                 LazyRow(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(24.dp),
+                    modifier = Modifier.fillMaxWidth().padding(
+                        vertical = if (isLandscapeEditor) 4.dp else 12.dp,
+                        horizontal = if (isLandscapeEditor) 8.dp else 16.dp
+                    ),
+                    horizontalArrangement = Arrangement.spacedBy(if (isLandscapeEditor) 12.dp else 24.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     val tools = mutableListOf(
@@ -1946,11 +2050,13 @@ fun EditorScreen(
                                 Icon(
                                     if (toolName == "Voiceover" && isRecordingVoiceover) Icons.Filled.Stop else tools[index].second,
                                     contentDescription = toolName,
-                                    modifier = Modifier.padding(8.dp),
+                                    modifier = Modifier.padding(if (isLandscapeEditor) 4.dp else 8.dp),
                                     tint = MaterialTheme.colorScheme.onSurface
                                 )
                             }
-                            Text(text = if (toolName == "Voiceover" && isRecordingVoiceover) "Stop Voiceover" else toolName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (!isLandscapeEditor) {
+                                Text(text = if (toolName == "Voiceover" && isRecordingVoiceover) "Stop Voiceover" else toolName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                 }
@@ -1984,7 +2090,7 @@ fun EditorScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(if (isScreenshotMode) 1f else 0.55f)
+                    .weight(if (isScreenshotMode) 1f else if (isLandscapeEditor) 0.62f else 0.55f)
                     .background(Color.Black),
                 contentAlignment = Alignment.Center
             ) {
@@ -2014,14 +2120,27 @@ fun EditorScreen(
                                 Box(bgMod.background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(canvasSettings.backgroundColor, Color.Black))))
                             }
                             BackgroundType.Blur -> {
-                                AndroidView(
+                                if (isBudgetMode) {
+                                    // A still backdrop avoids a second hardware decoder on budget devices.
+                                    AsyncImage(
+                                        model = coil.request.ImageRequest.Builder(context)
+                                            .data(previewFrame.primaryVideo?.layer?.payload?.mediaClip?.sourceUri)
+                                            .videoFrameMillis(0L).build(),
+                                        imageLoader = imageLoader,
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = bgMod.blur(24.dp).graphicsLayer { alpha = 0.5f }
+                                    )
+                                } else AndroidView(
                                     factory = { ctx ->
-                                        androidx.media3.ui.PlayerView(ctx).apply {
+                                        createEditorPreviewView(ctx).apply {
                                             player = bgExoPlayer
                                             useController = false
                                             resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                                         }
                                     },
+                                    onReset = null,
+                                    onRelease = { it.player = null },
                                     modifier = bgMod.blur(24.dp, androidx.compose.ui.draw.BlurredEdgeTreatment.Unbounded).graphicsLayer { alpha = 0.5f }
                                 )
                             }
@@ -2030,7 +2149,7 @@ fun EditorScreen(
 
                     val currentClipForTransform = previewFrame.primaryVideo?.layer?.payload?.mediaClip
 
-                    val mediaPath = project?.sourceMediaPaths?.firstOrNull()
+                    val mediaPath = clips.firstOrNull()?.sourceUri
                     if (mediaPath != null) {
                         val relativeTimeForClip = previewFrame.primaryVideo?.localTimeMs ?: 0L
                         
@@ -2153,14 +2272,17 @@ fun EditorScreen(
                         
                         AndroidView(
                             factory = { ctx ->
-                                androidx.media3.ui.PlayerView(ctx).apply {
-                                    player = exoPlayer
+                                createEditorPreviewView(ctx).apply {
+                                    player = if (isFullscreen) null else exoPlayer
                                     useController = false
                                     setBackgroundColor(android.graphics.Color.TRANSPARENT)
                                     setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
                                 }
                             },
+                            onReset = null,
+                            onRelease = { it.player = null },
                             update = { view ->
+                                view.player = if (isFullscreen) null else exoPlayer
                                 view.resizeMode = when (canvasSettings.fitMode) {
                                     FitMode.Fit -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
                                     FitMode.Fill -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
@@ -2169,6 +2291,7 @@ fun EditorScreen(
                             },
                             modifier = Modifier
                                 .fillMaxSize()
+                                .testTag("editor_preview")
                                 .pointerInput(currentClipForTransform?.id) {
                                     if (selectedClipId != null && selectedClipId == currentClipForTransform?.id && !isPreviewingCrop) {
                                         detectTransformGestures { _, pan, zoom, _ ->
@@ -2657,7 +2780,7 @@ fun EditorScreen(
                                         // But only if it's currently rendering, wait, we can just attach AndroidView
                                         AndroidView(
                                             factory = { ctx ->
-                                                androidx.media3.ui.PlayerView(ctx).apply {
+                                                createEditorPreviewView(ctx).apply {
                                                     player = overlayExoPlayer
                                                     useController = false
                                                     resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
@@ -2665,6 +2788,8 @@ fun EditorScreen(
                                                     setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
                                                 }
                                             },
+                                            onReset = null,
+                                            onRelease = { it.player = null },
                                             modifier = Modifier.fillMaxSize()
                                         )
                                         
@@ -3373,12 +3498,22 @@ fun EditorScreen(
                 }
             }
             
+            if (previewBuffering) LinearProgressIndicator(modifier = Modifier.fillMaxWidth().testTag("preview_loading"))
+            previewError?.let { message ->
+                Row(Modifier.fillMaxWidth().testTag("preview_error").padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(message, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = { previewError = null; exoPlayer.prepare(); exoPlayer.play() }) { Text("Retry") }
+                }
+            }
             if (!isScreenshotMode) {
             // Playback Controls
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 12.dp, horizontal = 16.dp),
+                    .padding(
+                        vertical = if (isLandscapeEditor) 2.dp else 12.dp,
+                        horizontal = if (isLandscapeEditor) 8.dp else 16.dp
+                    ),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -3386,21 +3521,45 @@ fun EditorScreen(
                     text = currentTime,
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.width(60.dp)
+                    modifier = Modifier.weight(1f).testTag("editor_position"),
+                    maxLines = 1, softWrap = false
                 )
                 
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(24.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    if (isLandscapeEditor) {
+                        IconButton(
+                            onClick = { zoom = (zoom / 1.25f).coerceIn(0.2f, 10f) },
+                            enabled = zoom > 0.2f,
+                            modifier = Modifier.size(36.dp).testTag("timeline_zoom_out")
+                        ) {
+                            Icon(Icons.Filled.Remove, contentDescription = "Zoom timeline out")
+                        }
+                        Text(
+                            text = "${(zoom * 100).toInt()}%",
+                            modifier = Modifier.testTag("timeline_zoom_level"),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
+                        )
+                        IconButton(
+                            onClick = { zoom = (zoom * 1.25f).coerceIn(0.2f, 10f) },
+                            enabled = zoom < 10f,
+                            modifier = Modifier.size(36.dp).testTag("timeline_zoom_in")
+                        ) {
+                            Icon(Icons.Filled.Add, contentDescription = "Zoom timeline in")
+                        }
+                    }
                     IconButton(onClick = {
-                        seekToGlobal(currentPositionMs - 15000L, exoPlayer)
+                        seekToGlobal(currentPositionMs - 10000L, exoPlayer)
                     }) {
                         Icon(Icons.Filled.Replay10, contentDescription = "Back", tint = MaterialTheme.colorScheme.onSurface)
                     }
                     
                     Box(modifier = Modifier
-                        .size(56.dp)
+                        .size(if (isLandscapeEditor) 44.dp else 56.dp)
                         .background(MaterialTheme.colorScheme.primary, CircleShape)
                         .clickable {
                             com.example.utils.HapticUtil.playLightTap(view, context)
@@ -3411,6 +3570,7 @@ fun EditorScreen(
                                 if (exoPlayer.playbackState == Player.STATE_ENDED) {
                                     seekToGlobal(0L, exoPlayer)
                                 }
+                                if (exoPlayer.playerError != null) exoPlayer.prepare()
                                 exoPlayer.play()
                             }
                         },
@@ -3427,30 +3587,25 @@ fun EditorScreen(
                                 imageVector = if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                                 contentDescription = if (playing) "Pause" else "Play",
                                 tint = Color.Black,
-                                modifier = Modifier.size(32.dp)
+                                modifier = Modifier.size(if (isLandscapeEditor) 26.dp else 32.dp)
                             )
                         }
                     }
                     
                     IconButton(onClick = {
-                        seekToGlobal(currentPositionMs + 15000L, exoPlayer)
+                        seekToGlobal(currentPositionMs + 10000L, exoPlayer)
                     }) {
                         Icon(Icons.Filled.Forward10, contentDescription = "Forward", tint = MaterialTheme.colorScheme.onSurface)
                     }
                 }
                 
-                VUMeter(
-                    isPlaying = isPlaying,
-                    masterVolume = canvasSettings.masterVolume,
-                    isMuted = isMuted,
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
-                
                 Text(
                     text = durationText,
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.width(60.dp)
+                    modifier = Modifier.weight(1f).testTag("editor_duration"),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                    maxLines = 1, softWrap = false
                 )
             }
             
@@ -3458,9 +3613,13 @@ fun EditorScreen(
             BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(0.45f)
+                    .weight(if (isLandscapeEditor) 0.38f else 0.45f)
+                    .testTag("editor_timeline")
                     .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-                    .padding(top = 16.dp, bottom = 16.dp)
+                    .padding(
+                        top = if (isLandscapeEditor) 4.dp else 16.dp,
+                        bottom = if (isLandscapeEditor) 4.dp else 16.dp
+                    )
                     .clipToBounds()
             ) {
                 val screenWidthPx = constraints.maxWidth.toFloat()
@@ -3471,6 +3630,10 @@ fun EditorScreen(
                 
                 val totalWidthPx = (videoDurationMs / 1000f) * pixelsPerSecond
                 val currentScrollPx = (currentPositionMs / 1000f) * pixelsPerSecond
+                // Gesture handlers live across recompositions; read the latest playhead and scale.
+                val latestTimelinePositionMs by rememberUpdatedState(currentPositionMs)
+                val latestPixelsPerSecond by rememberUpdatedState(pixelsPerSecond)
+                val latestZoom by rememberUpdatedState(zoom)
                 
                 Box(
                     modifier = Modifier
@@ -3478,9 +3641,10 @@ fun EditorScreen(
                         .pointerInput(videoDurationMs) {
                             var lastHapticTimeMs = 0L
                             detectTransformGestures { _, pan, zoomFactor, _ ->
-                                zoom = (zoom * zoomFactor).coerceIn(0.2f, 10f)
-                                val newScrollPx = currentScrollPx - pan.x
-                                val newTimeMs = ((newScrollPx / pixelsPerSecond) * 1000f).toLong()
+                                zoom = (latestZoom * zoomFactor).coerceIn(0.2f, 10f)
+                                val currentPixelsPerSecond = latestPixelsPerSecond
+                                val newScrollPx = (latestTimelinePositionMs / 1000f) * currentPixelsPerSecond - pan.x
+                                val newTimeMs = ((newScrollPx / currentPixelsPerSecond) * 1000f).toLong()
                                 val coercedTime = newTimeMs.coerceIn(0L, videoDurationMs)
                                 seekToGlobal(coercedTime, exoPlayer)
                                 
@@ -3494,18 +3658,26 @@ fun EditorScreen(
                             detectTapGestures(
                                 onTap = { offset ->
                                     val shiftPx = offset.x - (screenWidthPx / 2f)
-                                    val newScrollPx = currentScrollPx + shiftPx
-                                    val newTimeMs = ((newScrollPx / pixelsPerSecond) * 1000f).toLong()
+                                    val currentPixelsPerSecond = latestPixelsPerSecond
+                                    val newScrollPx = (latestTimelinePositionMs / 1000f) * currentPixelsPerSecond + shiftPx
+                                    val newTimeMs = ((newScrollPx / currentPixelsPerSecond) * 1000f).toLong()
                                     seekToGlobal(newTimeMs, exoPlayer)
                                 }
                             )
                         }
                 ) {
                     val translationX = -currentScrollPx + (screenWidthPx / 2f)
-                    
+                    // Scroll the tracks independently of the playhead, which stays centered.
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
+                            .then(if (isLandscapeEditor) Modifier.verticalScroll(timelineScrollState) else Modifier)
+                            .testTag("editor_timeline_tracks")
+                    ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .then(if (isLandscapeEditor) Modifier.height(320.dp) else Modifier.fillMaxHeight())
                             .offset { androidx.compose.ui.unit.IntOffset(translationX.toInt(), 0) }
                     ) {
                         val intervalSecs = when {
@@ -4004,7 +4176,7 @@ fun EditorScreen(
                                                     }
                                                 }
                                             }
-                                            
+
                                             Box(
                                                 modifier = Modifier
                                                     .align(Alignment.CenterStart)
@@ -4879,7 +5051,8 @@ fun EditorScreen(
                             }
                         }
                     }
-                    
+                    }
+
                     Box(
                         modifier = Modifier
                             .align(Alignment.TopCenter)
@@ -4895,6 +5068,42 @@ fun EditorScreen(
                                 .clip(RoundedCornerShape(bottomStart = 4.dp, bottomEnd = 4.dp))
                                 .background(Color.White)
                         )
+                    }
+                    if (isLandscapeEditor) {
+                        Column(
+                            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp).zIndex(2f),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    scope.launch {
+                                        timelineScrollState.animateScrollTo(
+                                            (timelineScrollState.value - with(density) { 96.dp.roundToPx() }).coerceAtLeast(0)
+                                        )
+                                    }
+                                },
+                                enabled = timelineScrollState.value > 0,
+                                modifier = Modifier.size(36.dp).testTag("timeline_tracks_up")
+                                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f), RoundedCornerShape(8.dp))
+                            ) {
+                                Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "Scroll timeline tracks up")
+                            }
+                            IconButton(
+                                onClick = {
+                                    scope.launch {
+                                        timelineScrollState.animateScrollTo(
+                                            (timelineScrollState.value + with(density) { 96.dp.roundToPx() })
+                                                .coerceAtMost(timelineScrollState.maxValue)
+                                        )
+                                    }
+                                },
+                                enabled = timelineScrollState.value < timelineScrollState.maxValue,
+                                modifier = Modifier.size(36.dp).testTag("timeline_tracks_down")
+                                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f), RoundedCornerShape(8.dp))
+                            ) {
+                                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Scroll timeline tracks down")
+                            }
+                        }
                     }
                 }
             }
@@ -7171,7 +7380,7 @@ fun EditorScreen(
                 .background(Color.Black)
                 .clickable { showFullscreenControls = !showFullscreenControls }
         ) {
-            val mediaPath = project?.sourceMediaPaths?.firstOrNull()
+            val mediaPath = clips.firstOrNull()?.sourceUri
             if (mediaPath != null) {
                 val currentClipForFullscreen = if (clips.isNotEmpty() && exoPlayer.currentWindowIndex in clips.indices) clips[exoPlayer.currentWindowIndex] else null
                 val filterType = currentClipForFullscreen?.filterType ?: FilterType.NONE
@@ -7190,11 +7399,13 @@ fun EditorScreen(
                 
                 AndroidView(
                     factory = { ctx ->
-                        PlayerView(ctx).apply {
+                        createEditorPreviewView(ctx).apply {
                             player = exoPlayer
                             useController = false
                         }
                     },
+                    onReset = null,
+                    onRelease = { it.player = null },
                     modifier = Modifier.fillMaxSize()
                         .colorFilterOverlay(finalColorMatrix)
                         .then(if (!isComparing) Modifier.vignetteAndGrain(adjustments.vignette, adjustments.grain) else Modifier)

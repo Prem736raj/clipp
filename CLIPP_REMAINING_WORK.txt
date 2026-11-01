@@ -4,7 +4,29 @@ Report date: 2026-10-17
 Repository: https://github.com/Prem736raj/clipp
 Checkout: P:\Projects\clipp
 Branch: main
-Implementation baseline reviewed: Phase 10 commit fbe2c00
+Implementation baseline reviewed: Phase 10 commit fbe2c00, plus local export-quality changes
+
+PHYSICAL EDITING STATUS: CODE REPAIRS VERIFIED / PHONE RETEST PENDING
+------------------------------------------------
+On 2026-10-17 the user tested video editing on a physical phone and reported:
+- imported video shows a dark/black preview;
+- video frames do not move when playback is attempted; the recording also
+  shows Pause while time stays at 00:00 and the playhead stays at the start;
+- the app crashes during basic editing.
+The repair pass now verifies visible moving video, clock progress, pause/rewind,
+restored projects, fullscreen return and lifecycle pause/resume on API 34.
+All 79 JVM/UI tests pass; all 34 prior Android cases and the final 3 live editor
+cases pass (see the report for the corrected harness failure and rerun).
+Duplicate top insets/recovery prompts, repeated startup guidance and wrapped
+playback labels are repaired. Original phone crash cause and physical retest
+remain open and take priority over additional features.
+See PHYSICAL_DEVICE_DEFECT_REPORT.md for evidence, code findings, investigation
+candidates, and acceptance checks. The replacement 63-second screen recording
+(WhatsApp Video 2026-10-17 at 2.55.08 PM.mp4) was reviewed. It also shows
+overlapping recovery prompts, a wrapped duration label, and a repeated
+media-privacy entry screen after relaunch. The editor-to-launcher transition
+around 55.5s supports recording the exit but does not prove its cause; the
+crash itself remains user-reported until crash/exit logs are captured.
 
 EXECUTIVE ANSWER
 ----------------
@@ -13,16 +35,21 @@ export pipeline. It is not yet production-ready and it is not yet comparable
 to the breadth, reliability, or polish of KineMaster, VN, CapCut, or similar
 mature editors.
 
-The core local editing path is substantially implemented. The largest open
-work is now advanced feature parity, real AI/online services, complete QA,
-release signing, Play Store preparation, and low-end device validation.
+The core local editing path has substantial implementation, but physical
+testing now reports failures in preview, playback, and stability. The first
+priority is a reliable import -> preview -> play -> edit workflow on the
+affected phone. Advanced parity, AI/online services, release signing, and
+Play Store preparation remain later work.
 
 LOCAL HARDENING PHASE STATUS
 ----------------------------
 The local hardening sequence through Phase 10 is complete and committed on
-main through fbe2c00. The current automated validation bar is green: 65/65 JVM
-tests and 31/31 connected Android tests pass on the audit34 API 34 emulator,
-and the debug APK assembles successfully.
+main through fbe2c00. Subsequent export-quality improvements are in the working
+tree. The previous scoped automated validation passed: 76/76 JVM tests and
+34/34 connected Android tests passed on the audit34 API 34 emulator,
+and the debug APK assembled successfully.
+These export/model/UI-control results do not establish interactive editor
+playback on a physical phone. The physical editing workflow has failed.
 
 The remaining entries below are intentionally not presented as unfinished
 local phases. They fall into one of these groups:
@@ -60,6 +87,10 @@ The current branch contains implementation for the following local workflow
 and capabilities:
 
 - Android system media selection and local, account-free projects.
+- Device-checked resolution, frame-rate limit, target bitrate, and estimated
+  file size on the export screen. Explicit quality exports honor the project
+  aspect ratio with black padding and preserve original frame timestamps;
+  lower-rate footage is not duplicated to reach a higher selected limit.
 - Multi-clip projects, trim, split, reorder, still-image duration, crop,
   rotate, flip, clip positioning, and transform/crop keyframes.
 - Constant speed and sampled speed-curve automation with pitch-preserving
@@ -94,15 +125,26 @@ blocked before export startup and adds safe app-owned orphan cleanup. The
 8-second layered export with three clips, a timed visual effect, an image
 overlay, and separate audio remains covered. Physical-device coverage, the
 broader Android/API/GPU/codec matrix, truly long exports, and real-user
-workflow QA remain open.
+workflow QA remain open. The user's basic physical editing test now reports
+black preview, frozen video, and a crash; those failures are not resolved by
+the earlier emulator/export checks.
 
 REMAINING WORK - PRIORITY 0: RELEASE BLOCKERS
 ----------------------------------------------
 These must be completed before calling the app production-ready:
 
+[REPAIRED / PHONE RETEST PENDING] 0. Validate repaired preview/playback on the affected phone.
+      Reproduce the reported black preview, frozen video, and crash on the
+      affected phone with the original imported clip. Capture actual player
+      errors, first-frame events, crash/exit logs, device details, and build
+      identity. Verify moving video, pause/resume, scrubbing, saved-project
+      reopening, and repeated editing cycles without failure. Correct the
+      crash-log key mismatch and add interactive editor playback coverage.
+      See PHYSICAL_DEVICE_DEFECT_REPORT.md. Root causes remain unconfirmed.
+
 [CURRENT SUITE PASS / RE-RUN AFTER FUTURE CHANGES] 1. Run current automated tests after the latest renderer changes.
-      On 2026-10-17 the current debug JVM suite passed 65/65 and the API 34
-      connected Android suite passed 31/31 on the audit34 emulator. Re-run both
+      On 2026-10-17 the current debug JVM suite passed 76/76 and the API 34
+      connected Android suite passed 34/34 on the audit34 emulator. Re-run both
       suites after future renderer/export changes and fix any regressions.
 
 [PARTIAL / API 34 EMULATOR PASS] 2. Run real export QA on physical/emulated devices.
