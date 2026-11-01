@@ -3,15 +3,22 @@ package com.example
 import com.example.R
 import com.example.viewmodel.EditorDocumentState
 import android.Manifest
+import android.app.Activity
+import android.content.ContextWrapper
+import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.media.MediaRecorder
 import android.os.Build
 import android.content.Context
 import android.net.Uri
+import android.provider.Settings
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import androidx.compose.ui.platform.testTag
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -32,8 +39,6 @@ import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.snap
 import androidx.compose.ui.draw.rotate
-import kotlin.math.pow
-import kotlin.math.sin
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.draw.shadow
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -108,6 +113,10 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.ScreenRotation
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
@@ -116,6 +125,7 @@ import androidx.compose.runtime.*
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.core.app.ActivityCompat
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -123,8 +133,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -145,80 +155,17 @@ import java.util.UUID
 
 import androidx.compose.ui.geometry.Rect
 
-enum class TransitionType(val label: String) {
-    NONE("None"),
-    CROSSFADE("Crossfade"),
-    FADE_TO_BLACK("Fade to Black"),
-    FADE_TO_WHITE("Fade to White"),
-    SLIDE_LEFT("Slide Left"),
-    SLIDE_RIGHT("Slide Right"),
-    SLIDE_UP("Slide Up"),
-    SLIDE_DOWN("Slide Down"),
-    PUSH_LEFT("Push Left"),
-    PUSH_RIGHT("Push Right"),
-    ZOOM_IN("Zoom In"),
-    ZOOM_OUT("Zoom Out"),
-    WIPE_LEFT("Wipe Left"),
-    WIPE_RIGHT("Wipe Right"),
-    CLOCK_WIPE("Clock Wipe"),
-    SPIN("Spin"),
-    FLIP("Flip")
-}
-
-data class Transition(
-    val type: TransitionType = TransitionType.NONE,
-    val durationMs: Long = 500L,
-    val easing: EasingType = EasingType.EASE_IN_OUT
-)
-
-enum class EasingType {
-    LINEAR, EASE_IN, EASE_OUT, EASE_IN_OUT, BOUNCE, ELASTIC
-}
-
-@com.squareup.moshi.JsonClass(generateAdapter = true)
-data class Keyframe(
-    val id: String = java.util.UUID.randomUUID().toString(),
-    val timeMs: Long,
-    val value: Float,
-    val easing: EasingType = EasingType.EASE_IN_OUT
-)
-
-fun applyEasing(t: Float, type: EasingType): Float {
-    return when (type) {
-        EasingType.LINEAR -> t
-        EasingType.EASE_IN -> t * t
-        EasingType.EASE_OUT -> t * (2f - t)
-        EasingType.EASE_IN_OUT -> if (t < 0.5f) 2f * t * t else -1f + (4f - 2f * t) * t
-        EasingType.BOUNCE -> {
-            var n1 = 7.5625f
-            var d1 = 2.75f
-            var time = t
-            if (time < 1f / d1) {
-                n1 * time * time
-            } else if (time < 2f / d1) {
-                time -= 1.5f / d1
-                n1 * time * time + 0.75f
-            } else if (time < 2.5f / d1) {
-                time -= 2.25f / d1
-                n1 * time * time + 0.9375f
-            } else {
-                time -= 2.625f / d1
-                n1 * time * time + 0.984375f
-            }
-        }
-        EasingType.ELASTIC -> {
-            val c4 = (2f * Math.PI.toFloat()) / 3f
-            if (t == 0f) 0f
-            else if (t == 1f) 1f
-            else Math.pow(2.0, (-10f * t).toDouble()).toFloat() * kotlin.math.sin((t * 10f - 0.75f) * c4) + 1f
-        }
-    }
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
 @Composable
 fun AudioPlayerComponent(
     clip: AudioClip,
     clips: List<MediaClip>,
+    audioClips: List<AudioClip>,
     currentPositionMs: Long,
     isPlaying: Boolean,
     isMuted: Boolean,
@@ -226,7 +173,15 @@ fun AudioPlayerComponent(
 ) {
     val context = LocalContext.current
     val exoPlayer = remember {
-        androidx.media3.exoplayer.ExoPlayer.Builder(context).build().apply {
+        val trackSelector = androidx.media3.exoplayer.trackselection.DefaultTrackSelector(context).apply {
+            setParameters(
+                buildUponParameters()
+                    .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_VIDEO, true)
+            )
+        }
+        androidx.media3.exoplayer.ExoPlayer.Builder(context)
+            .setTrackSelector(trackSelector)
+            .build().apply {
             repeatMode = if (clip.isLooped) androidx.media3.common.Player.REPEAT_MODE_ALL else androidx.media3.common.Player.REPEAT_MODE_OFF
             setSeekParameters(androidx.media3.exoplayer.SeekParameters.EXACT)
         }
@@ -240,18 +195,37 @@ fun AudioPlayerComponent(
     
     val actualUri = clip.sourceUri ?: clips.find { it.id == clip.sourceClipId }?.sourceUri
     
-    val targetVolume = if (isMuted || clip.isMuted) 0f else clip.volume * masterVolume
+    val projectDurationMs = clips.sumOf { it.durationMs }
+    val duckingWindows = remember(clips, audioClips, projectDurationMs) {
+        EditorState(clips = clips, audioClips = audioClips).buildAudioDuckingWindows(projectDurationMs)
+    }
+    val timelineMixGain = clip.timelineMixGainAt(
+        projectTimeMs = currentPositionMs,
+        projectDurationMs = projectDurationMs,
+        duckingWindows = duckingWindows
+    )
+    val automationGain = clip.previewAutomationGainAt(
+        projectTimeMs = currentPositionMs,
+        projectDurationMs = projectDurationMs,
+        masterVolume = masterVolume
+    )
+    val targetVolume = if (isMuted || clip.isMuted) 0f else {
+        automationGain * timelineMixGain
+    }
     
     val smoothedVolume by androidx.compose.animation.core.animateFloatAsState(
         targetValue = targetVolume,
-        animationSpec = androidx.compose.animation.core.tween(500)
+        animationSpec = androidx.compose.animation.core.tween(80)
     )
     
     LaunchedEffect(actualUri) {
         if (actualUri != null) {
             val mi = androidx.media3.common.MediaItem.fromUri(actualUri)
+            exoPlayer.stop()
             exoPlayer.setMediaItem(mi)
-            exoPlayer.prepare()
+        } else {
+            exoPlayer.stop()
+            exoPlayer.clearMediaItems()
         }
     }
     
@@ -259,18 +233,24 @@ fun AudioPlayerComponent(
         if (actualUri == null) return@LaunchedEffect
         
         val relativeTimeMs = currentPositionMs - clip.startTimeOnTimelineMs
-        val projectDurationMs = clips.sumOf { it.durationMs }
         val activeDurationMs = if (clip.isLooped) {
             (projectDurationMs - clip.startTimeOnTimelineMs).coerceAtLeast(0L)
         } else {
             clip.durationMs
         }
-        if (relativeTimeMs >= 0 && relativeTimeMs < activeDurationMs) {
+        val isActive = relativeTimeMs >= 0 && relativeTimeMs < activeDurationMs
+        val isNearStart = relativeTimeMs in -1_500L until 0L
+
+        if (isActive || isNearStart) {
+            if (exoPlayer.playbackState == Player.STATE_IDLE) {
+                exoPlayer.prepare()
+            }
+
             val srcPos = if (clip.isLooped) {
                 val cycleLength = if (clip.trimEndMs > clip.trimStartMs) clip.trimEndMs - clip.trimStartMs else 1L
-                clip.trimStartMs + (relativeTimeMs % cycleLength)
+                clip.trimStartMs + (relativeTimeMs.coerceAtLeast(0L) % cycleLength)
             } else {
-                clip.trimStartMs + relativeTimeMs
+                clip.trimStartMs + relativeTimeMs.coerceAtLeast(0L)
             }
             
             exoPlayer.volume = smoothedVolume
@@ -279,13 +259,18 @@ fun AudioPlayerComponent(
                 exoPlayer.seekTo(srcPos)
             }
             
-            if (isPlaying) {
+            if (isActive && isPlaying) {
                 exoPlayer.play()
             } else {
                 exoPlayer.pause()
             }
         } else {
             exoPlayer.pause()
+            if (exoPlayer.playbackState != Player.STATE_IDLE) {
+                // Release codecs for clips that are not near the playhead. The media item stays
+                // assigned and will be prepared again shortly before this clip becomes active.
+                exoPlayer.stop()
+            }
         }
     }
 }
@@ -425,27 +410,27 @@ fun AudioWaveform(
             if (sourceDurationMs <= 0L || displayDurationMs <= 0L || totalWidth <= 0f) return@Canvas
 
             if (renderPeaks.isNotEmpty()) {
-                val centerY = height / 2f
-                val halfHeight = (height * 0.44f).coerceAtLeast(1f)
+            val centerY = height / 2f
+            val halfHeight = (height * 0.44f).coerceAtLeast(1f)
                 renderPeaks.forEachIndexed { index, peak ->
                     val x = ((index + 0.5f) / renderPeaks.size) * totalWidth
-                    val amplitude = (peak.coerceIn(0f, 1f) * halfHeight).coerceAtLeast(0.5f)
-                    drawLine(
-                        color = color,
-                        start = androidx.compose.ui.geometry.Offset(x, centerY - amplitude),
-                        end = androidx.compose.ui.geometry.Offset(x, centerY + amplitude),
-                        strokeWidth = 1.5.dp.toPx(),
-                        cap = androidx.compose.ui.graphics.StrokeCap.Round
-                    )
+                val amplitude = (peak.coerceIn(0f, 1f) * halfHeight).coerceAtLeast(0.5f)
+                drawLine(
+                    color = color,
+                    start = androidx.compose.ui.geometry.Offset(x, centerY - amplitude),
+                    end = androidx.compose.ui.geometry.Offset(x, centerY + amplitude),
+                    strokeWidth = 1.5.dp.toPx(),
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round
+                )
                 }
             } else {
-                // Honest loading/no-audio state: never synthesize random amplitudes.
-                drawLine(
-                    color = color.copy(alpha = 0.35f),
-                    start = androidx.compose.ui.geometry.Offset(0f, height / 2f),
-                    end = androidx.compose.ui.geometry.Offset(totalWidth, height / 2f),
-                    strokeWidth = 1.dp.toPx()
-                )
+            // Honest loading/no-audio state: never synthesize random amplitudes.
+            drawLine(
+                color = color.copy(alpha = 0.35f),
+                start = androidx.compose.ui.geometry.Offset(0f, height / 2f),
+                end = androidx.compose.ui.geometry.Offset(totalWidth, height / 2f),
+                strokeWidth = 1.dp.toPx()
+            )
             }
 
             val displayPixelsPerMs = if (displayDurationMs > 0L) totalWidth / displayDurationMs.toFloat() else pixelsPerMs
@@ -470,160 +455,6 @@ fun AudioWaveform(
         }
     }
 }
-fun Map<String, List<Keyframe>>.getValueAtTime(propName: String, timeMs: Long, defaultValue: Float): Float {
-    val kfs = this[propName] ?: return defaultValue
-    if (kfs.isEmpty()) return defaultValue
-    if (kfs.size == 1) return kfs.first().value
-    
-    val sorted = kfs.sortedBy { it.timeMs }
-    val first = sorted.first()
-    val last = sorted.last()
-    
-    if (timeMs <= first.timeMs) return first.value
-    if (timeMs >= last.timeMs) return last.value
-    
-    val k1Idx = sorted.indexOfLast { it.timeMs <= timeMs }
-    val k1 = sorted[k1Idx]
-    val k2 = sorted[k1Idx + 1]
-    
-    val dt = (k2.timeMs - k1.timeMs)
-    if (dt == 0L) return k1.value
-    val t = (timeMs - k1.timeMs).toFloat() / dt
-    val easedT = applyEasing(t, k1.easing) 
-    
-    return k1.value + (k2.value - k1.value) * easedT
-}
-
-data class AudioEffects(
-    val fadeInMs: Long = 0L,
-    val fadeOutMs: Long = 0L,
-    val crossfadeMs: Long = 0L,
-    val eqPreset: String = "Flat",
-    val reverbPreset: String = "None",
-    val delayTimeMs: Long = 0L,
-    val delayFeedback: Float = 0f,
-    val pitchSemitones: Float = 0f,
-    val noiseReductionIntensity: Float = 0f,
-    val isWindNoiseReduction: Boolean = false,
-    val voicePreset: String = "None",
-    val voiceEffectIntensity: Float = 1f,
-    val distortion: Float = 0f,
-    val speed: Float = 1f,
-    val reverbAmount: Float = 0f
-)
-
-data class MediaClip(
-    val id: String = java.util.UUID.randomUUID().toString(),
-    val sourceUri: String,
-    val originalDurationMs: Long,
-    val trimStartMs: Long = 0,
-    val trimEndMs: Long,
-    val playbackSpeed: Float = 1f,
-    val maintainPitch: Boolean = true,
-    val rotation: Float = 0f,
-    val flipHorizontal: Boolean = false,
-    val flipVertical: Boolean = false,
-    val cropRect: Rect = Rect(0f, 0f, 1f, 1f),
-    val scale: Float = 1f,
-    val posX: Float = 0.5f,
-    val posY: Float = 0.5f,
-    val isPhoto: Boolean = false,
-    val transitionNext: Transition = Transition(),
-    val filterType: FilterType = FilterType.NONE,
-    val filterIntensity: Float = 1f,
-    val adjustments: ColorAdjustments = ColorAdjustments(),
-    val effects: List<AppliedEffect> = emptyList(),
-    val photoAnimationSettings: PhotoAnimationSettings = PhotoAnimationSettings(),
-    val keyframes: Map<String, List<Keyframe>> = emptyMap(),
-    val speedCurve: SpeedCurve? = null,
-    val isMuted: Boolean = false,
-    val volume: Float = 1.0f,
-    val audioEffects: AudioEffects = AudioEffects()
-) {
-    val safeOriginalDurationMs: Long get() = originalDurationMs.coerceAtLeast(0L)
-    val effectiveTrimStartMs: Long
-        get() = trimStartMs.coerceIn(0L, safeOriginalDurationMs)
-    val effectiveTrimEndMs: Long
-        get() = trimEndMs.coerceIn(effectiveTrimStartMs, safeOriginalDurationMs)
-
-    fun normalized(): MediaClip = copy(
-        originalDurationMs = safeOriginalDurationMs,
-        trimStartMs = effectiveTrimStartMs,
-        trimEndMs = effectiveTrimEndMs,
-        playbackSpeed = playbackSpeed.coerceIn(0.1f, 10f),
-        volume = volume.coerceIn(0f, 1f),
-        transitionNext = transitionNext.normalized(),
-        speedCurve = speedCurve?.normalized()
-    )
-
-    val durationMs: Long get() {
-        val sourceDurationMs = effectiveTrimEndMs - effectiveTrimStartMs
-        if (sourceDurationMs == 0L) return 0L
-        val safeSpeed = playbackSpeed.coerceIn(0.1f, 10f)
-        return if (speedCurve != null) {
-            calculateDurationWithSpeedCurve(sourceDurationMs, speedCurve).coerceAtLeast(1L)
-        } else {
-            (sourceDurationMs / safeSpeed).toLong().coerceAtLeast(1L)
-        }
-    }
-}
-
-data class AudioClip(
-    val id: String = java.util.UUID.randomUUID().toString(),
-    val sourceClipId: String? = null,
-    val sourceUri: String? = null,
-    val displayName: String? = null,
-    val startTimeOnTimelineMs: Long,
-    val sourceDurationMs: Long,
-    val trimStartMs: Long = 0,
-    val trimEndMs: Long,
-    val isMuted: Boolean = false,
-    val volume: Float = 1.0f,
-    val isLooped: Boolean = false,
-    val keyframes: Map<String, List<Keyframe>> = emptyMap(),
-    val autoDucking: Boolean = false,
-    val audioEffects: AudioEffects = AudioEffects()
-) {
-    val durationMs: Long get() = (trimEndMs - trimStartMs).coerceAtLeast(0L)
-}
-
-enum class AspectRatioOption(val label: String, val ratio: Float, val subtitle: String) {
-    R_9_16("9:16", 9f/16f, "TikTok/Shorts"),
-    R_16_9("16:9", 16f/9f, "YouTube/TV"),
-    R_1_1("1:1", 1f/1f, "Instagram Post"),
-    R_4_5("4:5", 4f/5f, "Instagram Feed"),
-    R_4_3("4:3", 4f/3f, "Classic"),
-    R_21_9("21:9", 21f/9f, "Cinematic")
-}
-
-enum class FitMode { Fit, Fill, Stretch }
-enum class BackgroundType { Color, Blur, Gradient }
-
-data class CanvasSettingsState(
-    val aspectOption: AspectRatioOption = AspectRatioOption.R_16_9,
-    val fitMode: FitMode = FitMode.Fit,
-    val backgroundType: BackgroundType = BackgroundType.Blur,
-    // Keep the serialized representation JVM-friendly. Compose exposes Color.value
-    // as ULong, but Moshi's reflective adapter deliberately rejects Kotlin unsigned
-    // platform types. The bit pattern is preserved when converting back to Color.
-    val backgroundColorValue: Long = androidx.compose.ui.graphics.Color.Black.value.toLong(),
-    val masterVolume: Float = 1.0f
-) {
-    val backgroundColor: androidx.compose.ui.graphics.Color get() = androidx.compose.ui.graphics.Color(backgroundColorValue.toULong())
-}
-
-enum class MaskShape {
-    NONE, CIRCLE, RECTANGLE, HEART, STAR
-}
-
-enum class OverlayAnim {
-    NONE, FADE, SLIDE, SCALE
-}
-
-enum class OverlayBlendModeType {
-    NORMAL, MULTIPLY, SCREEN, OVERLAY, SOFT_LIGHT, HARD_LIGHT, DIFFERENCE, ADD
-}
-
 /** The preview shape used for the non-rectangular overlay masks. */
 private class OverlayMaskShape(
     private val mask: MaskShape
@@ -673,235 +504,6 @@ private fun overlayMaskComposeShape(mask: MaskShape): androidx.compose.ui.graphi
     MaskShape.STAR -> OverlayMaskShape(mask)
 }
 
-enum class TextAlignmentType { Left, Center, Right }
-
-/**
- * Fonts are deliberately local. Legacy saved names are mapped to the closest
- * platform family so opening an old project never triggers a network request.
- */
-val availableFonts = listOf("System Sans", "System Serif", "System Monospace")
-
-fun getFontFamily(fontName: String): FontFamily = when {
-    fontName.equals("System Serif", ignoreCase = true) ||
-        listOf("Merriweather", "Lora", "PT Serif", "Noto Serif", "Libre Baskerville", "Crimson Text", "Playfair Display", "Anton", "Cinzel")
-            .any { fontName.equals(it, ignoreCase = true) } -> FontFamily.Serif
-    fontName.equals("System Monospace", ignoreCase = true) ||
-        listOf("Inconsolata", "Fira Code", "Space Mono", "IBM Plex Mono", "Source Code Pro", "Nanum Gothic Coding")
-            .any { fontName.equals(it, ignoreCase = true) } -> FontFamily.Monospace
-    else -> FontFamily.SansSerif
-}
-
-enum class TextAnimIn { NONE, FADE_IN, SLIDE_IN_UP, SLIDE_IN_DOWN, SLIDE_IN_LEFT, SLIDE_IN_RIGHT, SCALE_IN, TYPEWRITER, BOUNCE_IN, BLUR_IN, ROTATE_IN, GLITCH_IN }
-enum class TextAnimLoop { NONE, PULSE, BOUNCE, SHAKE, GLOW, WAVE, FLICKER, SWING, FLOAT }
-enum class TextAnimOut { NONE, FADE_OUT, SLIDE_OUT_UP, SLIDE_OUT_DOWN, SLIDE_OUT_LEFT, SLIDE_OUT_RIGHT, SCALE_OUT, DISSOLVE, BOUNCE_OUT, BLUR_OUT }
-
-data class TextOverlay(
-    val id: String = java.util.UUID.randomUUID().toString(),
-    val text: String = "Text",
-    val fontName: String = "System Sans",
-    val fontSize: Float = 48f,
-    val textColor: Color = Color.White,
-    val backgroundColor: Color = Color.Transparent,
-    val alignment: TextAlignmentType = TextAlignmentType.Center,
-    val isBold: Boolean = false,
-    val isItalic: Boolean = false,
-    val isUnderline: Boolean = false,
-    
-    val strokeColor: Color = Color.Transparent,
-    val strokeWidth: Float = 0f,
-    val shadowColor: Color = Color.Transparent,
-    val shadowOffsetX: Float = 0f,
-    val shadowOffsetY: Float = 0f,
-    val shadowBlur: Float = 0f,
-    val letterSpacing: Float = 0f,
-    val lineHeightMultiplier: Float = 1f,
-    val is3D: Boolean = false,
-    
-    val name: String = "Text",
-    val isVisible: Boolean = true,
-    val isLocked: Boolean = false,
-    val opacity: Float = 1f,
-
-    val animIn: TextAnimIn = TextAnimIn.NONE,
-    val animInDurationMs: Long = 500L,
-    val animInDelayMs: Long = 0L,
-    val isTypewriterCursor: Boolean = true,
-    val animLoop: TextAnimLoop = TextAnimLoop.NONE,
-    val animLoopDurationMs: Long = 1000L,
-    val animLoopDelayMs: Long = 0L,
-    val animOut: TextAnimOut = TextAnimOut.NONE,
-    val animOutDurationMs: Long = 500L,
-    val animOutDelayMs: Long = 0L,
-
-    val startTimeOnTimelineMs: Long = 0L,
-    val durationMs: Long = 5000L,
-    
-    val posX: Float = 0.5f,
-    val posY: Float = 0.5f,
-    val scale: Float = 1f,
-    val rotation: Float = 0f,
-    val keyframes: Map<String, List<Keyframe>> = emptyMap()
-)
-
-enum class StickerCategory(val title: String) {
-    EMOJI("Emojis"),
-    ANIM_REACTION("Reactions"),
-    ANIM_ARROW("Arrows & Pointers"),
-    ANIM_SOCIAL("Social Media"),
-    ANIM_SPEECH("Speech Bubbles"),
-    ANIM_DECOR("Decorative"),
-    ANIM_LABEL("Labels"),
-    SHAPE("Shapes")
-}
-
-data class StickerModel(val id: String, val content: String, val category: StickerCategory, val defaultAnimLoop: TextAnimLoop = TextAnimLoop.NONE, val isIcon: Boolean = false)
-
-data class StickerOverlay(
-    val id: String = java.util.UUID.randomUUID().toString(),
-    val modelId: String,
-    val content: String,
-    val category: StickerCategory,
-    val isIcon: Boolean = false,
-    val color: Color = Color.White,
-    val backgroundColor: Color = Color.Transparent,
-    
-    val name: String = "Sticker",
-    val isVisible: Boolean = true,
-    val isLocked: Boolean = false,
-    val opacity: Float = 1f,
-    
-    val startTimeOnTimelineMs: Long = 0L,
-    val durationMs: Long = 5000L,
-    
-    val posX: Float = 0.5f,
-    val posY: Float = 0.5f,
-    val scale: Float = 1f,
-    val rotation: Float = 0f,
-    
-    val animIn: TextAnimIn = TextAnimIn.NONE,
-    val animInDurationMs: Long = 500L,
-    val animInDelayMs: Long = 0L,
-    val animLoop: TextAnimLoop = TextAnimLoop.NONE,
-    val animLoopDurationMs: Long = 1000L,
-    val animLoopDelayMs: Long = 0L,
-    val animOut: TextAnimOut = TextAnimOut.NONE,
-    val animOutDurationMs: Long = 500L,
-    val animOutDelayMs: Long = 0L,
-    // Kept on the layer payload so the unified timeline can animate sticker
-    // transforms without losing the data during legacy-state migration.
-    val keyframes: Map<String, List<Keyframe>> = emptyMap()
-)
-
-data class OverlayClip(
-    val id: String = java.util.UUID.randomUUID().toString(),
-    val sourceUri: String,
-    val originalDurationMs: Long,
-    val isPhoto: Boolean = false,
-    val isGif: Boolean = false,
-    
-    val name: String = "Overlay",
-    val isVisible: Boolean = true,
-    val isLocked: Boolean = false,
-    
-    val trimStartMs: Long = 0,
-    val trimEndMs: Long,
-    val startTimeOnTimelineMs: Long = 0,
-    
-    val posX: Float = 0.5f,
-    val posY: Float = 0.5f,
-    val scaleX: Float = 0.5f,
-    val scaleY: Float = 0.5f,
-    val rotation: Float = 0f,
-    val opacity: Float = 1f,
-    val blendMode: OverlayBlendModeType = OverlayBlendModeType.NORMAL,
-    val shadowColor: Color = Color.Transparent,
-    val shadowRadius: Float = 0f,
-    val borderColor: Color = Color.Transparent,
-    val borderWidth: Float = 0f,
-    val maskShape: MaskShape = MaskShape.NONE,
-    val entranceAnim: OverlayAnim = OverlayAnim.NONE,
-    val exitAnim: OverlayAnim = OverlayAnim.NONE,
-    val chromaKey: ChromaKeySettings = ChromaKeySettings(),
-    val keyframes: Map<String, List<Keyframe>> = emptyMap()
-) {
-    val durationMs: Long get() = trimEndMs - trimStartMs
-}
-
-enum class BrushType(val title: String) {
-    PEN("Pen"),
-    MARKER("Marker"),
-    NEON("Neon"),
-    SPRAY("Spray Paint"),
-    CALLIGRAPHY("Calligraphy")
-}
-
-data class DrawStroke(
-    val path: List<NormalizedOffset>,
-    val color: Color,
-    val width: Float,
-    val brushType: BrushType,
-    val isEraser: Boolean = false
-)
-
-data class DrawOverlay(
-    val id: String = java.util.UUID.randomUUID().toString(),
-    val strokes: List<DrawStroke> = emptyList(),
-    val startTimeOnTimelineMs: Long = 0L,
-    val durationMs: Long = 5000L,
-    val isAnimated: Boolean = false,
-    
-    val name: String = "Drawing",
-    val isVisible: Boolean = true,
-    val isLocked: Boolean = false,
-    val opacity: Float = 1f
-)
-
-enum class FrameCategory(val title: String) {
-    CLEAN("Clean Borders"),
-    PHONE_MOCKUP("Phone Mockup"),
-    SOCIAL_MEDIA("Social Media"),
-    DECORATIVE("Decorative"),
-    FESTIVE("Festive")
-}
-
-data class FrameType(
-    val id: String,
-    val category: FrameCategory,
-    val name: String
-)
-
-object FrameRegistry {
-    val types = listOf(
-        FrameType("clean_solid", FrameCategory.CLEAN, "Solid"),
-        FrameType("clean_rounded", FrameCategory.CLEAN, "Rounded"),
-        FrameType("mockup_iphone", FrameCategory.PHONE_MOCKUP, "iPhone"),
-        FrameType("mockup_android", FrameCategory.PHONE_MOCKUP, "Android"),
-        FrameType("mockup_laptop", FrameCategory.PHONE_MOCKUP, "Laptop"),
-        FrameType("social_insta", FrameCategory.SOCIAL_MEDIA, "Instagram"),
-        FrameType("social_imessage", FrameCategory.SOCIAL_MEDIA, "iMessage"),
-        FrameType("deco_film", FrameCategory.DECORATIVE, "Film Strip"),
-        FrameType("deco_polaroid", FrameCategory.DECORATIVE, "Polaroid"),
-        FrameType("deco_torn", FrameCategory.DECORATIVE, "Torn Paper"),
-        FrameType("festive_xmas", FrameCategory.FESTIVE, "Christmas"),
-        FrameType("festive_party", FrameCategory.FESTIVE, "Party")
-    )
-}
-
-data class FrameOverlay(
-    val id: String = java.util.UUID.randomUUID().toString(),
-    val typeId: String,
-    val startTimeOnTimelineMs: Long = 0L,
-    val durationMs: Long = 5000L,
-    val color: Color = Color.White,
-    val thickness: Float = 0.05f, 
-    val cornerRadius: Float = 0f,
-    
-    val name: String = "Frame",
-    val isVisible: Boolean = true,
-    val isLocked: Boolean = false,
-    val opacity: Float = 1f
-)
-
 data class EditorState(
     val clips: List<MediaClip> = emptyList(),
     val canvasSettings: CanvasSettingsState = CanvasSettingsState(),
@@ -927,10 +529,7 @@ data class EditorHistoryModel(
     val currentState: EditorState? = null,
     // New projects persist the canonical layer document alongside the legacy
     // state. Older JSON has no field and remains readable through the default.
-    val timelineProject: TimelineProject? = currentState?.toTimelineProject(),
-    val zoom: Float? = null,
-    @com.squareup.moshi.Json(name = "pos") val positionMs: Long? = null,
-    @com.squareup.moshi.Json(name = "tool") val activeTool: String? = null
+    val timelineProject: TimelineProject? = currentState?.toTimelineProject()
 )
 
 class ComposeDataAdapter {
@@ -976,24 +575,6 @@ val editorHistoryMoshi: com.squareup.moshi.Moshi = com.squareup.moshi.Moshi.Buil
     .addLast(com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory())
     .build()
 
-internal fun serializeEditorHistorySnapshot(
-    undoStack: List<HistoryAction>,
-    redoStack: List<HistoryAction>,
-    currentState: EditorState,
-    zoom: Float,
-    positionMs: Long,
-    activeTool: String?
-): String = editorHistoryMoshi.adapter(EditorHistoryModel::class.java).toJson(
-    EditorHistoryModel(
-        undoStack = undoStack,
-        redoStack = redoStack,
-        currentState = currentState,
-        zoom = zoom,
-        positionMs = positionMs,
-        activeTool = activeTool
-    )
-)
-
 fun removeTimeRangeFromClips(clips: List<MediaClip>, startGlobal: Long, endGlobal: Long): List<MediaClip> {
     val result = mutableListOf<MediaClip>()
     var globalAccum = 0L
@@ -1035,14 +616,24 @@ fun EditorScreen(
 ) {
     var project by remember { mutableStateOf<ProjectEntity?>(null) }
     var showSavedIndicator by remember { mutableStateOf(false) }
+    var showMicrophonePermissionDialog by remember { mutableStateOf(false) }
+    var microphonePermissionPermanentlyDenied by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val isLandscapeEditor = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
     val view = androidx.compose.ui.platform.LocalView.current
     val performanceMode = remember { com.example.viewmodel.PerformanceModeManager.getMode(context) }
     val performanceProfile = remember(performanceMode) {
         com.example.viewmodel.EditorPerformanceProfile.forMode(performanceMode)
     }
     val isBudgetMode = performanceMode == com.example.viewmodel.PerformanceMode.BETTER_PERFORMANCE
+
+    DisposableEffect(Unit) {
+        onDispose {
+            context.findActivity()?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
     
     DisposableEffect(Unit) {
         val entryTime = System.currentTimeMillis()
@@ -1064,7 +655,6 @@ fun EditorScreen(
     
     var isPlaying by remember { mutableStateOf(false) }
     val skipHeavyEffects = isBudgetMode && isPlaying
-    var currentTime by remember { mutableStateOf("00:00") }
     
     val documentState = remember { EditorDocumentState() }
     var clips by documentState.clips
@@ -1109,6 +699,103 @@ fun EditorScreen(
     var currentIsEraser by remember { mutableStateOf(false) }
     var undoStack by documentState.undoStack
     var redoStack by documentState.redoStack
+    var missingMediaIssues by remember { mutableStateOf<List<ProjectMediaIssue>>(emptyList()) }
+    var relinkTarget by remember { mutableStateOf<ProjectMediaIssue?>(null) }
+    var relinkError by remember { mutableStateOf<String?>(null) }
+
+    fun snapshotEditorState(): EditorState = EditorState(
+        clips = clips,
+        canvasSettings = canvasSettings,
+        overlays = overlays,
+        texts = texts,
+        captions = captions,
+        captionSettings = captionSettings,
+        stickers = stickers,
+        drawings = drawings,
+        frames = frames,
+        audioClips = audioClips,
+        layerOrder = layerOrder
+    )
+
+    fun applyEditorStateSnapshot(state: EditorState) {
+        clips = state.clips
+        canvasSettings = state.canvasSettings
+        overlays = state.overlays
+        texts = state.texts
+        captions = state.captions
+        captionSettings = state.captionSettings
+        stickers = state.stickers
+        drawings = state.drawings
+        frames = state.frames
+        audioClips = state.audioClips
+        layerOrder = state.layerOrder
+    }
+
+    val relinkMediaPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { replacementUri ->
+        val issue = relinkTarget
+        if (replacementUri != null && issue != null) {
+            scope.launch {
+                val validationError = ProjectMediaRecovery.validateReplacement(context, issue, replacementUri)
+                if (validationError != null) {
+                    relinkError = validationError
+                    return@launch
+                }
+                runCatching {
+                    context.contentResolver.takePersistableUriPermission(
+                        replacementUri,
+                        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                }
+
+                val relinkedHistory = ProjectMediaRecovery.relink(
+                    EditorHistoryModel(
+                        undoStack = undoStack,
+                        redoStack = redoStack,
+                        currentState = snapshotEditorState()
+                    ),
+                    issue,
+                    replacementUri.toString()
+                )
+                val repairedState = relinkedHistory.restoredEditorState() ?: return@launch
+                undoStack = relinkedHistory.undoStack.takeLast(MAX_EDITOR_HISTORY_DEPTH)
+                redoStack = relinkedHistory.redoStack.takeLast(MAX_EDITOR_HISTORY_DEPTH)
+                applyEditorStateSnapshot(repairedState)
+
+                project?.let { currentProject ->
+                    val historyJson = runCatching {
+                        editorHistoryMoshi.adapter(EditorHistoryModel::class.java).toJson(relinkedHistory)
+                    }.getOrDefault(currentProject.historyState)
+                    val oldUri = issue.sourceUri
+                    val updatedProject = currentProject.copy(
+                        sourceMediaPaths = currentProject.sourceMediaPaths.map { path ->
+                            if (oldUri.isNotBlank() && path == oldUri) replacementUri.toString() else path
+                        },
+                        thumbnailUri = if (oldUri.isNotBlank() && currentProject.thumbnailUri == oldUri) {
+                            replacementUri.toString()
+                        } else {
+                            currentProject.thumbnailUri
+                        },
+                        historyState = historyJson,
+                        isDirty = true,
+                        lastEdited = System.currentTimeMillis()
+                    )
+                    projectViewModel.updateProject(updatedProject)
+                    project = updatedProject
+                }
+
+                missingMediaIssues = ProjectMediaRecovery.audit(context, repairedState)
+                relinkTarget = null
+                relinkError = null
+                android.widget.Toast.makeText(
+                    context,
+                    if (missingMediaIssues.isEmpty()) "Project media restored" else "Media relinked",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
     
     LaunchedEffect(overlays, texts, stickers, drawings, frames) {
         val allIds = overlays.map { it.id } + texts.map { it.id } + stickers.map { it.id } + drawings.map { it.id } + frames.map { it.id }
@@ -1168,44 +855,6 @@ fun EditorScreen(
     LaunchedEffect(videoDurationMs) {
         currentPositionMs = currentPositionMs.coerceIn(0L, videoDurationMs)
     }
-
-    fun currentEditorState(): EditorState = EditorState(
-        clips = clips,
-        canvasSettings = canvasSettings,
-        overlays = overlays,
-        texts = texts,
-        captions = captions,
-        captionSettings = captionSettings,
-        stickers = stickers,
-        drawings = drawings,
-        frames = frames,
-        audioClips = audioClips,
-        layerOrder = layerOrder
-    )
-
-    fun persistCurrentProject(markDirty: Boolean, projectState: String? = null): Boolean {
-        val currentProject = project ?: return false
-        val historyJson = runCatching {
-            serializeEditorHistorySnapshot(
-                undoStack = undoStack,
-                redoStack = redoStack,
-                currentState = currentEditorState(),
-                zoom = zoom,
-                positionMs = currentPositionMs,
-                activeTool = activeTool
-            )
-        }.getOrNull() ?: return false
-
-        val savedProject = currentProject.copy(
-            isDirty = markDirty,
-            historyState = historyJson,
-            lastEdited = System.currentTimeMillis(),
-            projectState = projectState ?: currentProject.projectState
-        )
-        projectViewModel.updateProject(savedProject)
-        project = savedProject
-        return true
-    }
     
     fun saveState(
         newClips: List<MediaClip> = clips,
@@ -1219,7 +868,18 @@ fun EditorScreen(
         clips = normalizedClips
         canvasSettings = newCanvas
         
-        persistCurrentProject(markDirty = true)
+        // Save to DB
+        project?.let { currentProject ->
+            val historyModel = EditorHistoryModel(undoStack, redoStack, EditorState(normalizedClips, newCanvas, overlays, texts, captions, captionSettings, stickers, drawings, frames, audioClips, layerOrder))
+            val historyJson = try { editorHistoryMoshi.adapter(EditorHistoryModel::class.java).toJson(historyModel) } catch(e: Exception) { "" }
+            val savedProject = currentProject.copy(
+                isDirty = true,
+                historyState = historyJson,
+                lastEdited = System.currentTimeMillis()
+            )
+            projectViewModel.updateProject(savedProject)
+            project = savedProject
+        }
     }
     
     fun saveOverlayState(
@@ -1231,7 +891,17 @@ fun EditorScreen(
         redoStack = emptyList()
         overlays = newOverlays
         
-        persistCurrentProject(markDirty = true)
+        project?.let { currentProject ->
+            val historyModel = EditorHistoryModel(undoStack, redoStack, EditorState(clips, canvasSettings, newOverlays, texts, captions, captionSettings, stickers, drawings, frames, audioClips, layerOrder))
+            val historyJson = try { editorHistoryMoshi.adapter(EditorHistoryModel::class.java).toJson(historyModel) } catch(e: Exception) { "" }
+            val savedProject = currentProject.copy(
+                isDirty = true,
+                historyState = historyJson,
+                lastEdited = System.currentTimeMillis()
+            )
+            projectViewModel.updateProject(savedProject)
+            project = savedProject
+        }
     }
 
     fun saveTextState(
@@ -1243,17 +913,37 @@ fun EditorScreen(
         redoStack = emptyList()
         texts = newTexts
         
-        persistCurrentProject(markDirty = true)
+        project?.let { currentProject ->
+            val historyModel = EditorHistoryModel(undoStack, redoStack, EditorState(clips, canvasSettings, overlays, newTexts, captions, captionSettings, stickers, drawings, frames, audioClips, layerOrder))
+            val historyJson = try { editorHistoryMoshi.adapter(EditorHistoryModel::class.java).toJson(historyModel) } catch(e: Exception) { "" }
+            val savedProject = currentProject.copy(
+                isDirty = true,
+                historyState = historyJson,
+                lastEdited = System.currentTimeMillis()
+            )
+            projectViewModel.updateProject(savedProject)
+            project = savedProject
+        }
     }
     
     val persistHistory: () -> Unit = {
-        persistCurrentProject(markDirty = true)
-        Unit
+        project?.let { currentProject ->
+            val historyModel = EditorHistoryModel(undoStack, redoStack, EditorState(clips, canvasSettings, overlays, texts, captions, captionSettings, stickers, drawings, frames, audioClips, layerOrder))
+            val historyJson = try { editorHistoryMoshi.adapter(EditorHistoryModel::class.java).toJson(historyModel) } catch(e: Exception) { "" }
+            val savedProject = currentProject.copy(
+                isDirty = true,
+                historyState = historyJson,
+                lastEdited = System.currentTimeMillis()
+            )
+            projectViewModel.updateProject(savedProject)
+            project = savedProject
+        }
     }
 
     var isRecordingVoiceover by remember { mutableStateOf(false) }
     var voiceRecorder by remember { mutableStateOf<MediaRecorder?>(null) }
     var voiceRecordingFile by remember { mutableStateOf<File?>(null) }
+    var voiceRecordingStartMs by remember { mutableStateOf<Long?>(null) }
 
     DisposableEffect(Unit) {
         onDispose {
@@ -1263,10 +953,11 @@ fun EditorScreen(
                 runCatching { recorder.release() }
             }
             voiceRecordingFile?.delete()
+            voiceRecordingStartMs = null
         }
     }
 
-    fun addAudioTrack(uri: Uri, displayName: String?) {
+    fun addAudioTrack(uri: Uri, displayName: String?, timelineStartMs: Long = currentPositionMs) {
         scope.launch {
             val durationMs = MediaMetadataReader.readAudioDuration(context, uri)
             if (durationMs == null || durationMs <= 0L) {
@@ -1276,7 +967,7 @@ fun EditorScreen(
             val audio = AudioClip(
                 sourceUri = uri.toString(),
                 displayName = displayName ?: uri.lastPathSegment?.substringAfterLast('/') ?: "Audio",
-                startTimeOnTimelineMs = currentPositionMs.coerceIn(0L, videoDurationMs),
+                startTimeOnTimelineMs = timelineStartMs.coerceIn(0L, videoDurationMs),
                 sourceDurationMs = durationMs,
                 trimEndMs = durationMs
             )
@@ -1298,56 +989,72 @@ fun EditorScreen(
         }
     }
 
-    fun startVoiceoverRecording() {
-        if (isRecordingVoiceover) return
+    fun startVoiceoverRecording(): Boolean {
+        if (isRecordingVoiceover) return false
+        if (videoDurationMs <= 0L || currentPositionMs >= videoDurationMs) {
+            android.widget.Toast.makeText(
+                context,
+                "Move the playhead before the end of the video to record a voiceover.",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+            return false
+        }
         val directory = File(context.filesDir, "voiceovers")
         if (!directory.exists() && !directory.mkdirs()) {
             android.widget.Toast.makeText(context, "Could not create a voiceover file.", android.widget.Toast.LENGTH_LONG).show()
-            return
+            return false
         }
         val file = File(directory, "voiceover-${UUID.randomUUID()}.m4a")
-        runCatching {
-            val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) MediaRecorder(context) else MediaRecorder()
-            recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
-            recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            recorder.setAudioSamplingRate(44_100)
-            recorder.setAudioEncodingBitRate(128_000)
-            recorder.setOutputFile(file.absolutePath)
-            recorder.prepare()
-            recorder.start()
-            voiceRecorder = recorder
+        val recordingStartMs = currentPositionMs.coerceIn(0L, (videoDurationMs - 1L).coerceAtLeast(0L))
+        var recorder: MediaRecorder? = null
+        return runCatching {
+            recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) MediaRecorder(context) else MediaRecorder()
+            val activeRecorder = checkNotNull(recorder)
+            activeRecorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+            activeRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            activeRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            activeRecorder.setAudioSamplingRate(44_100)
+            activeRecorder.setAudioEncodingBitRate(128_000)
+            activeRecorder.setOutputFile(file.absolutePath)
+            activeRecorder.prepare()
+            activeRecorder.start()
+            voiceRecorder = activeRecorder
             voiceRecordingFile = file
+            voiceRecordingStartMs = recordingStartMs
             isRecordingVoiceover = true
             android.widget.Toast.makeText(context, "Recording voiceover… tap Stop Voiceover when finished.", android.widget.Toast.LENGTH_LONG).show()
+            true
         }.onFailure {
+            recorder?.let { failedRecorder ->
+                runCatching { failedRecorder.reset() }
+                runCatching { failedRecorder.release() }
+            }
             file.delete()
             android.widget.Toast.makeText(context, "Could not start voiceover recording.", android.widget.Toast.LENGTH_LONG).show()
-        }
+        }.getOrDefault(false)
     }
 
     fun stopVoiceoverRecording() {
         val recorder = voiceRecorder ?: return
         val file = voiceRecordingFile
+        val recordingStartMs = voiceRecordingStartMs
         voiceRecorder = null
         voiceRecordingFile = null
+        voiceRecordingStartMs = null
         isRecordingVoiceover = false
-        runCatching { recorder.stop() }
-            .onFailure { file?.delete() }
+        val stoppedCleanly = runCatching { recorder.stop() }.isSuccess
+        if (!stoppedCleanly) file?.delete()
         runCatching { recorder.reset() }
         runCatching { recorder.release() }
-        if (file == null || !file.exists() || file.length() == 0L) {
+        if (!stoppedCleanly || file == null || !file.exists() || file.length() == 0L) {
             android.widget.Toast.makeText(context, "Voiceover recording was empty.", android.widget.Toast.LENGTH_LONG).show()
             return
         }
-        addAudioTrack(Uri.fromFile(file), "Voiceover")
-    }
-
-    val recordAudioPermission = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) startVoiceoverRecording()
-        else android.widget.Toast.makeText(context, "Microphone permission is required for voiceover.", android.widget.Toast.LENGTH_LONG).show()
+        addAudioTrack(
+            Uri.fromFile(file),
+            "Voiceover",
+            timelineStartMs = recordingStartMs ?: currentPositionMs
+        )
     }
     
     fun seekToGlobal(globalMs: Long, player: ExoPlayer) {
@@ -1361,6 +1068,10 @@ fun EditorScreen(
     var isMuted by remember { mutableStateOf(false) }
     var isFullscreen by remember { mutableStateOf(false) }
     var showFullscreenControls by remember { mutableStateOf(false) }
+    var mainPlaybackEnded by remember { mutableStateOf(false) }
+    var previewError by remember { mutableStateOf<String?>(null) }
+    var previewBuffering by remember { mutableStateOf(false) }
+    val needsVideoBackground = canvasSettings.fitMode == FitMode.Fit && canvasSettings.backgroundType == BackgroundType.Blur && !isBudgetMode
     
     
     val exoPlayer = remember {
@@ -1378,9 +1089,19 @@ fun EditorScreen(
                 override fun onIsPlayingChanged(playing: Boolean) {
                     isPlaying = playing
                 }
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    isPlaying = false
+                    previewBuffering = false
+                    previewError = "This video could not be played. Try again, or replace this clip with a compatible video."
+                    CrashDiagnostics.record(context.applicationContext, "Editor preview: ${error.errorCodeName}", error)
+                }
+                override fun onRenderedFirstFrame() { previewError = null }
                 override fun onPlaybackStateChanged(playbackState: Int) {
+                    previewBuffering = playbackState == Player.STATE_BUFFERING
                     if (playbackState == Player.STATE_ENDED) {
+                        mainPlaybackEnded = true
                         isPlaying = false
+                        currentPositionMs = 0L
                         seekTo(0)
                         pause()
                     }
@@ -1419,11 +1140,86 @@ fun EditorScreen(
         }
     }
     
-    DisposableEffect(Unit) {
-        onDispose { 
+    val editorLifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(editorLifecycle, exoPlayer) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
+                exoPlayer.pause()
+                bgExoPlayer.pause()
+                overlayExoPlayer.pause()
+                if (isRecordingVoiceover) stopVoiceoverRecording()
+            }
+        }
+        editorLifecycle.lifecycle.addObserver(observer)
+        onDispose { editorLifecycle.lifecycle.removeObserver(observer) }
+    }
+    DisposableEffect(exoPlayer) {
+        onDispose {
             exoPlayer.release() 
             bgExoPlayer.release()
             overlayExoPlayer.release()
+        }
+    }
+
+    val recordAudioPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            showMicrophonePermissionDialog = false
+            microphonePermissionPermanentlyDenied = false
+            if (startVoiceoverRecording()) exoPlayer.play()
+        } else {
+            val activity = context.findActivity()
+            microphonePermissionPermanentlyDenied = activity != null &&
+                !ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.RECORD_AUDIO)
+            showMicrophonePermissionDialog = true
+        }
+    }
+
+    if (showMicrophonePermissionDialog) {
+        AlertDialog(
+            onDismissRequest = { showMicrophonePermissionDialog = false },
+            icon = { Icon(Icons.Filled.Mic, contentDescription = null) },
+            title = { Text("Microphone access needed") },
+            text = {
+                Text(
+                    if (microphonePermissionPermanentlyDenied) {
+                        "Voiceover recording needs microphone access. Enable Microphone for Clipp in Android settings, then return here."
+                    } else {
+                        "Voiceover recording needs microphone access. Allow it to record audio directly into your project."
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showMicrophonePermissionDialog = false
+                        if (microphonePermissionPermanentlyDenied) {
+                            val settingsIntent = Intent(
+                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.fromParts("package", context.packageName, null)
+                            )
+                            runCatching { context.startActivity(settingsIntent) }
+                        } else {
+                            recordAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                    }
+                ) {
+                    Text(if (microphonePermissionPermanentlyDenied) "Open settings" else "Try again")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showMicrophonePermissionDialog = false }) {
+                    Text("Not now")
+                }
+            }
+        )
+    }
+
+    LaunchedEffect(mainPlaybackEnded) {
+        if (mainPlaybackEnded) {
+            if (isRecordingVoiceover) stopVoiceoverRecording()
+            mainPlaybackEnded = false
         }
     }
     
@@ -1443,8 +1239,13 @@ fun EditorScreen(
             // Check if undoStack is empty to avoid overwriting a restored project
             if (undoStack.isEmpty()) {
                 val initialClips = mutableListOf<MediaClip>()
+                val unreadableIssues = mutableListOf<ProjectMediaIssue>()
                 for (path in paths) {
-                    val metadata = MediaMetadataReader.read(context, android.net.Uri.parse(path)) ?: continue
+                    val metadata = MediaMetadataReader.read(context, android.net.Uri.parse(path))
+                    if (metadata == null) {
+                        unreadableIssues += ProjectMediaRecovery.legacyVisualIssue(path)
+                        continue
+                    }
                     val isPhoto = metadata.mimeType.startsWith("image/")
                     val durationMs = if (isPhoto) PHOTO_DEFAULT_DURATION_MS else metadata.durationMs
                     if (durationMs > 0L) {
@@ -1456,7 +1257,9 @@ fun EditorScreen(
                         ))
                     }
                 }
-                if (initialClips.isNotEmpty()) {
+                if (unreadableIssues.isNotEmpty()) {
+                    missingMediaIssues = unreadableIssues
+                } else if (initialClips.isNotEmpty()) {
                     saveState(initialClips, canvasSettings, "Initial import")
                 }
             }
@@ -1466,8 +1269,14 @@ fun EditorScreen(
     val exoPlaylistTokens = clips.map {
         "${it.id}|${it.sourceUri}|${it.trimStartMs}|${it.trimEndMs}|${it.isPhoto}|${it.playbackSpeed}|${it.speedCurve}"
     }.joinToString(",")
-    LaunchedEffect(exoPlaylistTokens) {
-        if (clips.isNotEmpty()) {
+    LaunchedEffect(exoPlaylistTokens, missingMediaIssues, needsVideoBackground) {
+        previewError = null
+        if (missingMediaIssues.isNotEmpty() || clips.isEmpty()) {
+            exoPlayer.pause()
+            bgExoPlayer.pause()
+            exoPlayer.clearMediaItems()
+            bgExoPlayer.clearMediaItems()
+        } else if (clips.isNotEmpty()) {
             val mediaItems = clips.map { clip ->
                 val builder = MediaItem.Builder().setUri(android.net.Uri.parse(clip.sourceUri))
                 if (clip.isPhoto) {
@@ -1488,14 +1297,19 @@ fun EditorScreen(
             exoPlayer.setMediaItems(mediaItems)
             exoPlayer.prepare()
             
-            bgExoPlayer.setMediaItems(mediaItems)
-            bgExoPlayer.prepare()
+            if (needsVideoBackground) {
+                bgExoPlayer.setMediaItems(mediaItems)
+                bgExoPlayer.prepare()
+            } else {
+                bgExoPlayer.stop()
+                bgExoPlayer.clearMediaItems()
+            }
             
             seekToGlobal(globalPos, exoPlayer)
-            seekToGlobal(globalPos, bgExoPlayer)
+            if (needsVideoBackground) seekToGlobal(globalPos, bgExoPlayer)
             if (wasPlaying) {
                 exoPlayer.play()
-                bgExoPlayer.play()
+                if (needsVideoBackground) bgExoPlayer.play()
             }
         }
     }
@@ -1512,20 +1326,15 @@ fun EditorScreen(
                         undoStack = historyModel.undoStack.takeLast(MAX_EDITOR_HISTORY_DEPTH)
                         redoStack = historyModel.redoStack.takeLast(MAX_EDITOR_HISTORY_DEPTH)
                         historyModel.restoredEditorState()?.let { restoredState ->
-                            clips = restoredState.clips
-                            canvasSettings = restoredState.canvasSettings
-                            overlays = restoredState.overlays
-                            texts = restoredState.texts
-                            captions = restoredState.captions
-                            captionSettings = restoredState.captionSettings
-                            stickers = restoredState.stickers
-                            drawings = restoredState.drawings
-                            frames = restoredState.frames
-                            audioClips = restoredState.audioClips
-                            layerOrder = restoredState.layerOrder
+                            missingMediaIssues = ProjectMediaRecovery.audit(context, restoredState)
+                            applyEditorStateSnapshot(restoredState)
                         }
                     }
-                } catch (e: Exception) { e.printStackTrace() }
+                } catch (e: Exception) {
+                    if (BuildConfig.DEBUG) {
+                        android.util.Log.e("ClippEditor", "Could not restore project history", e)
+                    }
+                }
             }
             
             // Opening a project is not an edit. Keep the persisted dirty flag so
@@ -1554,66 +1363,72 @@ fun EditorScreen(
         }
     }
 
-    LaunchedEffect(Unit) {
+    // Media3 runs on Android's real clock; do not tie position publication to
+    // the Compose animation/coroutine clock. Rebind when the loaded mapper changes.
+    DisposableEffect(exoPlayer, timelineMapper, needsVideoBackground) {
+        val playbackHandler = android.os.Handler(android.os.Looper.getMainLooper())
         var lastUiUpdateAtMs = 0L
-        while (true) {
-            val bgSyncThresh = 200L
-            if (bgExoPlayer.currentWindowIndex != exoPlayer.currentWindowIndex || Math.abs(exoPlayer.currentPosition - bgExoPlayer.currentPosition) > bgSyncThresh) {
-                bgExoPlayer.seekTo(exoPlayer.currentWindowIndex, exoPlayer.currentPosition)
-            }
-            if (exoPlayer.isPlaying != bgExoPlayer.isPlaying) {
-                if (exoPlayer.isPlaying) bgExoPlayer.play() else bgExoPlayer.pause()
-            }
-            if (exoPlayer.playbackParameters != bgExoPlayer.playbackParameters) {
-                bgExoPlayer.playbackParameters = exoPlayer.playbackParameters
-            }
+        val playbackTicker = object : Runnable {
+            override fun run() {
+                if (needsVideoBackground && bgExoPlayer.mediaItemCount > 0) {
+                    val bgSyncThresh = 200L
+                    if (bgExoPlayer.currentWindowIndex != exoPlayer.currentWindowIndex || Math.abs(exoPlayer.currentPosition - bgExoPlayer.currentPosition) > bgSyncThresh) {
+                        bgExoPlayer.seekTo(exoPlayer.currentWindowIndex, exoPlayer.currentPosition)
+                    }
+                    if (exoPlayer.isPlaying != bgExoPlayer.isPlaying) {
+                        if (exoPlayer.isPlaying) bgExoPlayer.play() else bgExoPlayer.pause()
+                    }
+                    if (exoPlayer.playbackParameters != bgExoPlayer.playbackParameters) {
+                        bgExoPlayer.playbackParameters = exoPlayer.playbackParameters
+                    }
 
-            var nextGlobalPositionMs: Long? = null
-            if (clips.isNotEmpty()) {
-                val windowIndex = exoPlayer.currentWindowIndex
-                if (windowIndex in clips.indices) {
-                    val clip = clips[windowIndex]
-                    val srcDur = Math.max(1L, clip.trimEndMs - clip.trimStartMs)
-                    val currentFraction = (exoPlayer.currentPosition.toFloat() / srcDur).coerceIn(0f, 1f)
-                    
-                    val currentSpeed = if (clip.speedCurve != null && clip.speedCurve.points.isNotEmpty()) {
-                        clip.speedCurve.getSpeedAt(currentFraction)
-                    } else {
-                        clip.playbackSpeed
-                    }
-                    
-                    val params = androidx.media3.common.PlaybackParameters(currentSpeed, if (clip.maintainPitch) 1f else currentSpeed)
-                    if (exoPlayer.playbackParameters.speed != params.speed || exoPlayer.playbackParameters.pitch != params.pitch) {
-                        exoPlayer.playbackParameters = params
-                    }
-                    if (isPlaying) {
-                        nextGlobalPositionMs = timelineMapper.globalPositionForPlayer(
-                            windowIndex,
-                            exoPlayer.currentPosition
-                        )
-                    }
                 }
-            } else if (isPlaying) {
-                nextGlobalPositionMs = exoPlayer.currentPosition
+                var nextGlobalPositionMs: Long? = null
+                if (clips.isNotEmpty()) {
+                    val windowIndex = exoPlayer.currentWindowIndex
+                    if (windowIndex in clips.indices) {
+                        val clip = clips[windowIndex]
+                        val srcDur = Math.max(1L, clip.trimEndMs - clip.trimStartMs)
+                        val currentFraction = (exoPlayer.currentPosition.toFloat() / srcDur).coerceIn(0f, 1f)
+                    
+                        val currentSpeed = if (clip.speedCurve != null && clip.speedCurve.points.isNotEmpty()) {
+                            clip.speedCurve.getSpeedAt(currentFraction)
+                        } else {
+                            clip.playbackSpeed
+                        }
+                    
+                        val params = androidx.media3.common.PlaybackParameters(currentSpeed, if (clip.maintainPitch) 1f else currentSpeed)
+                        if (exoPlayer.playbackParameters.speed != params.speed || exoPlayer.playbackParameters.pitch != params.pitch) {
+                            exoPlayer.playbackParameters = params
+                        }
+                        if (exoPlayer.isPlaying) {
+                            nextGlobalPositionMs = timelineMapper.globalPositionForPlayer(
+                                windowIndex,
+                                exoPlayer.currentPosition
+                            )
+                        }
+                    }
+                } else if (exoPlayer.isPlaying) {
+                    nextGlobalPositionMs = exoPlayer.currentPosition
+                }
+                val nowMs = android.os.SystemClock.elapsedRealtime()
+                val uiIntervalMs = com.example.viewmodel.PlaybackUiCadence.intervalMs(performanceMode, exoPlayer.isPlaying)
+                if (exoPlayer.isPlaying && nextGlobalPositionMs != null && nowMs - lastUiUpdateAtMs >= uiIntervalMs) {
+                    currentPositionMs = nextGlobalPositionMs
+                    lastUiUpdateAtMs = nowMs
+                }
+                playbackHandler.postDelayed(this, 50L)
             }
-            val nowMs = android.os.SystemClock.elapsedRealtime()
-            val uiIntervalMs = com.example.viewmodel.PlaybackUiCadence.intervalMs(performanceMode, isPlaying)
-            if (isPlaying && nextGlobalPositionMs != null && nowMs - lastUiUpdateAtMs >= uiIntervalMs) {
-                currentPositionMs = nextGlobalPositionMs
-                val secs = currentPositionMs / 1000
-                val m = secs / 60
-                val s = secs % 60
-                currentTime = String.format("%02d:%02d", m, s)
-                lastUiUpdateAtMs = nowMs
-            }
-            delay(50)
         }
+        playbackHandler.post(playbackTicker)
+        onDispose { playbackHandler.removeCallbacks(playbackTicker) }
     }
-    
+
     // Also track scroll for timeline
     val timelineScrollState = rememberScrollState()
     
     // Format duration string
+    val currentTime = String.format("%02d:%02d", currentPositionMs / 60000, currentPositionMs / 1000 % 60)
     val durationSecs = videoDurationMs / 1000
     val durationText = String.format("%02d:%02d", durationSecs / 60, durationSecs % 60)
 
@@ -1653,10 +1468,9 @@ fun EditorScreen(
         LaunchedEffect(projectId) {
             if (project != null) {
                 try {
-                    val historyModel = editorHistoryMoshi.adapter(EditorHistoryModel::class.java)
-                        .fromJson(project!!.historyState)
-                    historyModel?.zoom?.let { zoom = it }
-                    historyModel?.positionMs?.let { currentPositionMs = it.coerceAtLeast(0L) }
+                    val json = org.json.JSONObject(project!!.historyState)
+                    if (json.has("zoom")) zoom = json.getDouble("zoom").toFloat()
+                    if (json.has("pos")) currentPositionMs = json.getLong("pos").coerceAtLeast(0L)
                     // Do not reopen editor panels from stale history. Unsupported
                     // layers and effects are intentionally not exposed by the
                     // current export-safe editor surface.
@@ -1666,12 +1480,28 @@ fun EditorScreen(
         }
 
         val saveDraft = {
-            if (persistCurrentProject(markDirty = false, projectState = "Draft")) {
+            project?.let { p ->
+                val json = org.json.JSONObject()
+                try {
+                    if (p.historyState.isNotEmpty()) {
+                        val oldJson = org.json.JSONObject(p.historyState)
+                        oldJson.keys().forEach { json.put(it, oldJson.get(it)) }
+                    }
+                } catch (e: Exception) {}
+                json.put("zoom", zoom.toDouble())
+                json.put("pos", currentPositionMs)
+                json.put("tool", activeTool ?: "")
+                
+                val finalProject = p.copy(
+                    isDirty = false, 
+                    lastEdited = System.currentTimeMillis(), 
+                    projectState = "Draft",
+                    historyState = json.toString()
+                )
+                projectViewModel.updateProject(finalProject)
                 android.widget.Toast.makeText(context, "Saved Draft", android.widget.Toast.LENGTH_SHORT).show()
-                onBack()
-            } else {
-                android.widget.Toast.makeText(context, "Could not save draft", android.widget.Toast.LENGTH_LONG).show()
             }
+            onBack()
         }
 
         
@@ -1711,14 +1541,21 @@ fun EditorScreen(
             topBar = {
             if (!isScreenshotMode) {
                 TopAppBar(
-                    title = { Text(project?.name ?: "Loading...", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) },
+                    title = {
+                        Text(
+                            project?.name ?: "Loading...",
+                            style = if (isLandscapeEditor) MaterialTheme.typography.titleSmall else MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
+                        )
+                    },
                     navigationIcon = {
                         IconButton(onClick = {
-                            if (persistCurrentProject(markDirty = false)) {
-                                onBack()
-                            } else {
-                                android.widget.Toast.makeText(context, "Could not save project", android.widget.Toast.LENGTH_LONG).show()
+                            project?.let {
+                                val finalProject = it.copy(isDirty = false, lastEdited = System.currentTimeMillis())
+                                projectViewModel.updateProject(finalProject)
                             }
+                            onBack()
                         }) {
                             Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
                         }
@@ -2082,6 +1919,25 @@ fun EditorScreen(
                         Text("Export", fontWeight = FontWeight.Bold)
                     }
 
+                    IconButton(
+                        onClick = {
+                            context.findActivity()?.requestedOrientation = if (isLandscapeEditor) {
+                                ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                            } else {
+                                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                            }
+                        }
+                    ) {
+                        Icon(
+                            Icons.Filled.ScreenRotation,
+                            contentDescription = if (isLandscapeEditor) {
+                                "Switch to portrait editor"
+                            } else {
+                                "Switch to landscape editor"
+                            }
+                        )
+                    }
+
                     var showMoreMenu by remember { mutableStateOf(false) }
                     Box {
                         IconButton(onClick = { showMoreMenu = true }) {
@@ -2113,8 +1969,11 @@ fun EditorScreen(
                 modifier = Modifier.fillMaxWidth().navigationBarsPadding()
             ) {
                 LazyRow(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(24.dp),
+                    modifier = Modifier.fillMaxWidth().padding(
+                        vertical = if (isLandscapeEditor) 4.dp else 12.dp,
+                        horizontal = if (isLandscapeEditor) 8.dp else 16.dp
+                    ),
+                    horizontalArrangement = Arrangement.spacedBy(if (isLandscapeEditor) 12.dp else 24.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     val tools = mutableListOf(
@@ -2175,7 +2034,7 @@ fun EditorScreen(
                                     "Voiceover" -> if (isRecordingVoiceover) {
                                         stopVoiceoverRecording()
                                     } else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                                        startVoiceoverRecording()
+                                        if (startVoiceoverRecording()) exoPlayer.play()
                                     } else {
                                         recordAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
                                     }
@@ -2191,11 +2050,13 @@ fun EditorScreen(
                                 Icon(
                                     if (toolName == "Voiceover" && isRecordingVoiceover) Icons.Filled.Stop else tools[index].second,
                                     contentDescription = toolName,
-                                    modifier = Modifier.padding(8.dp),
+                                    modifier = Modifier.padding(if (isLandscapeEditor) 4.dp else 8.dp),
                                     tint = MaterialTheme.colorScheme.onSurface
                                 )
                             }
-                            Text(text = if (toolName == "Voiceover" && isRecordingVoiceover) "Stop Voiceover" else toolName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (!isLandscapeEditor) {
+                                Text(text = if (toolName == "Voiceover" && isRecordingVoiceover) "Stop Voiceover" else toolName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                 }
@@ -2217,6 +2078,7 @@ fun EditorScreen(
                 AudioPlayerComponent(
                     clip = audioClip,
                     clips = clips,
+                    audioClips = audioClips,
                     currentPositionMs = currentPositionMs,
                     isPlaying = isPlaying,
                     isMuted = isMuted,
@@ -2228,7 +2090,7 @@ fun EditorScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(if (isScreenshotMode) 1f else 0.55f)
+                    .weight(if (isScreenshotMode) 1f else if (isLandscapeEditor) 0.62f else 0.55f)
                     .background(Color.Black),
                 contentAlignment = Alignment.Center
             ) {
@@ -2258,14 +2120,27 @@ fun EditorScreen(
                                 Box(bgMod.background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(canvasSettings.backgroundColor, Color.Black))))
                             }
                             BackgroundType.Blur -> {
-                                AndroidView(
+                                if (isBudgetMode) {
+                                    // A still backdrop avoids a second hardware decoder on budget devices.
+                                    AsyncImage(
+                                        model = coil.request.ImageRequest.Builder(context)
+                                            .data(previewFrame.primaryVideo?.layer?.payload?.mediaClip?.sourceUri)
+                                            .videoFrameMillis(0L).build(),
+                                        imageLoader = imageLoader,
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = bgMod.blur(24.dp).graphicsLayer { alpha = 0.5f }
+                                    )
+                                } else AndroidView(
                                     factory = { ctx ->
-                                        androidx.media3.ui.PlayerView(ctx).apply {
+                                        createEditorPreviewView(ctx).apply {
                                             player = bgExoPlayer
                                             useController = false
                                             resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                                         }
                                     },
+                                    onReset = null,
+                                    onRelease = { it.player = null },
                                     modifier = bgMod.blur(24.dp, androidx.compose.ui.draw.BlurredEdgeTreatment.Unbounded).graphicsLayer { alpha = 0.5f }
                                 )
                             }
@@ -2274,7 +2149,7 @@ fun EditorScreen(
 
                     val currentClipForTransform = previewFrame.primaryVideo?.layer?.payload?.mediaClip
 
-                    val mediaPath = project?.sourceMediaPaths?.firstOrNull()
+                    val mediaPath = clips.firstOrNull()?.sourceUri
                     if (mediaPath != null) {
                         val relativeTimeForClip = previewFrame.primaryVideo?.localTimeMs ?: 0L
                         
@@ -2397,14 +2272,17 @@ fun EditorScreen(
                         
                         AndroidView(
                             factory = { ctx ->
-                                androidx.media3.ui.PlayerView(ctx).apply {
-                                    player = exoPlayer
+                                createEditorPreviewView(ctx).apply {
+                                    player = if (isFullscreen) null else exoPlayer
                                     useController = false
                                     setBackgroundColor(android.graphics.Color.TRANSPARENT)
                                     setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
                                 }
                             },
+                            onReset = null,
+                            onRelease = { it.player = null },
                             update = { view ->
+                                view.player = if (isFullscreen) null else exoPlayer
                                 view.resizeMode = when (canvasSettings.fitMode) {
                                     FitMode.Fit -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
                                     FitMode.Fill -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
@@ -2413,6 +2291,7 @@ fun EditorScreen(
                             },
                             modifier = Modifier
                                 .fillMaxSize()
+                                .testTag("editor_preview")
                                 .pointerInput(currentClipForTransform?.id) {
                                     if (selectedClipId != null && selectedClipId == currentClipForTransform?.id && !isPreviewingCrop) {
                                         detectTransformGestures { _, pan, zoom, _ ->
@@ -2901,7 +2780,7 @@ fun EditorScreen(
                                         // But only if it's currently rendering, wait, we can just attach AndroidView
                                         AndroidView(
                                             factory = { ctx ->
-                                                androidx.media3.ui.PlayerView(ctx).apply {
+                                                createEditorPreviewView(ctx).apply {
                                                     player = overlayExoPlayer
                                                     useController = false
                                                     resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
@@ -2909,6 +2788,8 @@ fun EditorScreen(
                                                     setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
                                                 }
                                             },
+                                            onReset = null,
+                                            onRelease = { it.player = null },
                                             modifier = Modifier.fillMaxSize()
                                         )
                                         
@@ -3617,12 +3498,22 @@ fun EditorScreen(
                 }
             }
             
+            if (previewBuffering) LinearProgressIndicator(modifier = Modifier.fillMaxWidth().testTag("preview_loading"))
+            previewError?.let { message ->
+                Row(Modifier.fillMaxWidth().testTag("preview_error").padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(message, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = { previewError = null; exoPlayer.prepare(); exoPlayer.play() }) { Text("Retry") }
+                }
+            }
             if (!isScreenshotMode) {
             // Playback Controls
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 12.dp, horizontal = 16.dp),
+                    .padding(
+                        vertical = if (isLandscapeEditor) 2.dp else 12.dp,
+                        horizontal = if (isLandscapeEditor) 8.dp else 16.dp
+                    ),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -3630,30 +3521,56 @@ fun EditorScreen(
                     text = currentTime,
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.width(60.dp)
+                    modifier = Modifier.weight(1f).testTag("editor_position"),
+                    maxLines = 1, softWrap = false
                 )
                 
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(24.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    if (isLandscapeEditor) {
+                        IconButton(
+                            onClick = { zoom = (zoom / 1.25f).coerceIn(0.2f, 10f) },
+                            enabled = zoom > 0.2f,
+                            modifier = Modifier.size(36.dp).testTag("timeline_zoom_out")
+                        ) {
+                            Icon(Icons.Filled.Remove, contentDescription = "Zoom timeline out")
+                        }
+                        Text(
+                            text = "${(zoom * 100).toInt()}%",
+                            modifier = Modifier.testTag("timeline_zoom_level"),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
+                        )
+                        IconButton(
+                            onClick = { zoom = (zoom * 1.25f).coerceIn(0.2f, 10f) },
+                            enabled = zoom < 10f,
+                            modifier = Modifier.size(36.dp).testTag("timeline_zoom_in")
+                        ) {
+                            Icon(Icons.Filled.Add, contentDescription = "Zoom timeline in")
+                        }
+                    }
                     IconButton(onClick = {
-                        seekToGlobal(currentPositionMs - 15000L, exoPlayer)
+                        seekToGlobal(currentPositionMs - 10000L, exoPlayer)
                     }) {
                         Icon(Icons.Filled.Replay10, contentDescription = "Back", tint = MaterialTheme.colorScheme.onSurface)
                     }
                     
                     Box(modifier = Modifier
-                        .size(56.dp)
+                        .size(if (isLandscapeEditor) 44.dp else 56.dp)
                         .background(MaterialTheme.colorScheme.primary, CircleShape)
                         .clickable {
                             com.example.utils.HapticUtil.playLightTap(view, context)
                             if (isPlaying) {
+                                if (isRecordingVoiceover) stopVoiceoverRecording()
                                 exoPlayer.pause()
                             } else {
                                 if (exoPlayer.playbackState == Player.STATE_ENDED) {
                                     seekToGlobal(0L, exoPlayer)
                                 }
+                                if (exoPlayer.playerError != null) exoPlayer.prepare()
                                 exoPlayer.play()
                             }
                         },
@@ -3670,30 +3587,25 @@ fun EditorScreen(
                                 imageVector = if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                                 contentDescription = if (playing) "Pause" else "Play",
                                 tint = Color.Black,
-                                modifier = Modifier.size(32.dp)
+                                modifier = Modifier.size(if (isLandscapeEditor) 26.dp else 32.dp)
                             )
                         }
                     }
                     
                     IconButton(onClick = {
-                        seekToGlobal(currentPositionMs + 15000L, exoPlayer)
+                        seekToGlobal(currentPositionMs + 10000L, exoPlayer)
                     }) {
                         Icon(Icons.Filled.Forward10, contentDescription = "Forward", tint = MaterialTheme.colorScheme.onSurface)
                     }
                 }
                 
-                VUMeter(
-                    isPlaying = isPlaying,
-                    masterVolume = canvasSettings.masterVolume,
-                    isMuted = isMuted,
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
-                
                 Text(
                     text = durationText,
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.width(60.dp)
+                    modifier = Modifier.weight(1f).testTag("editor_duration"),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                    maxLines = 1, softWrap = false
                 )
             }
             
@@ -3701,9 +3613,13 @@ fun EditorScreen(
             BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(0.45f)
+                    .weight(if (isLandscapeEditor) 0.38f else 0.45f)
+                    .testTag("editor_timeline")
                     .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-                    .padding(top = 16.dp, bottom = 16.dp)
+                    .padding(
+                        top = if (isLandscapeEditor) 4.dp else 16.dp,
+                        bottom = if (isLandscapeEditor) 4.dp else 16.dp
+                    )
                     .clipToBounds()
             ) {
                 val screenWidthPx = constraints.maxWidth.toFloat()
@@ -3714,6 +3630,10 @@ fun EditorScreen(
                 
                 val totalWidthPx = (videoDurationMs / 1000f) * pixelsPerSecond
                 val currentScrollPx = (currentPositionMs / 1000f) * pixelsPerSecond
+                // Gesture handlers live across recompositions; read the latest playhead and scale.
+                val latestTimelinePositionMs by rememberUpdatedState(currentPositionMs)
+                val latestPixelsPerSecond by rememberUpdatedState(pixelsPerSecond)
+                val latestZoom by rememberUpdatedState(zoom)
                 
                 Box(
                     modifier = Modifier
@@ -3721,9 +3641,10 @@ fun EditorScreen(
                         .pointerInput(videoDurationMs) {
                             var lastHapticTimeMs = 0L
                             detectTransformGestures { _, pan, zoomFactor, _ ->
-                                zoom = (zoom * zoomFactor).coerceIn(0.2f, 10f)
-                                val newScrollPx = currentScrollPx - pan.x
-                                val newTimeMs = ((newScrollPx / pixelsPerSecond) * 1000f).toLong()
+                                zoom = (latestZoom * zoomFactor).coerceIn(0.2f, 10f)
+                                val currentPixelsPerSecond = latestPixelsPerSecond
+                                val newScrollPx = (latestTimelinePositionMs / 1000f) * currentPixelsPerSecond - pan.x
+                                val newTimeMs = ((newScrollPx / currentPixelsPerSecond) * 1000f).toLong()
                                 val coercedTime = newTimeMs.coerceIn(0L, videoDurationMs)
                                 seekToGlobal(coercedTime, exoPlayer)
                                 
@@ -3737,18 +3658,26 @@ fun EditorScreen(
                             detectTapGestures(
                                 onTap = { offset ->
                                     val shiftPx = offset.x - (screenWidthPx / 2f)
-                                    val newScrollPx = currentScrollPx + shiftPx
-                                    val newTimeMs = ((newScrollPx / pixelsPerSecond) * 1000f).toLong()
+                                    val currentPixelsPerSecond = latestPixelsPerSecond
+                                    val newScrollPx = (latestTimelinePositionMs / 1000f) * currentPixelsPerSecond + shiftPx
+                                    val newTimeMs = ((newScrollPx / currentPixelsPerSecond) * 1000f).toLong()
                                     seekToGlobal(newTimeMs, exoPlayer)
                                 }
                             )
                         }
                 ) {
                     val translationX = -currentScrollPx + (screenWidthPx / 2f)
-                    
+                    // Scroll the tracks independently of the playhead, which stays centered.
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
+                            .then(if (isLandscapeEditor) Modifier.verticalScroll(timelineScrollState) else Modifier)
+                            .testTag("editor_timeline_tracks")
+                    ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .then(if (isLandscapeEditor) Modifier.height(320.dp) else Modifier.fillMaxHeight())
                             .offset { androidx.compose.ui.unit.IntOffset(translationX.toInt(), 0) }
                     ) {
                         val intervalSecs = when {
@@ -4247,7 +4176,7 @@ fun EditorScreen(
                                                     }
                                                 }
                                             }
-                                            
+
                                             Box(
                                                 modifier = Modifier
                                                     .align(Alignment.CenterStart)
@@ -5122,7 +5051,8 @@ fun EditorScreen(
                             }
                         }
                     }
-                    
+                    }
+
                     Box(
                         modifier = Modifier
                             .align(Alignment.TopCenter)
@@ -5138,6 +5068,42 @@ fun EditorScreen(
                                 .clip(RoundedCornerShape(bottomStart = 4.dp, bottomEnd = 4.dp))
                                 .background(Color.White)
                         )
+                    }
+                    if (isLandscapeEditor) {
+                        Column(
+                            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp).zIndex(2f),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    scope.launch {
+                                        timelineScrollState.animateScrollTo(
+                                            (timelineScrollState.value - with(density) { 96.dp.roundToPx() }).coerceAtLeast(0)
+                                        )
+                                    }
+                                },
+                                enabled = timelineScrollState.value > 0,
+                                modifier = Modifier.size(36.dp).testTag("timeline_tracks_up")
+                                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f), RoundedCornerShape(8.dp))
+                            ) {
+                                Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "Scroll timeline tracks up")
+                            }
+                            IconButton(
+                                onClick = {
+                                    scope.launch {
+                                        timelineScrollState.animateScrollTo(
+                                            (timelineScrollState.value + with(density) { 96.dp.roundToPx() })
+                                                .coerceAtMost(timelineScrollState.maxValue)
+                                        )
+                                    }
+                                },
+                                enabled = timelineScrollState.value < timelineScrollState.maxValue,
+                                modifier = Modifier.size(36.dp).testTag("timeline_tracks_down")
+                                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f), RoundedCornerShape(8.dp))
+                            ) {
+                                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Scroll timeline tracks down")
+                            }
+                        }
                     }
                 }
             }
@@ -5514,6 +5480,10 @@ fun EditorScreen(
                     selectedAudio.volume
                 ).coerceIn(0f, 1f)
                 val maxFadeMs = minOf(5_000L, selectedAudio.durationMs.coerceAtLeast(1L))
+                val maxCrossfadeMs = minOf(
+                    MAX_EXPORT_CROSSFADE_MS,
+                    selectedAudio.timelineDurationMs(videoDurationMs) / 2L
+                ).coerceAtLeast(0L)
 
                 fun updateSelectedAudio(updated: AudioClip) {
                     val index = audioClips.indexOfFirst { it.id == selectedAudio.id }
@@ -5654,6 +5624,48 @@ fun EditorScreen(
                             valueRange = 0f..maxFadeMs.toFloat()
                         )
 
+                        Text("Crossfade: ${selectedAudio.audioEffects.crossfadeMs} ms", style = MaterialTheme.typography.labelMedium)
+                        Slider(
+                            value = selectedAudio.audioEffects.crossfadeMs.coerceIn(0L, maxCrossfadeMs).toFloat(),
+                            onValueChange = { value ->
+                                updateSelectedAudio(
+                                    selectedAudio.copy(
+                                        audioEffects = selectedAudio.audioEffects.copy(crossfadeMs = value.toLong())
+                                    )
+                                )
+                            },
+                            onValueChangeFinished = { persistHistory() },
+                            valueRange = 0f..maxCrossfadeMs.coerceAtLeast(1L).toFloat(),
+                            enabled = maxCrossfadeMs > 0L
+                        )
+                        Text(
+                            "Fades both edges of this track so overlapping audio blends smoothly.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                Text("Auto duck", style = MaterialTheme.typography.labelLarge)
+                                Text(
+                                    "Lower this track under audible video or foreground audio, with smooth ramps.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = selectedAudio.autoDucking,
+                                onCheckedChange = { enabled ->
+                                    updateSelectedAudio(selectedAudio.copy(autoDucking = enabled))
+                                    persistHistory()
+                                }
+                            )
+                        }
+
                         Text("Equalizer", style = MaterialTheme.typography.labelMedium)
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             items(EXPORT_EQ_PRESETS.size) { index ->
@@ -5775,7 +5787,7 @@ fun EditorScreen(
                         )
 
                         Text(
-                            "Export applies looping, EQ, pitch, bounded delay/reverb, distortion, volume keyframes, and fades. Preview uses the trimmed source and repeats it when Loop audio is enabled.",
+                            "Preview and export apply looping, volume keyframes, fades, crossfade envelopes, and auto ducking. Export also applies EQ, pitch, bounded delay/reverb, and distortion.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -7368,7 +7380,7 @@ fun EditorScreen(
                 .background(Color.Black)
                 .clickable { showFullscreenControls = !showFullscreenControls }
         ) {
-            val mediaPath = project?.sourceMediaPaths?.firstOrNull()
+            val mediaPath = clips.firstOrNull()?.sourceUri
             if (mediaPath != null) {
                 val currentClipForFullscreen = if (clips.isNotEmpty() && exoPlayer.currentWindowIndex in clips.indices) clips[exoPlayer.currentWindowIndex] else null
                 val filterType = currentClipForFullscreen?.filterType ?: FilterType.NONE
@@ -7387,11 +7399,13 @@ fun EditorScreen(
                 
                 AndroidView(
                     factory = { ctx ->
-                        PlayerView(ctx).apply {
+                        createEditorPreviewView(ctx).apply {
                             player = exoPlayer
                             useController = false
                         }
                     },
+                    onReset = null,
+                    onRelease = { it.player = null },
                     modifier = Modifier.fillMaxSize()
                         .colorFilterOverlay(finalColorMatrix)
                         .then(if (!isComparing) Modifier.vignetteAndGrain(adjustments.vignette, adjustments.grain) else Modifier)
@@ -7419,6 +7433,7 @@ fun EditorScreen(
                         .background(MaterialTheme.colorScheme.primary, CircleShape)
                         .clickable {
                             if (isPlaying) {
+                                if (isRecordingVoiceover) stopVoiceoverRecording()
                                 exoPlayer.pause()
                             } else {
                                 if (exoPlayer.playbackState == Player.STATE_ENDED) {
@@ -7520,6 +7535,48 @@ fun EditorScreen(
                         }
                     }
                     }
+                }
+            }
+        )
+    }
+
+    if (missingMediaIssues.isNotEmpty()) {
+        val issue = missingMediaIssues.first()
+        AlertDialog(
+            onDismissRequest = {},
+            icon = { Icon(Icons.Filled.Warning, contentDescription = null) },
+            title = { Text("Missing project media") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "${issue.displayLabel} is unavailable. Relink the original or a compatible replacement to keep all existing edits."
+                    )
+                    if (missingMediaIssues.size > 1) {
+                        Text("${missingMediaIssues.size} missing media source(s) remain.")
+                    }
+                    if (relinkError != null) {
+                        Text(
+                            relinkError!!,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        relinkTarget = issue
+                        relinkError = null
+                        relinkMediaPicker.launch(issue.acceptedMimeTypes())
+                    }
+                ) {
+                    Text("Relink")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onBack) {
+                    Text("Back to Projects")
                 }
             }
         )

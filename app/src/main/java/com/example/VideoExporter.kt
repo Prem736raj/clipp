@@ -9,13 +9,20 @@ import android.provider.MediaStore
 import android.util.Log
 import androidx.core.content.FileProvider
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.audio.SonicAudioProcessor
 import androidx.media3.effect.SpeedChangeEffect
+import androidx.media3.effect.Presentation
 import androidx.media3.transformer.Composition
+import androidx.media3.transformer.Codec
+import androidx.media3.transformer.DefaultEncoderFactory
+import androidx.media3.transformer.EncoderSelector
+import androidx.media3.transformer.AudioEncoderSettings
+import androidx.media3.transformer.VideoEncoderSettings
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.Effects
@@ -36,6 +43,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import com.google.common.collect.ImmutableList
 import kotlin.math.PI
 import kotlin.math.pow
 import kotlin.math.roundToInt
@@ -51,9 +59,9 @@ class ExportHandle internal constructor(private val cancelAction: () -> Unit) {
     fun cancel() = cancelAction()
 }
 
-internal fun AudioEffects.hasUnsupportedExportAutomation(): Boolean {
+internal fun AudioEffects.hasUnsupportedExportAutomation(allowCrossfade: Boolean = false): Boolean {
     return fadeInMs < 0L || fadeOutMs < 0L ||
-        crossfadeMs != 0L ||
+        crossfadeMs < 0L || crossfadeMs > MAX_EXPORT_CROSSFADE_MS || (!allowCrossfade && crossfadeMs != 0L) ||
         eqPreset !in EXPORT_EQ_PRESETS ||
         reverbPreset !in EXPORT_REVERB_PRESETS ||
         delayTimeMs !in 0L..MAX_EXPORT_DELAY_MS ||
@@ -151,6 +159,7 @@ class VideoExporter(context: Context) {
     private var transformer: Transformer? = null
     private var temporaryOutput: File? = null
     private var publishedAppFile: File? = null
+    private var startupJob: Job? = null
     private var progressJob: Job? = null
 
     fun export(
@@ -159,11 +168,10 @@ class VideoExporter(context: Context) {
         editorState: EditorState = EditorState(clips = clips),
         onProgress: (Int) -> Unit,
         onSuccess: (Uri, ExportMetadata) -> Unit,
-        onError: (String) -> Unit
+        onError: (String) -> Unit,
+        exportSettings: ExportSettings? = null
     ): ExportHandle {
         val canceled = AtomicBoolean(false)
-        val outputFile = File(appContext.cacheDir, "export-${UUID.randomUUID()}.mp4")
-        temporaryOutput = outputFile
 
         // Export through the canonical document boundary. The renderer still
         // consumes the legacy payloads today, but all timing/order/shared
@@ -172,119 +180,186 @@ class VideoExporter(context: Context) {
             .copy(clips = clips)
             .toTimelineProject()
             .toEditorState()
-        val unsupportedReasons = canonicalState.exportUnsupportedReasons()
+        val unsupportedReasons = canonicalState.exportUnsupportedReasons(exportSettings)
         if (unsupportedReasons.isNotEmpty()) {
             onError("Export blocked: ${unsupportedReasons.joinToString(", ")}")
             return ExportHandle { canceled.set(true) }
         }
-        val exportClips = canonicalState.clips
-        val editedItems = mutableListOf<EditedMediaItem>()
-        var clipStartMs = 0L
-        exportClips.forEachIndexed { index, clip ->
-            clip.toExportSpeedSegments().forEach { segment ->
-                segment.toEditedMediaItem(
-                    state = canonicalState,
-                    clipIndex = index,
-                    clipStartMs = clipStartMs
-                )?.let {
-                    editedItems += it
-                    clipStartMs += segment.durationMs
-                }
-            }
-        }
-        if (editedItems.isEmpty()) {
-            onError("There are no exportable clips in this project")
+        val deviceReadiness = inspectExportDeviceReadiness(appContext, canonicalState)
+        deviceReadiness.blockingReason?.let { reason ->
+            onError("Export blocked: $reason")
             return ExportHandle { canceled.set(true) }
         }
+        startupJob?.cancel()
+        startupJob = scope.launch {
+            val sourceBlockingReason = withContext(Dispatchers.IO) {
+                exportSettings?.let { settings ->
+                    settings.validationError()?.let { return@withContext it }
+                    val dimensions = settings.dimensions(canonicalState.canvasSettings.aspectOption.ratio)
+                    val canEncode = runCatching {
+                        EncoderSelector.DEFAULT.selectEncoderInfos(MimeTypes.VIDEO_H264)
+                            .any { it.supportsExportSettings(settings, dimensions) }
+                    }.getOrDefault(false)
+                    if (!canEncode) return@withContext "These export settings are not supported by this device. Try a lower resolution, frame rate, or bitrate."
+                }
+                canonicalState.exportSourceBlockingReason(appContext)
+            }
+            if (canceled.get()) return@launch
+            sourceBlockingReason?.let { reason ->
+                onError("Export blocked: $reason")
+                return@launch
+            }
 
-        val sequences = mutableListOf(EditedMediaItemSequence(editedItems))
-        sequences += buildAudioSequences(canonicalState, exportClips, clipStartMs)
-        val composition = Composition.Builder(sequences).build()
-
-        val builtTransformer = Transformer.Builder(appContext)
-            .setVideoMimeType(MimeTypes.VIDEO_H264)
-            .setAudioMimeType(MimeTypes.AUDIO_AAC)
-            .setListener(object : Transformer.Listener {
-                override fun onCompleted(composition: Composition, exportResult: ExportResult) {
-                    progressJob?.cancel()
-                    if (canceled.get()) {
-                        cleanupTemporaryOutput()
-                        return
-                    }
-                    scope.launch {
-                        val published = withContext(Dispatchers.IO) {
-                            publishAndValidate(outputFile, outputName)
-                        }
-                        if (canceled.get()) {
-                            published?.let { deletePublished(it) }
-                            cleanupTemporaryOutput()
-                        } else if (published == null) {
-                            cleanupTemporaryOutput()
-                            onError("Clipp could not publish a valid MP4")
-                        } else {
-                            cleanupTemporaryOutput()
-                            onProgress(100)
-                            onSuccess(
-                                published.first,
-                                ExportMetadata(
-                                    durationMs = published.second,
-                                    fileSizeBytes = published.third
-                                )
-                            )
-                        }
+            val outputFile = File(appContext.cacheDir, "export-${UUID.randomUUID()}.mp4")
+            temporaryOutput = outputFile
+            val exportClips = canonicalState.clips
+            val editedItems = mutableListOf<EditedMediaItem>()
+            var clipStartMs = 0L
+            exportClips.forEachIndexed { index, clip ->
+                clip.toExportSpeedSegments().forEach { segment ->
+                    segment.toEditedMediaItem(
+                        state = canonicalState,
+                        clipIndex = index,
+                        clipStartMs = clipStartMs,
+                        exportSettings = exportSettings
+                    )?.let {
+                        editedItems += it
+                        clipStartMs += segment.durationMs
                     }
                 }
+            }
+            if (editedItems.isEmpty()) {
+                cleanupTemporaryOutput()
+                onError("There are no exportable clips in this project")
+                return@launch
+            }
 
-                override fun onError(
-                    composition: Composition,
-                    exportResult: ExportResult,
-                    exportException: ExportException
-                ) {
+            val sequences = mutableListOf(EditedMediaItemSequence(editedItems))
+            sequences += buildAudioSequences(canonicalState, exportClips, clipStartMs)
+            val compositionBuilder = Composition.Builder(sequences)
+            if (exportSettings != null) {
+                val dimensions = exportSettings.dimensions(canonicalState.canvasSettings.aspectOption.ratio)
+                compositionBuilder.setEffects(Effects(emptyList(), listOf(
+                    Presentation.createForWidthAndHeight(
+                        dimensions.width, dimensions.height, Presentation.LAYOUT_SCALE_TO_FIT
+                    ),
+                    ExportFrameRateEffect(exportSettings.frameRate)
+                )))
+            }
+            val composition = compositionBuilder.build()
+
+            val transformerBuilder = Transformer.Builder(appContext)
+                .setVideoMimeType(MimeTypes.VIDEO_H264)
+                .setAudioMimeType(MimeTypes.AUDIO_AAC)
+            if (exportSettings != null) {
+                val dimensions = exportSettings.dimensions(canonicalState.canvasSettings.aspectOption.ratio)
+                val encoderFactory: Codec.EncoderFactory = DefaultEncoderFactory.Builder(appContext)
+                        .setEnableFallback(false)
+                        .setVideoEncoderSelector { mimeType ->
+                            ImmutableList.copyOf(EncoderSelector.DEFAULT.selectEncoderInfos(mimeType)
+                                .filter { it.supportsExportSettings(exportSettings, dimensions) })
+                        }
+                        .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder()
+                            .setBitrate(exportSettings.videoBitrate).build())
+                        .setRequestedAudioEncoderSettings(AudioEncoderSettings.Builder()
+                            .setBitrate(EXPORT_AUDIO_BITRATE).build())
+                        .build()
+                transformerBuilder.setEncoderFactory(object : Codec.EncoderFactory by encoderFactory {
+                    override fun createForVideoEncoding(format: Format): Codec =
+                        encoderFactory.createForVideoEncoding(format.buildUpon()
+                            .setFrameRate(exportSettings.frameRate.toFloat()).build())
+                })
+            }
+            val builtTransformer = transformerBuilder
+                .setListener(object : Transformer.Listener {
+                    override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                        progressJob?.cancel()
+                        if (canceled.get()) {
+                            cleanupTemporaryOutput()
+                            return
+                        }
+                        publicationStorageBlockingReason(appContext, outputFile.length())?.let { reason ->
+                            cleanupTemporaryOutput()
+                            onError(reason)
+                            return
+                        }
+                        scope.launch {
+                            val published = withContext(Dispatchers.IO) {
+                                publishAndValidate(outputFile, outputName)
+                            }
+                            if (canceled.get()) {
+                                published?.let { deletePublished(it) }
+                                cleanupTemporaryOutput()
+                            } else if (published == null) {
+                                cleanupTemporaryOutput()
+                                onError("Clipp could not publish a valid MP4")
+                            } else {
+                                cleanupTemporaryOutput()
+                                onProgress(100)
+                                onSuccess(
+                                    published.first,
+                                    ExportMetadata(
+                                        durationMs = published.second,
+                                        fileSizeBytes = published.third
+                                    )
+                                )
+                            }
+                        }
+                    }
+
+                    override fun onError(
+                        composition: Composition,
+                        exportResult: ExportResult,
+                        exportException: ExportException
+                    ) {
+                        progressJob?.cancel()
+                        cleanupTemporaryOutput()
+                        if (BuildConfig.DEBUG) {
+                            Log.e("ClippExporter", "Media3 export failed", exportException)
+                        }
+                        if (!canceled.get()) {
+                            onError(userFacingExportFailure(exportException.getErrorCodeName()))
+                        }
+                    }
+                })
+                .build()
+            transformer = builtTransformer
+
+            progressJob = scope.launch {
+                val holder = ProgressHolder()
+                while (isActive && !canceled.get()) {
+                    val state = builtTransformer.getProgress(holder)
+                    if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
+                        onProgress(holder.progress.coerceIn(0, 99))
+                    }
+                    delay(250)
+                }
+            }
+
+            runCatching { builtTransformer.start(composition, outputFile.absolutePath) }
+                .onFailure {
                     progressJob?.cancel()
                     cleanupTemporaryOutput()
-                    if (BuildConfig.DEBUG) {
-                        Log.e("ClippExporter", "Media3 export failed", exportException)
-                    }
+                    if (BuildConfig.DEBUG) Log.e("ClippExporter", "Could not start export", it)
                     if (!canceled.get()) {
-                        onError("Export failed: ${exportException.getErrorCodeName()}")
+                        val detail = it.message?.takeIf(String::isNotBlank) ?: it::class.simpleName
+                        onError("Could not start export${detail?.let { value -> ": $value" } ?: ""}")
                     }
                 }
-            })
-            .build()
-        transformer = builtTransformer
-
-        progressJob = scope.launch {
-            val holder = ProgressHolder()
-            while (isActive && !canceled.get()) {
-                val state = builtTransformer.getProgress(holder)
-                if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
-                    onProgress(holder.progress.coerceIn(0, 99))
-                }
-                delay(250)
-            }
         }
-
-        runCatching { builtTransformer.start(composition, outputFile.absolutePath) }
-            .onFailure {
-                progressJob?.cancel()
-                cleanupTemporaryOutput()
-                if (BuildConfig.DEBUG) Log.e("ClippExporter", "Could not start export", it)
-                if (!canceled.get()) {
-                    val detail = it.message?.takeIf(String::isNotBlank) ?: it::class.simpleName
-                    onError("Could not start export${detail?.let { value -> ": $value" } ?: ""}")
-                }
-            }
 
         return ExportHandle {
             if (canceled.compareAndSet(false, true)) {
+                startupJob?.cancel()
                 progressJob?.cancel()
-                runCatching { builtTransformer.cancel() }
+                runCatching { transformer?.cancel() }
                 cleanupTemporaryOutput()
             }
         }
     }
 
     fun close() {
+        startupJob?.cancel()
         progressJob?.cancel()
         runCatching { transformer?.cancel() }
         cleanupTemporaryOutput()
@@ -294,7 +369,8 @@ class VideoExporter(context: Context) {
     private fun MediaClip.toEditedMediaItem(
         state: EditorState,
         clipIndex: Int,
-        clipStartMs: Long
+        clipStartMs: Long,
+        exportSettings: ExportSettings? = null
     ): EditedMediaItem? {
         val normalized = normalized()
         if (normalized.sourceUri.isBlank()) return null
@@ -362,7 +438,7 @@ class VideoExporter(context: Context) {
         if (normalized.isPhoto) {
             editedItem
                 .setDurationUs(imageDurationMs * 1_000L)
-                .setFrameRate(30)
+                .setFrameRate(exportSettings?.frameRate ?: 30)
         }
         if (videoEffects.isNotEmpty() || audioProcessors.isNotEmpty()) {
             editedItem.setEffects(Effects(audioProcessors, videoEffects))
@@ -375,6 +451,7 @@ class VideoExporter(context: Context) {
         clips: List<MediaClip>,
         videoDurationMs: Long
     ): List<EditedMediaItemSequence> {
+        val duckingWindows = state.buildAudioDuckingWindows(videoDurationMs)
         return state.audioClips.mapNotNull { audioClip ->
             if (videoDurationMs <= 0L) return@mapNotNull null
             val sourceUri = audioClip.sourceUri
@@ -392,7 +469,9 @@ class VideoExporter(context: Context) {
                         audioClip = audioClip,
                         sourceUri = sourceUri,
                         segment = segment,
-                        masterVolume = state.canvasSettings.masterVolume
+                        masterVolume = state.canvasSettings.masterVolume,
+                        projectDurationMs = videoDurationMs,
+                        duckingWindows = duckingWindows
                     )
                 )
             }
@@ -404,7 +483,9 @@ class VideoExporter(context: Context) {
         audioClip: AudioClip,
         sourceUri: String,
         segment: AudioExportSegment,
-        masterVolume: Float
+        masterVolume: Float,
+        projectDurationMs: Long,
+        duckingWindows: List<AudioDuckingWindow>
     ): EditedMediaItem {
         val mediaItem = MediaItem.Builder()
             .setUri(Uri.parse(sourceUri))
@@ -434,10 +515,20 @@ class VideoExporter(context: Context) {
                 durationMs = segment.durationMs,
                 fadeInMs = audioEffects.fadeInMs,
                 fadeOutMs = audioEffects.fadeOutMs,
-                volumeKeyframes = volumeKeyframes
+                volumeKeyframes = volumeKeyframes,
+                fadeTimelineOffsetMs = segment.timelineOffsetMs,
+                fadeTimelineDurationMs = audioClip.timelineDurationMs(projectDurationMs)
             )
         } else if (!audioClip.isMuted && effectiveVolume != 1f) {
             processors += VolumeAudioProcessor(effectiveVolume)
+        }
+        if (!audioClip.isMuted && (audioEffects.crossfadeMs > 0L || audioClip.autoDucking)) {
+            processors += TimelineAudioMixProcessor(
+                timelineStartMs = audioClip.startTimeOnTimelineMs + segment.timelineOffsetMs,
+                projectDurationMs = projectDurationMs,
+                audioClip = audioClip,
+                duckingWindows = duckingWindows
+            )
         }
         if (!audioClip.isMuted) {
             processors.addAdvancedAudioProcessors(audioEffects)
@@ -487,8 +578,12 @@ class VideoExporter(context: Context) {
                 file.inputStream().use { source -> source.copyTo(destination) }
             } ?: error("Could not open MediaStore output")
             val ready = ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }
-            appContext.contentResolver.update(uri, ready, null, null)
-            uri to file.length()
+            check(appContext.contentResolver.update(uri, ready, null, null) == 1) {
+                "Could not finalize MediaStore export"
+            }
+            val publishedSize = readPublishedSize(uri)
+            check(publishedSize > 0L) { "Published export is empty" }
+            uri to publishedSize
         }.getOrElse {
             appContext.contentResolver.delete(uri, null, null)
             null
@@ -504,6 +599,7 @@ class VideoExporter(context: Context) {
         val destination = File(directory, name)
         return runCatching {
             file.copyTo(destination, overwrite = true)
+            check(destination.length() > 0L) { "Published export is empty" }
             publishedAppFile = destination
             FileProvider.getUriForFile(
                 appContext,
@@ -523,6 +619,20 @@ class VideoExporter(context: Context) {
             retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
                 ?.toLongOrNull() ?: 0L
         }.getOrDefault(0L).also { runCatching { retriever.release() } }
+    }
+
+    private fun readPublishedSize(uri: Uri): Long {
+        return runCatching {
+            appContext.contentResolver.query(
+                uri,
+                arrayOf(MediaStore.MediaColumns.SIZE),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else 0L
+            } ?: 0L
+        }.getOrDefault(0L)
     }
 
     private fun deletePublished(published: Triple<Uri, Long, Long>) {
@@ -617,7 +727,7 @@ private fun AppliedEffect.remappedForSpeedSegment(
     val effectEndMs = if (endTimeMs == -1L) segmentEndMs else endTimeMs
     val overlapStartMs = maxOf(startTimeMs, segmentStartMs)
     val overlapEndMs = minOf(effectEndMs, segmentEndMs)
-    if (overlapEndMs < overlapStartMs) return null
+    if (overlapEndMs <= overlapStartMs) return null
     val sourceSpanMs = (segmentEndMs - segmentStartMs).coerceAtLeast(1L)
     fun localTime(timeMs: Long): Long = (
         (timeMs - segmentStartMs).toDouble() / sourceSpanMs.toDouble() * segmentDurationMs
@@ -1022,7 +1132,7 @@ internal class VolumeAudioProcessor(volume: Float) : BaseAudioProcessor() {
         return inputAudioFormat
     }
 
-    override fun isActive(): Boolean = super.isActive() || gain != 1f
+    override fun isActive(): Boolean = gain != 1f
 
     override fun queueInput(inputBuffer: ByteBuffer) {
         val input = inputBuffer.order(ByteOrder.LITTLE_ENDIAN)
@@ -1050,7 +1160,9 @@ internal class KeyframedVolumeAudioProcessor(
     private val durationMs: Long,
     fadeInMs: Long,
     fadeOutMs: Long,
-    volumeKeyframes: List<Keyframe>
+    volumeKeyframes: List<Keyframe>,
+    private val fadeTimelineOffsetMs: Long = 0L,
+    private val fadeTimelineDurationMs: Long = durationMs
 ) : BaseAudioProcessor() {
     private val fadeInDurationMs = fadeInMs.coerceAtLeast(0L)
     private val fadeOutDurationMs = fadeOutMs.coerceAtLeast(0L)
@@ -1076,8 +1188,7 @@ internal class KeyframedVolumeAudioProcessor(
         processedFrames = 0L
     }
 
-    override fun isActive(): Boolean = super.isActive() ||
-        baseGain != 1f ||
+    override fun isActive(): Boolean = baseGain != 1f ||
         fadeInDurationMs > 0L ||
         fadeOutDurationMs > 0L ||
         sortedVolumeKeyframes.isNotEmpty()
@@ -1125,16 +1236,73 @@ internal class KeyframedVolumeAudioProcessor(
             }
             first.value + (second.value - first.value) * progress
         }
-        val fadeInGain = if (fadeInDurationMs > 0L) {
-            (timeMs.toFloat() / fadeInDurationMs).coerceIn(0f, 1f)
-        } else {
-            1f
+        val fadeGain = audioFadeGainAt(
+            localTimeMs = fadeTimelineOffsetMs + timeMs,
+            durationMs = fadeTimelineDurationMs,
+            fadeInMs = fadeInDurationMs,
+            fadeOutMs = fadeOutDurationMs
+        )
+        return (keyframedGain * fadeGain).coerceIn(0f, 1f)
+    }
+}
+
+/** Applies timeline-aware crossfade and automatic ducking gain to decoded PCM audio. */
+internal class TimelineAudioMixProcessor(
+    private val timelineStartMs: Long,
+    private val projectDurationMs: Long,
+    private val audioClip: AudioClip,
+    private val duckingWindows: List<AudioDuckingWindow>
+) : BaseAudioProcessor() {
+    private var sampleRate = 0
+    private var channelCount = 0
+    private var bytesPerSample = 0
+    private var processedFrames = 0L
+
+    override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
+        if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT &&
+            inputAudioFormat.encoding != C.ENCODING_PCM_FLOAT
+        ) {
+            throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
         }
-        val fadeOutGain = if (fadeOutDurationMs > 0L && durationMs > 0L) {
-            ((durationMs - timeMs).toFloat() / fadeOutDurationMs).coerceIn(0f, 1f)
-        } else {
-            1f
+        sampleRate = inputAudioFormat.sampleRate
+        channelCount = inputAudioFormat.channelCount
+        bytesPerSample = if (inputAudioFormat.encoding == C.ENCODING_PCM_16BIT) 2 else 4
+        return inputAudioFormat
+    }
+
+    override fun onFlush() {
+        processedFrames = 0L
+    }
+
+    override fun isActive(): Boolean = audioClip.audioEffects.crossfadeMs > 0L || audioClip.autoDucking
+
+    override fun queueInput(inputBuffer: ByteBuffer) {
+        val input = inputBuffer.order(ByteOrder.LITTLE_ENDIAN)
+        val bytesPerFrame = (channelCount * bytesPerSample).coerceAtLeast(1)
+        val completeBytes = input.remaining() - input.remaining() % bytesPerFrame
+        val output = replaceOutputBuffer(completeBytes).order(ByteOrder.LITTLE_ENDIAN)
+        val frameCount = completeBytes / bytesPerFrame
+        repeat(frameCount) { frameIndex ->
+            val localTimeMs = if (sampleRate > 0) {
+                ((processedFrames + frameIndex) * 1_000L / sampleRate).coerceAtLeast(0L)
+            } else {
+                0L
+            }
+            val gain = audioClip.timelineMixGainAt(
+                projectTimeMs = timelineStartMs + localTimeMs,
+                projectDurationMs = projectDurationMs,
+                duckingWindows = duckingWindows
+            )
+            repeat(channelCount) {
+                if (bytesPerSample == 2) {
+                    val sample = input.short.toInt()
+                    output.putShort((sample * gain).roundToInt().coerceIn(-32768, 32767).toShort())
+                } else {
+                    output.putFloat((input.float * gain).coerceIn(-1f, 1f))
+                }
+            }
         }
-        return (keyframedGain * fadeInGain * fadeOutGain).coerceIn(0f, 1f)
+        processedFrames += frameCount
+        output.flip()
     }
 }

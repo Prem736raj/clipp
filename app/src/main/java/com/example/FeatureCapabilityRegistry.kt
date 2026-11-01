@@ -57,14 +57,10 @@ internal object FeatureCapabilityRegistry {
         EffectType.BOKEH
     ) + EXPORT_SHADER_EFFECTS
 
-    internal val exportTimedOverlayEffects = setOf(
-        EffectType.FILM_GRAIN,
-        EffectType.ANAMORPHIC_FLARE,
-        EffectType.SPARKLE,
-        EffectType.LIGHT_LEAK,
-        EffectType.LENS_FLARE,
-        EffectType.BOKEH
-    ) + EXPORT_SHADER_EFFECTS
+    // Every effect advertised as export-ready supports a bounded clip-local
+    // start/end window. Keep this derived from the capability set so a newly
+    // exportable effect cannot silently fall back to full-clip timing.
+    internal val exportTimedEffects = exportSupportedEffects
 
     internal val exportVideoTransitions = setOf(
         TransitionType.CROSSFADE,
@@ -89,19 +85,32 @@ internal object FeatureCapabilityRegistry {
     internal val exportSupportedTextAnimIn = setOf(
         TextAnimIn.NONE,
         TextAnimIn.FADE_IN,
+        TextAnimIn.SLIDE_IN_UP,
+        TextAnimIn.SLIDE_IN_DOWN,
+        TextAnimIn.SLIDE_IN_LEFT,
+        TextAnimIn.SLIDE_IN_RIGHT,
         TextAnimIn.SCALE_IN,
+        TextAnimIn.BOUNCE_IN,
         TextAnimIn.ROTATE_IN
     )
     internal val exportSupportedTextAnimLoop = setOf(
         TextAnimLoop.NONE,
         TextAnimLoop.PULSE,
+        TextAnimLoop.BOUNCE,
+        TextAnimLoop.SHAKE,
         TextAnimLoop.WAVE,
-        TextAnimLoop.SWING
+        TextAnimLoop.SWING,
+        TextAnimLoop.FLOAT
     )
     internal val exportSupportedTextAnimOut = setOf(
         TextAnimOut.NONE,
         TextAnimOut.FADE_OUT,
-        TextAnimOut.SCALE_OUT
+        TextAnimOut.SLIDE_OUT_UP,
+        TextAnimOut.SLIDE_OUT_DOWN,
+        TextAnimOut.SLIDE_OUT_LEFT,
+        TextAnimOut.SLIDE_OUT_RIGHT,
+        TextAnimOut.SCALE_OUT,
+        TextAnimOut.BOUNCE_OUT
     )
 
     /** The small, honest launch matrix shown on the export surface. */
@@ -128,7 +137,7 @@ internal object FeatureCapabilityRegistry {
             id = "audio",
             label = "Local audio tracks and voiceover",
             capability = FeatureCapability.PREVIEW_AND_EXPORT_SUPPORTED,
-            detail = "Measured cached waveforms drive the timeline; trimmed audio can loop to the end of the video, while volume, fades, supported keyframes, and implemented processors are muxed into MP4."
+            detail = "Measured cached waveforms drive the timeline; looping, volume keyframes, fades, crossfade, and ducking share preview/export timing, while voiceover recordings stay anchored to the playhead where recording began."
         ),
         FeatureCapabilityStatus(
             id = "speed-curves",
@@ -149,8 +158,14 @@ internal object FeatureCapabilityRegistry {
             detail = "Shape masks, blend modes, and vertical slide animations share the bitmap and GLES export compositor."
         ),
         FeatureCapabilityStatus(
+            id = "audio-mixing",
+            label = "Audio crossfade and automatic ducking",
+            capability = FeatureCapability.PREVIEW_AND_EXPORT_SUPPORTED,
+            detail = "Audio tracks can crossfade at their edges and automatically duck under audible primary or foreground tracks in preview and MP4 export."
+        ),
+        FeatureCapabilityStatus(
             id = "unsupported-audio-dsp",
-            label = "Noise reduction, voice changer, ducking, and audio crossfade",
+            label = "Noise reduction and voice changer",
             capability = FeatureCapability.COMING_LATER,
             detail = "Controls remain unavailable until real export processors exist."
         ),

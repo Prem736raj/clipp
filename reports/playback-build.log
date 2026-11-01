@@ -1,0 +1,112 @@
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/9.4.1/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
+Reusing configuration cache.
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :app:javaPreCompileDebug UP-TO-DATE
+> Task :app:generateDebugBuildConfig UP-TO-DATE
+> Task :app:generateDebugResources
+> Task :app:packageDebugResources
+> Task :app:mapDebugSourceSetPaths
+> Task :app:checkDebugAarMetadata UP-TO-DATE
+> Task :app:createDebugCompatibleScreenManifests UP-TO-DATE
+> Task :app:extractDeepLinksDebug UP-TO-DATE
+> Task :app:processDebugNavigationResources
+> Task :app:compileDebugNavigationResources UP-TO-DATE
+> Task :app:parseDebugLocalResources
+> Task :app:processDebugMainManifest UP-TO-DATE
+> Task :app:processDebugManifest UP-TO-DATE
+> Task :app:processDebugManifestForPackage UP-TO-DATE
+> Task :app:preDebugAndroidTestBuild SKIPPED
+> Task :app:generateDebugRFile
+> Task :app:generateDebugAndroidTestResources UP-TO-DATE
+> Task :app:packageDebugAndroidTestResources UP-TO-DATE
+> Task :app:processDebugAndroidTestNavigationResources UP-TO-DATE
+> Task :app:parseDebugAndroidTestLocalResources UP-TO-DATE
+> Task :app:processDebugAndroidTestManifest UP-TO-DATE
+> Task :app:generateDebugAndroidTestBuildConfig UP-TO-DATE
+> Task :app:generateDebugAndroidTestRFile UP-TO-DATE
+> Task :app:mergeDebugResources
+> Task :app:kspDebugKotlin
+> Task :app:processDebugResources
+> Task :app:compileDebugKotlin
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/BatchExportScreen.kt:96:43 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/ContactSupportScreen.kt:44:43 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/ContactSupportScreen.kt:68:60 'fun Modifier.menuAnchor(): Modifier' is deprecated. Use overload that takes MenuAnchorType and enabled parameters.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/ContactSupportScreen.kt:136:39 'val Icons.Filled.Send: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.Send.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/DrawToolbar.kt:61:43 'val Icons.Filled.Undo: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.Undo.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:973:104 'constructor(): MediaRecorder' is deprecated. Deprecated in Java.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:1329:7 'val currentWindowIndex: Int' is deprecated. Deprecated in Java.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:1329:39 'val currentWindowIndex: Int' is deprecated. Deprecated in Java.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:1332:63 'val currentWindowIndex: Int' is deprecated. Deprecated in Java.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:1340:36 'val currentWindowIndex: Int' is deprecated. Deprecated in Java.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:1504:38 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:1557:74 'val Icons.Filled.Undo: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.Undo.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:1640:76 'val Icons.Filled.Redo: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.Redo.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:1903:16 'val Icons.Filled.VolumeOff: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.VolumeOff.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:2336:39 Condition is always 'true'.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:3220:47 'fun quadraticBezierTo(x1: Float, y1: Float, x2: Float, y2: Float): Unit' is deprecated. Use quadraticTo() for consistency with cubicTo().
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:3377:44 'val Icons.Filled.VolumeOff: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.VolumeOff.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:3378:12 'val Icons.Filled.VolumeUp: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.VolumeUp.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:3980:5 'val Icons.Filled.VolumeOff: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.VolumeOff.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:5684:68 'val Icons.Filled.RotateLeft: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.RotateLeft.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:5693:89 'val Icons.Filled.RotateRight: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.RotateRight.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:5728:33 'fun Divider(modifier: Modifier = ..., thickness: Dp = ..., color: Color = ...): Unit' is deprecated. Renamed to HorizontalDivider.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:5978:57 'fun String.capitalize(): String' is deprecated. Use replaceFirstChar instead.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:6001:45 'fun String.capitalize(): String' is deprecated. Use replaceFirstChar instead.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:6024:48 'fun String.capitalize(): String' is deprecated. Use replaceFirstChar instead.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:6058:6 'fun Divider(modifier: Modifier = ..., thickness: Dp = ..., color: Color = ...): Unit' is deprecated. Renamed to HorizontalDivider.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:6216:20 'fun Divider(modifier: Modifier = ..., thickness: Dp = ..., color: Color = ...): Unit' is deprecated. Renamed to HorizontalDivider.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:6484:33 'fun Divider(modifier: Modifier = ..., thickness: Dp = ..., color: Color = ...): Unit' is deprecated. Renamed to HorizontalDivider.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:6657:35 'fun Divider(modifier: Modifier = ..., thickness: Dp = ..., color: Color = ...): Unit' is deprecated. Renamed to HorizontalDivider.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:7149:48 'fun Divider(modifier: Modifier = ..., thickness: Dp = ..., color: Color = ...): Unit' is deprecated. Renamed to HorizontalDivider.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:7207:109 'val currentWindowIndex: Int' is deprecated. Deprecated in Java.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/EditorScreen.kt:7208:34 'val currentWindowIndex: Int' is deprecated. Deprecated in Java.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/ExportRendering.kt:9:8 'class Movie : Any' is deprecated. Deprecated in Java.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/ExportRendering.kt:437:9 'class Movie : Any' is deprecated. Deprecated in Java.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/ExportRendering.kt:437:15 'static fun decodeStream(p0: InputStream!): Movie!' is deprecated. Deprecated in Java.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/ExportRendering.kt:439:36 'fun width(): Int' is deprecated. Deprecated in Java.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/ExportRendering.kt:440:37 'fun height(): Int' is deprecated. Deprecated in Java.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/ExportRendering.kt:441:41 'fun duration(): Int' is deprecated. Deprecated in Java.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/ExportRendering.kt:464:19 'fun setTime(p0: Int): Boolean' is deprecated. Deprecated in Java.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/ExportRendering.kt:466:19 'fun draw(p0: Canvas!, p1: Float, p2: Float): Unit' is deprecated. Deprecated in Java.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/ExportSuccessScreen.kt:125:39 'val Icons.Filled.OpenInNew: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.OpenInNew.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/HelpCenterScreen.kt:56:43 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/HomeScreen.kt:267:47 'val Icons.Filled.Sort: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.Sort.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/HomeScreen.kt:308:80 'val Icons.Filled.ViewList: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ViewList.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/HomeScreen.kt:421:65 'val Icons.Filled.DriveFileMove: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.DriveFileMove.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/HomeScreen.kt:450:65 'val Icons.Filled.Label: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.Label.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/MediaPickerScreen.kt:412:51 'val Icons.Filled.ArrowForward: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowForward.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/MyDataScreen.kt:96:43 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/PrivacySettingsScreen.kt:36:43 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/ProfileScreen.kt:235:43 'val Icons.Filled.HelpOutline: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.HelpOutline.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/ProjectSetupScreen.kt:46:43 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/SlideshowCreatorScreen.kt:77:43 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/StickerToolbar.kt:83:13 'fun Divider(modifier: Modifier = ..., thickness: Dp = ..., color: Color = ...): Unit' is deprecated. Renamed to HorizontalDivider.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/StickerToolbar.kt:108:115 'fun String.capitalize(): String' is deprecated. Use replaceFirstChar instead.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/StickerToolbar.kt:150:117 'fun String.capitalize(): String' is deprecated. Use replaceFirstChar instead.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/StickerToolbar.kt:192:116 'fun String.capitalize(): String' is deprecated. Use replaceFirstChar instead.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/StorageManagerScreen.kt:98:43 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/TemplateReplacementScreen.kt:63:47 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/TemplateReplacementScreen.kt:114:43 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/TextToolbar.kt:395:43 'val Icons.Filled.FormatAlignLeft: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.FormatAlignLeft.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/TextToolbar.kt:405:43 'val Icons.Filled.FormatAlignRight: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.FormatAlignRight.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/TextToolbar.kt:624:13 'fun Divider(modifier: Modifier = ..., thickness: Dp = ..., color: Color = ...): Unit' is deprecated. Renamed to HorizontalDivider.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/TextToolbar.kt:649:115 'fun String.capitalize(): String' is deprecated. Use replaceFirstChar instead.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/TextToolbar.kt:697:117 'fun String.capitalize(): String' is deprecated. Use replaceFirstChar instead.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/TextToolbar.kt:739:116 'fun String.capitalize(): String' is deprecated. Use replaceFirstChar instead.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/VideoExporter.kt:237:43 'constructor(p0: (Mutable)List<EditedMediaItem>): EditedMediaItemSequence' is deprecated. Deprecated in Java.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/VideoExporter.kt:274:18 'fun setListener(p0: Transformer.Listener): Transformer.Builder' is deprecated. Deprecated in Java.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/WhatsNewScreen.kt:42:43 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/utils/HapticUtil.kt:18:61 'static field VIBRATOR_SERVICE: String' is deprecated. Deprecated in Java.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/utils/HapticUtil.kt:30:61 'static field VIBRATOR_SERVICE: String' is deprecated. Deprecated in Java.
+w: file:///P:/Projects/clipp/app/src/main/java/com/example/utils/HapticUtil.kt:47:62 'static field VIBRATOR_SERVICE: String' is deprecated. Deprecated in Java.
+
+> Task :app:compileDebugJavaWithJavac UP-TO-DATE
+> Task :app:bundleDebugClassesToCompileJar
+> Task :app:kspDebugAndroidTestKotlin
+> Task :app:compileDebugAndroidTestKotlin
+
+BUILD SUCCESSFUL in 8m 44s
+30 actionable tasks: 13 executed, 17 up-to-date
+Configuration cache entry reused.

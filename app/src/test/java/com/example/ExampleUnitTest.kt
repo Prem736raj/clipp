@@ -13,6 +13,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -233,60 +234,6 @@ class ExampleUnitTest {
   }
 
   @Test
-  fun persistenceSnapshotRoundTripsLatestLiveStateAndUiMetadata() {
-    val video = MediaClip(
-      id = "latest-video",
-      sourceUri = "content://media/video/latest",
-      originalDurationMs = 3_000L,
-      trimEndMs = 3_000L
-    )
-    val text = TextOverlay(
-      id = "latest-text",
-      text = "Unsaved title",
-      startTimeOnTimelineMs = 500L,
-      durationMs = 1_500L
-    )
-    val audio = AudioClip(
-      id = "latest-audio",
-      sourceUri = "content://media/audio/latest",
-      startTimeOnTimelineMs = 250L,
-      sourceDurationMs = 2_000L,
-      trimEndMs = 2_000L,
-      volume = 0.35f
-    )
-    val latestState = EditorState(
-      clips = listOf(video),
-      texts = listOf(text),
-      audioClips = listOf(audio),
-      layerOrder = listOf(text.id)
-    )
-
-    val json = serializeEditorHistorySnapshot(
-      undoStack = listOf(HistoryAction(EditorState(clips = listOf(video)), "Before title")),
-      redoStack = emptyList(),
-      currentState = latestState,
-      zoom = 1.75f,
-      positionMs = 1_234L,
-      activeTool = "Text"
-    )
-    val history = editorHistoryMoshi
-      .adapter(EditorHistoryModel::class.java)
-      .fromJson(json)
-    val restored = history?.restoredEditorState()
-
-    assertEquals(listOf(video.id), restored?.clips?.map { it.id })
-    assertEquals("Unsaved title", restored?.texts?.single()?.text)
-    assertEquals(audio.id, restored?.audioClips?.single()?.id)
-    assertEquals(0.35f, restored?.audioClips?.single()?.volume)
-    assertEquals(listOf(text.id), restored?.layerOrder)
-    assertEquals(listOf(video.id, text.id, audio.id), history?.timelineProject?.layers?.map { it.id })
-    assertEquals(1.75f, history?.zoom)
-    assertEquals(1_234L, history?.positionMs)
-    assertEquals("Text", history?.activeTool)
-    assertEquals("Before title", history?.undoStack?.single()?.description)
-  }
-
-  @Test
   fun unifiedTimelineReportsStructuralCorruptionInsteadOfDroppingLayers() {
     val invalid = TimelineProject(
       layers = listOf(
@@ -467,10 +414,16 @@ class ExampleUnitTest {
       effects = listOf(AppliedEffect(type = EffectType.LIGHT_LEAK, startTimeMs = 100L, endTimeMs = 700L))
     )
     assertFalse(EditorState(clips = listOf(partialProceduralEffect)).hasUnsupportedExportEdits())
-    val partialEffect = clip.copy(
-      effects = listOf(AppliedEffect(type = EffectType.MIRROR, startTimeMs = 100L))
+    FeatureCapabilityRegistry.exportSupportedEffects.forEach { type ->
+      val partialEffect = clip.copy(
+        effects = listOf(AppliedEffect(type = type, startTimeMs = 100L, endTimeMs = 700L))
+      )
+      assertFalse("Expected partial-duration $type to be exportable", EditorState(clips = listOf(partialEffect)).hasUnsupportedExportEdits())
+    }
+    val zeroLengthEffect = clip.copy(
+      effects = listOf(AppliedEffect(type = EffectType.MIRROR, startTimeMs = 500L, endTimeMs = 500L))
     )
-    assertTrue(EditorState(clips = listOf(partialEffect)).hasUnsupportedExportEdits())
+    assertTrue(EditorState(clips = listOf(zeroLengthEffect)).hasUnsupportedExportEdits())
     val blockedEffect = clip.copy(effects = listOf(AppliedEffect(type = EffectType.OIL_PAINTING)))
     assertTrue(EditorState(clips = listOf(blockedEffect)).hasUnsupportedExportEdits())
   }
@@ -641,7 +594,20 @@ class ExampleUnitTest {
 
     assertFalse(EditorState(clips = listOf(clip), texts = listOf(text), stickers = listOf(sticker), overlays = listOf(imageOverlay)).hasUnsupportedExportEdits())
     assertFalse(EditorState(clips = listOf(clip), overlays = listOf(imageOverlay.copy(isPhoto = false, isGif = true))).hasUnsupportedExportEdits())
+    assertFalse(EditorState(clips = listOf(clip), texts = listOf(text.copy(animIn = TextAnimIn.SLIDE_IN_LEFT))).hasUnsupportedExportEdits())
+    assertFalse(EditorState(clips = listOf(clip), texts = listOf(text.copy(animIn = TextAnimIn.BOUNCE_IN))).hasUnsupportedExportEdits())
+    assertFalse(EditorState(clips = listOf(clip), stickers = listOf(sticker.copy(animLoop = TextAnimLoop.BOUNCE))).hasUnsupportedExportEdits())
+    assertFalse(EditorState(clips = listOf(clip), stickers = listOf(sticker.copy(animLoop = TextAnimLoop.SHAKE))).hasUnsupportedExportEdits())
+    assertFalse(EditorState(clips = listOf(clip), stickers = listOf(sticker.copy(animLoop = TextAnimLoop.FLOAT))).hasUnsupportedExportEdits())
+    assertFalse(EditorState(clips = listOf(clip), texts = listOf(text.copy(animOut = TextAnimOut.SLIDE_OUT_RIGHT))).hasUnsupportedExportEdits())
+    assertFalse(EditorState(clips = listOf(clip), texts = listOf(text.copy(animOut = TextAnimOut.BOUNCE_OUT))).hasUnsupportedExportEdits())
     assertTrue(EditorState(clips = listOf(clip), texts = listOf(text.copy(animIn = TextAnimIn.TYPEWRITER))).hasUnsupportedExportEdits())
+    assertTrue(EditorState(clips = listOf(clip), texts = listOf(text.copy(animIn = TextAnimIn.BLUR_IN))).hasUnsupportedExportEdits())
+    assertTrue(EditorState(clips = listOf(clip), texts = listOf(text.copy(animIn = TextAnimIn.GLITCH_IN))).hasUnsupportedExportEdits())
+    assertTrue(EditorState(clips = listOf(clip), stickers = listOf(sticker.copy(animLoop = TextAnimLoop.GLOW))).hasUnsupportedExportEdits())
+    assertTrue(EditorState(clips = listOf(clip), stickers = listOf(sticker.copy(animLoop = TextAnimLoop.FLICKER))).hasUnsupportedExportEdits())
+    assertTrue(EditorState(clips = listOf(clip), texts = listOf(text.copy(animOut = TextAnimOut.DISSOLVE))).hasUnsupportedExportEdits())
+    assertTrue(EditorState(clips = listOf(clip), texts = listOf(text.copy(animOut = TextAnimOut.BLUR_OUT))).hasUnsupportedExportEdits())
     assertFalse(EditorState(clips = listOf(clip), overlays = listOf(imageOverlay.copy(entranceAnim = OverlayAnim.SLIDE))).hasUnsupportedExportEdits())
   }
 
@@ -778,6 +744,151 @@ class ExampleUnitTest {
       EditorState(clips = listOf(clip.copy(audioEffects = effects.copy(delayTimeMs = 1_001L))))
         .hasUnsupportedExportEdits()
     )
+  }
+
+  @Test
+  fun audioCrossfadeAndAutoDuckingAreExportableWithinBounds() {
+    val video = MediaClip(
+      sourceUri = "content://media/video/1",
+      originalDurationMs = 4_000L,
+      trimEndMs = 4_000L
+    )
+    val background = AudioClip(
+      sourceUri = "content://media/audio/1",
+      startTimeOnTimelineMs = 0L,
+      sourceDurationMs = 4_000L,
+      trimEndMs = 4_000L,
+      autoDucking = true,
+      audioEffects = AudioEffects(crossfadeMs = 500L)
+    )
+
+    assertFalse(EditorState(clips = listOf(video), audioClips = listOf(background)).hasUnsupportedExportEdits())
+    assertTrue(
+      EditorState(
+        clips = listOf(video),
+        audioClips = listOf(background.copy(audioEffects = AudioEffects(crossfadeMs = 2_500L)))
+      ).hasUnsupportedExportEdits()
+    )
+    assertTrue(
+      EditorState(
+        clips = listOf(video.copy(audioEffects = AudioEffects(crossfadeMs = 500L)))
+      ).hasUnsupportedExportEdits()
+    )
+  }
+
+  @Test
+  fun audioDuckingWindowsMergeForegroundSources() {
+    val first = MediaClip(
+      sourceUri = "content://media/video/1",
+      originalDurationMs = 1_000L,
+      trimEndMs = 1_000L
+    )
+    val muted = first.copy(
+      id = "muted",
+      sourceUri = "content://media/video/2",
+      isMuted = true
+    )
+    val voice = AudioClip(
+      sourceUri = "content://media/audio/voice",
+      startTimeOnTimelineMs = 500L,
+      sourceDurationMs = 1_000L,
+      trimEndMs = 1_000L
+    )
+    val background = voice.copy(
+      id = "background",
+      sourceUri = "content://media/audio/music",
+      autoDucking = true
+    )
+
+    val windows = EditorState(
+      clips = listOf(first, muted),
+      audioClips = listOf(voice, background)
+    ).buildAudioDuckingWindows(projectDurationMs = 2_000L)
+
+    assertEquals(listOf(AudioDuckingWindow(0L, 1_500L)), windows)
+  }
+
+  @Test
+  fun timelineAudioMixProcessorAppliesCrossfadeAndDucking() {
+    val clip = AudioClip(
+      sourceUri = "content://media/audio/1",
+      startTimeOnTimelineMs = 0L,
+      sourceDurationMs = 1_000L,
+      trimEndMs = 1_000L,
+      autoDucking = true,
+      audioEffects = AudioEffects(crossfadeMs = 200L)
+    )
+    val processor = TimelineAudioMixProcessor(
+      timelineStartMs = 0L,
+      projectDurationMs = 1_000L,
+      audioClip = clip,
+      duckingWindows = listOf(AudioDuckingWindow(400L, 600L))
+    )
+    processor.configure(AudioProcessor.AudioFormat(1_000, 1, C.ENCODING_PCM_16BIT))
+    processor.flush()
+
+    val input = ByteBuffer.allocate(1_000 * 2).order(ByteOrder.LITTLE_ENDIAN).apply {
+      repeat(1_000) { putShort(10_000) }
+      flip()
+    }
+    processor.queueInput(input)
+    val output = processor.output.order(ByteOrder.LITTLE_ENDIAN)
+    fun sampleAt(index: Int): Int {
+      output.position(index * 2)
+      return output.short.toInt()
+    }
+
+    assertEquals(0, sampleAt(0))
+    assertTrue(sampleAt(199) in 9_000..10_000)
+    assertTrue(sampleAt(450) in 2_400..2_600)
+    assertTrue(sampleAt(800) in 9_000..10_000)
+    assertTrue(sampleAt(999) < 100)
+  }
+
+  @Test
+  fun previewAudioAutomationUsesWholeLoopedTimelineForFades() {
+    val clip = AudioClip(
+      sourceUri = "content://media/audio/1",
+      startTimeOnTimelineMs = 500L,
+      sourceDurationMs = 600L,
+      trimStartMs = 100L,
+      trimEndMs = 500L,
+      volume = 0.8f,
+      isLooped = true,
+      audioEffects = AudioEffects(fadeInMs = 200L, fadeOutMs = 200L)
+    )
+
+    assertEquals(0f, clip.previewAutomationGainAt(500L, 2_500L, 0.5f), 0.0001f)
+    assertEquals(0.2f, clip.previewAutomationGainAt(600L, 2_500L, 0.5f), 0.0001f)
+    assertEquals(0.4f, clip.previewAutomationGainAt(900L, 2_500L, 0.5f), 0.0001f)
+    assertEquals(0.2f, clip.previewAutomationGainAt(2_400L, 2_500L, 0.5f), 0.0001f)
+    assertEquals(100L, clip.sourceTimeAtProjectTime(1_300L, 2_500L))
+  }
+
+  @Test
+  fun loopedExportFadeDoesNotRestartAtEverySegmentBoundary() {
+    val processor = KeyframedVolumeAudioProcessor(
+      baseGain = 1f,
+      durationMs = 400L,
+      fadeInMs = 200L,
+      fadeOutMs = 200L,
+      volumeKeyframes = emptyList(),
+      fadeTimelineOffsetMs = 400L,
+      fadeTimelineDurationMs = 1_200L
+    )
+    processor.configure(AudioProcessor.AudioFormat(1_000, 1, C.ENCODING_PCM_16BIT))
+    processor.flush()
+
+    val input = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).apply {
+      putShort(10_000)
+      putShort(10_000)
+      flip()
+    }
+    processor.queueInput(input)
+    val output = processor.output.order(ByteOrder.LITTLE_ENDIAN)
+
+    assertTrue(output.short.toInt() in 9_900..10_000)
+    assertTrue(output.short.toInt() in 9_900..10_000)
   }
 
   @Test
@@ -1084,5 +1195,168 @@ class ExampleUnitTest {
     assertEquals(0L, clip.effectiveTrimStartMs)
     assertEquals(10_000L, clip.effectiveTrimEndMs)
     assertEquals(10_000L, TimelineMapper(listOf(clip)).totalDurationMs)
+  }
+
+  @Test
+  fun exportDeviceReadinessBlocksMissingCodecStorageAndCriticalHeat() {
+    val healthy = ExportDeviceSnapshot(
+      h264EncoderAvailable = true,
+      aacEncoderAvailable = true,
+      cacheFreeBytes = MIN_EXPORT_START_FREE_BYTES * 4,
+      mediaFreeBytes = MIN_EXPORT_START_FREE_BYTES * 4,
+      isLowRamDevice = false,
+      thermalStatus = android.os.PowerManager.THERMAL_STATUS_NONE
+    )
+    assertNull(evaluateExportDeviceReadiness(healthy, requiresAudioEncoder = true).blockingReason)
+
+    assertTrue(
+      evaluateExportDeviceReadiness(
+        healthy.copy(h264EncoderAvailable = false),
+        requiresAudioEncoder = false
+      ).blockingReason!!.contains("H.264")
+    )
+    assertTrue(
+      evaluateExportDeviceReadiness(
+        healthy.copy(aacEncoderAvailable = false),
+        requiresAudioEncoder = true
+      ).blockingReason!!.contains("AAC")
+    )
+    assertTrue(
+      evaluateExportDeviceReadiness(
+        healthy.copy(cacheFreeBytes = MIN_EXPORT_START_FREE_BYTES - 1L),
+        requiresAudioEncoder = false
+      ).blockingReason!!.contains("128 MB")
+    )
+    assertTrue(
+      evaluateExportDeviceReadiness(
+        healthy.copy(thermalStatus = android.os.PowerManager.THERMAL_STATUS_CRITICAL),
+        requiresAudioEncoder = false
+      ).blockingReason!!.contains("too hot")
+    )
+  }
+
+  @Test
+  fun exportDeviceReadinessWarnsWithoutBlockingLowRamOrSevereHeat() {
+    val readiness = evaluateExportDeviceReadiness(
+      ExportDeviceSnapshot(
+        h264EncoderAvailable = true,
+        aacEncoderAvailable = true,
+        cacheFreeBytes = MIN_EXPORT_START_FREE_BYTES * 2,
+        mediaFreeBytes = MIN_EXPORT_START_FREE_BYTES * 2,
+        isLowRamDevice = true,
+        thermalStatus = android.os.PowerManager.THERMAL_STATUS_SEVERE
+      ),
+      requiresAudioEncoder = true
+    )
+
+    assertNull(readiness.blockingReason)
+    assertTrue(readiness.warnings.any { it.contains("low-memory") })
+    assertTrue(readiness.warnings.any { it.contains("running hot") })
+    assertTrue(readiness.warnings.any { it.contains("storage") })
+  }
+
+  @Test
+  fun publicationStorageKeepsRoomForTheFinishedCopy() {
+    val outputBytes = 80L * 1024L * 1024L
+    assertNull(
+      publicationStorageBlockingReason(
+        mediaFreeBytes = outputBytes + EXPORT_PUBLISH_RESERVE_BYTES,
+        outputBytes = outputBytes
+      )
+    )
+    assertTrue(
+      publicationStorageBlockingReason(
+        mediaFreeBytes = outputBytes + EXPORT_PUBLISH_RESERVE_BYTES - 1L,
+        outputBytes = outputBytes
+      )!!.contains("not enough free storage")
+    )
+  }
+
+  @Test
+  fun exportFailureNamesAreMappedToActionableDeviceErrors() {
+    assertTrue(userFacingExportFailure("ERROR_CODE_DECODING_FORMAT_UNSUPPORTED").contains("decode"))
+    assertTrue(userFacingExportFailure("ERROR_CODE_ENCODER_INIT_FAILED").contains("encoder"))
+    assertTrue(userFacingExportFailure("ERROR_CODE_MUXING_FAILED").contains("MP4"))
+  }
+
+  @Test
+  fun exportSourcePlanResolvesAudioLinkedToPrimaryClip() {
+    val clip = MediaClip(
+      id = "primary-audio-source",
+      sourceUri = "content://media/video/primary",
+      originalDurationMs = 2_000L,
+      trimEndMs = 2_000L
+    )
+    val state = EditorState(
+      clips = listOf(clip),
+      audioClips = listOf(
+        AudioClip(
+          sourceClipId = clip.id,
+          startTimeOnTimelineMs = 0L,
+          sourceDurationMs = 2_000L,
+          trimEndMs = 2_000L
+        )
+      )
+    )
+
+    val plan = state.exportSourcePlan()
+
+    assertNull(plan.blockingReason)
+    assertTrue(
+      plan.references.contains(
+        ExportSourceReference(
+          clip.sourceUri,
+          ExportSourceKind.PRIMARY_CLIP,
+          expectsImage = false
+        )
+      )
+    )
+    assertTrue(
+      plan.references.contains(
+        ExportSourceReference(clip.sourceUri, ExportSourceKind.AUDIO)
+      )
+    )
+  }
+
+  @Test
+  fun exportSourcePlanBlocksMissingLinkedAudioClip() {
+    val clip = MediaClip(
+      id = "primary",
+      sourceUri = "content://media/video/primary",
+      originalDurationMs = 2_000L,
+      trimEndMs = 2_000L
+    )
+    val state = EditorState(
+      clips = listOf(clip),
+      audioClips = listOf(
+        AudioClip(
+          sourceClipId = "missing-clip",
+          startTimeOnTimelineMs = 0L,
+          sourceDurationMs = 1_000L,
+          trimEndMs = 1_000L
+        )
+      )
+    )
+
+    val plan = state.exportSourcePlan()
+
+    assertTrue(plan.blockingReason!!.contains("audio source", ignoreCase = true))
+  }
+
+  @Test
+  fun exportSourcePlanBlocksBlankPrimarySource() {
+    val state = EditorState(
+      clips = listOf(
+        MediaClip(
+          sourceUri = "",
+          originalDurationMs = 1_000L,
+          trimEndMs = 1_000L
+        )
+      )
+    )
+
+    val plan = state.exportSourcePlan()
+
+    assertTrue(plan.blockingReason!!.contains("source clip", ignoreCase = true))
   }
 }

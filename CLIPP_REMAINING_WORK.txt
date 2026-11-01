@@ -1,10 +1,32 @@
 CLIPP - CURRENT STATUS AND REMAINING WORK
 ==========================================
-Report date: 2026-09-13
+Report date: 2026-10-17
 Repository: https://github.com/Prem736raj/clipp
-Checkout: C:\Users\prem7\Downloads\clipp-main
-Branch: audit/production-hardening-2026-09-06
-Implementation baseline reviewed: 3dfc8d5
+Checkout: P:\Projects\clipp
+Branch: main
+Implementation baseline reviewed: Phase 10 commit fbe2c00, plus local export-quality changes
+
+PHYSICAL EDITING STATUS: CODE REPAIRS VERIFIED / PHONE RETEST PENDING
+------------------------------------------------
+On 2026-10-17 the user tested video editing on a physical phone and reported:
+- imported video shows a dark/black preview;
+- video frames do not move when playback is attempted; the recording also
+  shows Pause while time stays at 00:00 and the playhead stays at the start;
+- the app crashes during basic editing.
+The repair pass now verifies visible moving video, clock progress, pause/rewind,
+restored projects, fullscreen return and lifecycle pause/resume on API 34.
+All 79 JVM/UI tests pass; all 34 prior Android cases and the final 3 live editor
+cases pass (see the report for the corrected harness failure and rerun).
+Duplicate top insets/recovery prompts, repeated startup guidance and wrapped
+playback labels are repaired. Original phone crash cause and physical retest
+remain open and take priority over additional features.
+See PHYSICAL_DEVICE_DEFECT_REPORT.md for evidence, code findings, investigation
+candidates, and acceptance checks. The replacement 63-second screen recording
+(WhatsApp Video 2026-10-17 at 2.55.08 PM.mp4) was reviewed. It also shows
+overlapping recovery prompts, a wrapped duration label, and a repeated
+media-privacy entry screen after relaunch. The editor-to-launcher transition
+around 55.5s supports recording the exit but does not prove its cause; the
+crash itself remains user-reported until crash/exit logs are captured.
 
 EXECUTIVE ANSWER
 ----------------
@@ -13,9 +35,30 @@ export pipeline. It is not yet production-ready and it is not yet comparable
 to the breadth, reliability, or polish of KineMaster, VN, CapCut, or similar
 mature editors.
 
-The core local editing path is substantially implemented. The largest open
-work is now advanced feature parity, real AI/online services, complete QA,
-release signing, Play Store preparation, and low-end device validation.
+The core local editing path has substantial implementation, but physical
+testing now reports failures in preview, playback, and stability. The first
+priority is a reliable import -> preview -> play -> edit workflow on the
+affected phone. Advanced parity, AI/online services, release signing, and
+Play Store preparation remain later work.
+
+LOCAL HARDENING PHASE STATUS
+----------------------------
+The local hardening sequence through Phase 10 is complete and committed on
+main through fbe2c00. Subsequent export-quality improvements are in the working
+tree. The previous scoped automated validation passed: 76/76 JVM tests and
+34/34 connected Android tests passed on the audit34 API 34 emulator,
+and the debug APK assembled successfully.
+These export/model/UI-control results do not establish interactive editor
+playback on a physical phone. The physical editing workflow has failed.
+
+The remaining entries below are intentionally not presented as unfinished
+local phases. They fall into one of these groups:
+- external/manual release gates: physical devices, signed owner AAB, Play
+  Console/pre-launch/policy work, accessibility/manual workflow QA;
+- longer-term product scope: advanced renderer/audio parity, AI, cloud,
+  billing, remote templates, and durable background export;
+- ongoing engineering investment: editor decomposition, dependency/identity
+  cleanup, and real-device performance profiling/optimization.
 
 ROUGH WORK ESTIMATE
 -------------------
@@ -44,6 +87,10 @@ The current branch contains implementation for the following local workflow
 and capabilities:
 
 - Android system media selection and local, account-free projects.
+- Device-checked resolution, frame-rate limit, target bitrate, and estimated
+  file size on the export screen. Explicit quality exports honor the project
+  aspect ratio with black padding and preserve original frame timestamps;
+  lower-rate footage is not duplicated to reach a higher selected limit.
 - Multi-clip projects, trim, split, reorder, still-image duration, crop,
   rotate, flip, clip positioning, and transform/crop keyframes.
 - Constant speed and sampled speed-curve automation with pitch-preserving
@@ -71,23 +118,47 @@ and capabilities:
 
 IMPORTANT VALIDATION LIMIT
 ---------------------------
-The latest speed-curve and mask/blend/push-transition implementation has
-passed the debug Kotlin compilation and debug APK assembly. The corresponding
-unit/device export regressions were intentionally not run yet. Therefore the
-latest renderer changes are implemented but not fully device-verified.
+The current renderer/export branch has passed the JVM suite and the API 34
+connected Android regression suite, including real MP4 export checks. This is
+emulator evidence only. Phase 10 also verifies corrupt/unsupported media is
+blocked before export startup and adds safe app-owned orphan cleanup. The
+8-second layered export with three clips, a timed visual effect, an image
+overlay, and separate audio remains covered. Physical-device coverage, the
+broader Android/API/GPU/codec matrix, truly long exports, and real-user
+workflow QA remain open. The user's basic physical editing test now reports
+black preview, frozen video, and a crash; those failures are not resolved by
+the earlier emulator/export checks.
 
 REMAINING WORK - PRIORITY 0: RELEASE BLOCKERS
 ----------------------------------------------
 These must be completed before calling the app production-ready:
 
-[OPEN] 1. Run current automated tests after the latest renderer changes.
-      Re-run unit tests and connected Android tests; fix any regressions.
+[REPAIRED / PHONE RETEST PENDING] 0. Validate repaired preview/playback on the affected phone.
+      Reproduce the reported black preview, frozen video, and crash on the
+      affected phone with the original imported clip. Capture actual player
+      errors, first-frame events, crash/exit logs, device details, and build
+      identity. Verify moving video, pause/resume, scrubbing, saved-project
+      reopening, and repeated editing cycles without failure. Correct the
+      crash-log key mismatch and add interactive editor playback coverage.
+      See PHYSICAL_DEVICE_DEFECT_REPORT.md. Root causes remain unconfirmed.
 
-[OPEN] 2. Run real export QA on physical/emulated devices.
+[CURRENT SUITE PASS / RE-RUN AFTER FUTURE CHANGES] 1. Run current automated tests after the latest renderer changes.
+      On 2026-10-17 the current debug JVM suite passed 76/76 and the API 34
+      connected Android suite passed 34/34 on the audit34 emulator. Re-run both
+      suites after future renderer/export changes and fix any regressions.
+
+[PARTIAL / API 34 EMULATOR PASS] 2. Run real export QA on physical/emulated devices.
       Verify source video, photo, GIF, and video overlays at multiple
       timestamps. Verify every mask, blend mode, push transition, speed curve,
       keyframe, audio processor, and failure path. Confirm output duration,
-      frame order, audio sync, playable MP4, and MediaStore publication.
+      frame order, audio sync, playable MP4, and MediaStore publication. The
+      current API 34 emulator suite verifies codec/storage readiness, MediaStore
+      publication, a real MP4 export containing looped audio plus fade,
+      crossfade, and ducking, and a timed visual-effect export that proves
+      normal -> mirror -> letterbox -> normal frame behavior. Phase 6 adds
+      early-readability checks for primary, overlay, and audio sources plus an
+      8-second layered export with audio and representative-frame validation.
+      Physical-device and broader media-matrix QA remain open.
 
 [OPEN] 3. Complete the device/performance matrix.
       Test Android 7/8 through API 36, at least one 4 GB device, a 6/8 GB
@@ -95,44 +166,72 @@ These must be completed before calling the app production-ready:
       time, scrolling, long timelines, multiple overlays, and long exports.
       Fix OOM, ANR, thermal, and encoder compatibility issues.
 
-[OPEN] 4. Build and verify the signed release artifact.
+[PARTIAL / RELEASE GUARD VERIFIED] 4. Build and verify the signed release artifact.
       Configure an owner-supplied upload keystore outside the repository,
       build a minified/R8 release, generate a signed AAB, install it, and
-      verify that no secrets or debug-only behavior are shipped.
+      verify that no secrets or debug-only behavior are shipped. On 2026-10-17
+      `:app:bundleRelease` was intentionally invoked without signing variables
+      and correctly stopped at the external-signing guard requiring
+      KEYSTORE_PATH, STORE_PASSWORD, KEY_ALIAS, and KEY_PASSWORD. The owner
+      keystore/signing run remains open.
 
-[OPEN] 5. Complete real-user workflow QA.
+[PARTIAL / LOCAL WORKFLOW HARDENING + AUTOMATED RELINK/CANCEL/RETRY PASS] 5. Complete real-user workflow QA.
       Test import, edit, save, close, reopen, relink/missing media, export,
       share, cancel, retry, delete project, microphone denial, storage full,
       corrupt media, theme changes, deep links, shortcuts, and batch export.
+      Automated API 34 tests now verify missing/unreadable primary, visible
+      overlay, and audio files fail before export creates its temporary MP4;
+      saved-project primary media can be detected, relinked with edit metadata
+      preserved, and exported successfully; cancel-before-start leaves no
+      stale temp output and an immediate retry succeeds. The editor now exposes
+      an interactive relink flow for restored history and legacy path-only
+      projects. Project deletion now requires confirmation, sharing carries a
+      robust URI read grant, microphone denial has retry/settings recovery, and
+      corrupt-but-readable media is rejected before a temporary export starts.
+      Physical-device relink/document-provider UX, storage-full behavior,
+      theme/back-navigation, and broader end-to-end workflow coverage remain open.
 
-[OPEN] 6. Complete accessibility and UX QA.
+[PARTIAL / PRIMARY TOUCH-TARGET + ERROR-RECOVERY HARDENING] 6. Complete accessibility and UX QA.
       Verify TalkBack labels, minimum touch targets, dark/light contrast,
       selected states, 1.0x-2.0x font scaling, keyboard/back behavior, loading
-      states, and actionable error messages.
+      states, and actionable error messages. Layer visibility/lock buttons now
+      meet a 48dp touch target and microphone denial is actionable; full TalkBack,
+      contrast, font-scaling, keyboard/back, and physical-device UX QA remains.
 
-[OPEN] 7. Finish privacy, dependency, security, and Play checks.
+[PARTIAL / LOCAL MANIFEST + LOGGING AUDIT] 7. Finish privacy, dependency, security, and Play checks.
       Reconcile the manifest, privacy policy, Data Safety form, SDK behavior,
       network endpoints, logging, permissions, dependency vulnerabilities,
-      store assets, content rating, and Play pre-launch report.
+      store assets, content rating, and Play pre-launch report. The local audit
+      confirms backup remains disabled, the FileProvider is non-exported, and
+      RECORD_AUDIO is the only declared runtime permission. Previously
+      unconditional stack traces in reviewed user workflows are now debug-only.
+      Dependency vulnerability scanning, policy/privacy reconciliation, store
+      assets/content rating, and Play pre-launch review remain open.
 
 REMAINING WORK - PRIORITY 1: EDITOR/RENDERER FEATURES
 -------------------------------------------------------
 
-[OPEN] 1. Partial-duration visual effects.
-      Effects currently have a safe limitation around sub-range timing. Make
-      every supported effect start and stop at the exact requested timeline
-      range in both preview and export, or keep the control disabled.
+[IMPLEMENTED / API 34 EMULATOR PASS] 1. Partial-duration visual effects.
+      Every currently export-supported effect now accepts a positive-length
+      clip-local sub-range and uses the same inclusive-start/exclusive-end
+      boundary in preview and export. Mirror, shake, Gaussian blur, comic-book,
+      pencil-sketch, pop-art, letterbox, procedural overlays, and GLES
+      distortion effects are covered by the updated timing path. Invalid or
+      zero-length ranges remain blocked. Physical-device renderer validation is
+      still part of the Priority 0 device matrix.
 
 [OPEN] 2. Additional visual effects.
       Implement and validate oil-paint and other currently unimplemented
       effects with deterministic, exportable renderers. Do not expose a
       preview-only effect as export-ready.
 
-[OPEN] 3. Advanced text and sticker parity.
-      Implement export-parity for slide, typewriter, blur/glitch/bounce and
-      other currently preview-only text/sticker animations. Add full overlay
-      border/shadow behavior and real 3D-text depth if those controls remain
-      in the product.
+[PARTIAL / DETERMINISTIC TRANSFORMS VERIFIED] 3. Advanced text and sticker parity.
+      Slide entrances/exits, bounce entrance/exit, bounce/shake/float loops,
+      plus the previously supported fade/scale/rotate/pulse/wave/swing set now
+      export through the same normalized transform timing used by preview and
+      have an API 34 MP4 regression. Typewriter, blur/glow, flicker/glitch,
+      dissolve/blur-out, full overlay border/shadow behavior, and real 3D-text
+      depth remain gated until deterministic export implementations exist.
 
 [OPEN] 4. Advanced transition support.
       Extend transition timing and compositor coverage to speed-curved clips,
@@ -147,27 +246,38 @@ REMAINING WORK - PRIORITY 1: EDITOR/RENDERER FEATURES
 REMAINING WORK - PRIORITY 1: ADVANCED AUDIO
 --------------------------------------------
 
-[IMPLEMENTED / DEVICE QA OPEN] 1. Audio looping in export.
+[IMPLEMENTED / API 34 EMULATOR PASS] 1. Audio looping in export.
       Trimmed local audio can now repeat from its selected source window until
       the video timeline ends. Preview follows the same loop behavior, export
       creates bounded repeated Media3 items (including a final partial cycle),
       and pathological sub-millisecond/very-short loops are gated by a segment
-      count limit. JVM regressions and debug assembly pass; the new device MP4
-      regression still needs to be run on an emulator/physical device.
-[OPEN] 2. Audio ducking against voiceover or other priority tracks.
-[OPEN] 3. Audio crossfade between tracks/clips.
+      count limit. JVM regressions pass and the combined loop/fade/crossfade/
+      ducking MP4 export passes on the API 34 audit34 emulator. Physical-device
+      listening/device-matrix QA remains open.
+[IMPLEMENTED / API 34 EMULATOR PASS] 2. Audio ducking against foreground tracks.
+      Preview and export share the same bounded ducking windows. Background
+      tracks marked for auto-ducking reduce gain under audible primary clip
+      audio and non-ducking foreground audio; JVM regressions and the combined
+      real MP4 export path pass on the API 34 emulator. Physical-device listening
+      QA remains pending.
+[IMPLEMENTED / API 34 EMULATOR PASS] 3. Audio crossfade between tracks/clips.
+      Audio tracks apply bounded edge crossfade envelopes in preview and export.
+      Loop-segment export now keeps one whole-track fade timeline so fade-in does
+      not restart at every repeated source segment; the combined MP4 export path
+      passes on the API 34 emulator. Physical-device listening QA remains open.
 [OPEN] 4. Noise reduction and wind-noise reduction with real processors.
 [OPEN] 5. Voice effects/voice changer with real audio processing.
 [OPEN] 6. Audio-speed automation with correct timing and pitch behavior.
-[IMPLEMENTED / DEVICE QA OPEN] 7. Measured waveform rendering from decoded audio.
+[IMPLEMENTED / API 34 EMULATOR PASS] 7. Measured waveform rendering from decoded audio.
       Local audio/video sources are decoded through MediaExtractor/MediaCodec
       into bounded peak envelopes, cached in memory and on disk, and reused for
       trims/zoom changes without re-decoding. Timeline rendering preserves peaks
       while zoomed out, aligns constant/curved-speed source audio, repeats looped
       audio waveforms through project end, and cancels extraction when the
       composable leaves composition. JVM extraction/resampling/cache regressions
-      pass and the Android test APK builds; the real device WAV extraction/cache
-      regression still needs to run on an emulator/physical device.
+      pass and the connected Android suite including the WAV extraction/cache
+      regression passes on the API 34 audit34 emulator. Physical-device coverage
+      remains open.
 
 Each processor needs preview/export parity, cancellation behavior, memory
 limits, and device verification. A UI toggle or metadata-only setting is not
@@ -234,10 +344,14 @@ REMAINING WORK - PRIORITY 3: ENGINEERING QUALITY
       and bitmap pressure, tune export memory, and fix frame-time/OOM issues
       found by measurement.
 
-[OPEN] 3. Storage and project-file audit.
+[PARTIAL / SAFE ORPHAN CLEANUP + OWNED-FILE ACCOUNTING] 3. Storage and project-file audit.
       Verify cache/project/voiceover/temp/thumbnail accounting, orphan cleanup,
       export cleanup, migration recovery, and safe deletion of app-owned files
-      without touching original gallery media.
+      without touching original gallery media. Phase 10 adds an explicit cleanup
+      path restricted to known Clipp-owned directories plus stale export temp
+      MP4s. Automated tests verify referenced owned files, unrelated cache files,
+      and external media are preserved while orphaned owned files are deleted.
+      Migration recovery and broader device/storage-pressure validation remain open.
 
 [OPEN] 4. Test-suite expansion.
       Add critical timeline, migration, repository, URI, export-model, data
@@ -260,9 +374,10 @@ Export-ready today (implementation status):
 - Selected audio tracks/processors and volume automation.
 
 Coming later or still gated:
-- Noise reduction, voice changer, ducking, and audio crossfade.
-- Partial-duration legacy effects and some advanced visual effects.
-- Advanced text/sticker animation, 3D text, border/shadow parity.
+- Noise reduction, voice changer, and audio-speed automation.
+- Oil-painting and other currently unimplemented advanced visual effects.
+- Dynamic text/sticker bitmap/shader animation (typewriter, blur/glow,
+  flicker/glitch/dissolve), 3D text, and border/shadow parity.
 - Transitions on speed-curved clips and any unsupported source combination.
 - Automatic captions, TTS, AI editing, cloud/accounts, billing, and remote
   templates.
@@ -271,9 +386,11 @@ Coming later or still gated:
 FINAL RELEASE DECISION
 ----------------------
 Do not label the current app production-ready yet. A debug build passing is
-only a compilation/package signal. The latest renderer changes still need
-device export verification, and the signed release, accessibility, security,
-Play Store, and full real-user QA gates remain open.
+only one release signal. The current automated API 34 suite covers export,
+missing-media relink, cancel/retry, and corrupt-media preflight regressions,
+but physical-device/device-matrix QA plus the signed release, full accessibility,
+dependency/policy security review, Play Store, and remaining real-user workflow
+gates are still open.
 
 Recommended launch strategy:
 1. Ship a narrow, honest, account-free local v1 after Priority 0 is closed.

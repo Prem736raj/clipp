@@ -7,10 +7,15 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * Calculates and cleans only files owned by Clipp. Source gallery URIs are
- * never treated as deletable project files.
+ * Calculates and cleans only files owned by Clipp. External gallery URIs are
+ * never treated as deletable project files; app-owned import copies are.
  */
 object ProjectStorage {
+    data class CleanupResult(
+        val filesDeleted: Int,
+        val bytesFreed: Long
+    )
+
     fun normalize(context: Context, project: ProjectEntity): ProjectEntity {
         return project.copy(sizeBytes = calculateOwnedSizeBytes(context, project))
     }
@@ -56,20 +61,61 @@ object ProjectStorage {
      * project is never included here because it lives outside Clipp's roots.
      */
     fun deleteAllOwnedFiles(context: Context) {
-        listOf(
-            File(context.filesDir, "voiceovers"),
-            File(context.filesDir, "projects"),
-            File(context.filesDir, "thumbnails"),
-            File(context.filesDir, "proxies"),
-            File(context.filesDir, "exports-temp")
-        ).forEach { directory ->
+        knownOwnedDirectories(context).forEach { directory ->
             if (directory.exists()) directory.deleteRecursively()
         }
+    }
+
+    /**
+     * Deletes files that are no longer referenced by any project, but only
+     * inside directories reserved for Clipp-owned media plus stale export temp
+     * files in cache. External/gallery media and unrelated cache files are not
+     * candidates.
+     */
+    fun cleanupOrphanedOwnedFiles(
+        context: Context,
+        projects: Collection<ProjectEntity>
+    ): CleanupResult {
+        val referencedPaths = projects
+            .flatMap { ownedFiles(context, it) }
+            .mapNotNull { runCatching { it.canonicalFile.path }.getOrNull() }
+            .toSet()
+
+        val candidates = buildList {
+            knownOwnedDirectories(context).forEach { root ->
+                if (!root.exists()) return@forEach
+                val canonicalRoot = runCatching { root.canonicalFile }.getOrNull() ?: return@forEach
+                root.walkBottomUp()
+                    .filter { it.isFile }
+                    .forEach { file ->
+                        val canonical = runCatching { file.canonicalFile }.getOrNull() ?: return@forEach
+                        if (isInside(canonical, canonicalRoot)) add(canonical)
+                    }
+            }
+            context.cacheDir.listFiles()
+                ?.filter { file -> file.isFile && file.name.startsWith("export-") && file.extension.equals("mp4", true) }
+                ?.mapNotNullTo(this) { runCatching { it.canonicalFile }.getOrNull() }
+        }.distinctBy { it.path }
+
+        var deleted = 0
+        var bytesFreed = 0L
+        candidates.forEach { file ->
+            if (file.path in referencedPaths || !file.exists()) return@forEach
+            val bytes = file.length().coerceAtLeast(0L)
+            if (file.delete()) {
+                deleted++
+                bytesFreed += bytes
+            }
+        }
+        return CleanupResult(deleted, bytesFreed)
     }
 
     private fun ownedFiles(context: Context, project: ProjectEntity): Set<File> {
         return buildSet {
             ownedFile(context, project.thumbnailUri)?.let(::add)
+            project.sourceMediaPaths.forEach { path ->
+                ownedFile(context, path)?.let(::add)
+            }
             collectOwnedHistoryFiles(context, project.historyState, this)
         }
     }
@@ -126,8 +172,20 @@ object ProjectStorage {
 
         return canonical.takeIf { file ->
             ownedRoots.any { root ->
-                file.path == root.path || file.path.startsWith(root.path + File.separator)
+                isInside(file, root)
             }
         }
     }
+
+    private fun knownOwnedDirectories(context: Context): List<File> = listOf(
+        File(context.filesDir, "voiceovers"),
+        File(context.filesDir, "imports"),
+        File(context.filesDir, "projects"),
+        File(context.filesDir, "thumbnails"),
+        File(context.filesDir, "proxies"),
+        File(context.filesDir, "exports-temp")
+    )
+
+    private fun isInside(file: File, root: File): Boolean =
+        file.path == root.path || file.path.startsWith(root.path + File.separator)
 }

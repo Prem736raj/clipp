@@ -35,6 +35,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -43,6 +44,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
@@ -57,6 +59,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.ProjectStorage
 import com.example.viewmodel.ProjectViewModel
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private data class StorageBreakdown(
     val appFiles: Long,
@@ -74,7 +79,9 @@ fun StorageManagerScreen(onClose: () -> Unit) {
     val context = LocalContext.current
     val projectViewModel: ProjectViewModel = viewModel()
     val projects by projectViewModel.uiState.collectAsState()
+    val scope = rememberCoroutineScope()
     var isClearing by remember { mutableStateOf(false) }
+    var isCleaningUnused by remember { mutableStateOf(false) }
     var refreshToken by remember { mutableStateOf(0) }
 
     val storage = remember(refreshToken, projects) { readStorageBreakdown(context) }
@@ -168,6 +175,49 @@ fun StorageManagerScreen(onClose: () -> Unit) {
                 }
                 Text(
                     "Only Clipp cache files are removed. Projects and source media stay intact.",
+                    modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+                Box(modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            if (!isCleaningUnused) {
+                                scope.launch {
+                                    isCleaningUnused = true
+                                    val result = withContext(Dispatchers.IO) {
+                                        ProjectStorage.cleanupOrphanedOwnedFiles(context, projects)
+                                    }
+                                    isCleaningUnused = false
+                                    refreshToken++
+                                    Toast.makeText(
+                                        context,
+                                        if (result.filesDeleted == 0) {
+                                            "No unused project files found"
+                                        } else {
+                                            "Removed ${result.filesDeleted} unused file(s) (${formatStorageSize(result.bytesFreed)} freed)"
+                                        },
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().height(52.dp),
+                        shape = RoundedCornerShape(26.dp),
+                        enabled = !isCleaningUnused && !isClearing
+                    ) {
+                        if (isCleaningUnused) {
+                            CircularProgressIndicator(modifier = Modifier.size(22.dp))
+                        } else {
+                            Icon(Icons.Filled.DeleteOutline, contentDescription = null)
+                            Spacer(Modifier.size(8.dp))
+                            Text("Clean unused project files", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+                Text(
+                    "Scans only Clipp-owned project folders and stale export temp files. Referenced project files and original gallery media are preserved.",
                     modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -32,8 +32,7 @@ fun ContactSupportScreen(onClose: () -> Unit, isBugReport: Boolean = false) {
                      "App Version: 1.0.0"
                      
     val crashLog = if (isBugReport) {
-        val prefs = context.getSharedPreferences("clipp_crash_prefs", android.content.Context.MODE_PRIVATE)
-        prefs.getString("last_crash_log", "No recent crashes recorded.") ?: "No recent crashes recorded."
+        CrashDiagnostics.read(context)
     } else ""
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {

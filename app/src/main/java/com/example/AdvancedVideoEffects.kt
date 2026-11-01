@@ -17,6 +17,8 @@ import java.io.IOException
  * actual renderer and prevents the editor from advertising a no-op export.
  */
 internal val EXPORT_SHADER_EFFECTS = setOf(
+    EffectType.GAUSSIAN_BLUR,
+    EffectType.LETTERBOX,
     EffectType.DIGITAL_GLITCH,
     EffectType.RGB_SPLIT,
     EffectType.SIGNAL_ERROR,
@@ -46,6 +48,8 @@ private fun EffectType.shaderMode(): Int = when (this) {
     EffectType.TILT_SHIFT -> 11
     EffectType.PRISM -> 12
     EffectType.NEON_GLOW -> 13
+    EffectType.GAUSSIAN_BLUR -> 14
+    EffectType.LETTERBOX -> 15
     else -> error("No shader mode for $this")
 }
 

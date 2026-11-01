@@ -73,6 +73,17 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun updateProjects(projects: Collection<ProjectEntity>) {
+        if (projects.isEmpty()) return
+        viewModelScope.launch {
+            val context = getApplication<Application>().applicationContext
+            projects.forEach { project ->
+                repository.update(ProjectStorage.normalize(context, project))
+            }
+            WidgetUpdater.updateWidgets(context)
+        }
+    }
+
     fun autoSaveProject(project: ProjectEntity) {
         autoSaveJob?.cancel()
         autoSaveJob = viewModelScope.launch {
@@ -118,6 +129,14 @@ class ProjectViewModel(application: Application) : AndroidViewModel(application)
     fun createFolder(name: String) {
         viewModelScope.launch {
             repository.insertFolder(FolderEntity(name = name))
+        }
+    }
+
+    fun renameFolder(folder: FolderEntity, name: String) {
+        val normalizedName = name.trim()
+        if (normalizedName.isEmpty() || normalizedName == folder.name) return
+        viewModelScope.launch {
+            repository.updateFolder(folder.copy(name = normalizedName))
         }
     }
 

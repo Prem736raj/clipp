@@ -23,7 +23,6 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.media3.common.Effect
 import androidx.media3.effect.BitmapOverlay
 import androidx.media3.effect.Crop
-import androidx.media3.effect.GaussianBlur
 import androidx.media3.effect.MatrixTransformation
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.OverlaySettings
@@ -32,6 +31,7 @@ import androidx.media3.effect.ScaleAndRotateTransformation
 import androidx.media3.effect.TextureOverlay
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -44,7 +44,7 @@ private val EXPORT_SUPPORTED_CLIP_KEYFRAMES = FeatureCapabilityRegistry.exportSu
 private val EXPORT_SUPPORTED_OVERLAY_KEYFRAMES = FeatureCapabilityRegistry.exportSupportedOverlayKeyframes
 internal val EXPORT_SUPPORTED_AUDIO_KEYFRAMES = FeatureCapabilityRegistry.exportSupportedAudioKeyframes
 private val EXPORT_SUPPORTED_EFFECTS = FeatureCapabilityRegistry.exportSupportedEffects
-private val EXPORT_TIMED_OVERLAY_EFFECTS = FeatureCapabilityRegistry.exportTimedOverlayEffects
+private val EXPORT_TIMED_EFFECTS = FeatureCapabilityRegistry.exportTimedEffects
 private val EXPORT_VIDEO_TRANSITIONS = FeatureCapabilityRegistry.exportVideoTransitions
 private val EXPORT_PHOTO_TRANSITIONS = FeatureCapabilityRegistry.exportPhotoTransitions
 private val EXPORT_SUPPORTED_TEXT_ANIM_IN = FeatureCapabilityRegistry.exportSupportedTextAnimIn
@@ -646,8 +646,31 @@ private class ProceduralEffectBitmapOverlay(
     }
 }
 
-private class ExportRgbMatrix(private val matrix: FloatArray) : RgbMatrix {
-    override fun getMatrix(presentationTimeUs: Long, useHdr: Boolean): FloatArray = matrix.copyOf()
+private class ExportRgbMatrix(
+    private val matrix: FloatArray,
+    startTimeMs: Long = 0L,
+    endTimeMs: Long = Long.MAX_VALUE
+) : RgbMatrix {
+    private val startTimeMs = startTimeMs.coerceAtLeast(0L)
+    private val endTimeMs = endTimeMs.coerceAtLeast(this.startTimeMs + 1L)
+
+    override fun getMatrix(presentationTimeUs: Long, useHdr: Boolean): FloatArray {
+        val timeMs = presentationTimeUs / 1_000L
+        return if (timeMs >= startTimeMs && timeMs < endTimeMs) {
+            matrix.copyOf()
+        } else {
+            IDENTITY_RGB_MATRIX.copyOf()
+        }
+    }
+
+    private companion object {
+        val IDENTITY_RGB_MATRIX = floatArrayOf(
+            1f, 0f, 0f, 0f,
+            0f, 1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 0f, 0f, 1f
+        )
+    }
 }
 
 /** Moves the outgoing frame while the incoming transition source enters. */
@@ -729,10 +752,34 @@ private class KeyframedClipTransformation(
     }
 }
 
-private class ShakeTransformation(
-    private val intensity: Float
+private class TimedMirrorTransformation(
+    startTimeMs: Long,
+    endTimeMs: Long
 ) : MatrixTransformation {
+    private val startTimeMs = startTimeMs.coerceAtLeast(0L)
+    private val endTimeMs = endTimeMs.coerceAtLeast(this.startTimeMs + 1L)
+
     override fun getMatrix(presentationTimeUs: Long): Matrix {
+        val timeMs = presentationTimeUs / 1_000L
+        return Matrix().apply {
+            if (timeMs >= startTimeMs && timeMs < endTimeMs) {
+                postScale(-1f, 1f)
+            }
+        }
+    }
+}
+
+private class ShakeTransformation(
+    private val intensity: Float,
+    startTimeMs: Long,
+    endTimeMs: Long
+) : MatrixTransformation {
+    private val startTimeMs = startTimeMs.coerceAtLeast(0L)
+    private val endTimeMs = endTimeMs.coerceAtLeast(this.startTimeMs + 1L)
+
+    override fun getMatrix(presentationTimeUs: Long): Matrix {
+        val timeMs = presentationTimeUs / 1_000L
+        if (timeMs < startTimeMs || timeMs >= endTimeMs) return Matrix()
         val timeSeconds = presentationTimeUs / 1_000_000f
         val amplitude = 0.025f * intensity.coerceIn(0f, 1f)
         return Matrix().apply {
@@ -747,7 +794,9 @@ private class ShakeTransformation(
 private data class LayerMotion(
     val alpha: Float = 1f,
     val scale: Float = 1f,
-    val rotationDegrees: Float = 0f
+    val rotationDegrees: Float = 0f,
+    val offsetX: Float = 0f,
+    val offsetY: Float = 0f
 )
 
 private fun easedProgress(value: Float): Float = sin(value.coerceIn(0f, 1f) * PI.toFloat() / 2f)
@@ -768,6 +817,8 @@ private fun textLayerMotion(
     var alpha = 1f
     var scale = 1f
     var rotation = 0f
+    var offsetX = 0f
+    var offsetY = 0f
     val inDelay = animInDelayMs.coerceAtLeast(0L)
     val inDuration = animInDurationMs.coerceAtLeast(1L)
 
@@ -778,9 +829,33 @@ private fun textLayerMotion(
             val ease = easedProgress(progress)
             when (animIn) {
                 TextAnimIn.FADE_IN -> alpha = ease
+                TextAnimIn.SLIDE_IN_UP -> {
+                    alpha = ease
+                    offsetY += (1f - ease) * 0.5f
+                }
+                TextAnimIn.SLIDE_IN_DOWN -> {
+                    alpha = ease
+                    offsetY -= (1f - ease) * 0.5f
+                }
+                TextAnimIn.SLIDE_IN_LEFT -> {
+                    alpha = ease
+                    offsetX += (1f - ease) * 0.5f
+                }
+                TextAnimIn.SLIDE_IN_RIGHT -> {
+                    alpha = ease
+                    offsetX -= (1f - ease) * 0.5f
+                }
                 TextAnimIn.SCALE_IN -> {
                     alpha = ease
                     scale *= ease.coerceAtLeast(0.001f)
+                }
+                TextAnimIn.BOUNCE_IN -> {
+                    val bounce = if (progress < 0.5f) {
+                        4f * progress * progress * progress
+                    } else {
+                        1f - Math.pow((-2f * progress + 2f).toDouble(), 3.0).toFloat() / 2f
+                    }
+                    scale *= bounce.coerceAtLeast(0.001f)
                 }
                 TextAnimIn.ROTATE_IN -> {
                     alpha = ease
@@ -801,8 +876,16 @@ private fun textLayerMotion(
         val loopProgress = ((relativeTimeMs - loopStartsAt) % animLoopDurationMs).toFloat() / animLoopDurationMs
         when (animLoop) {
             TextAnimLoop.PULSE -> scale *= 1f + 0.1f * sin(loopProgress * PI.toFloat() * 2f)
+            TextAnimLoop.BOUNCE -> offsetY -= 0.05f * sin(loopProgress * PI.toFloat())
+            TextAnimLoop.SHAKE -> if (loopProgress < 0.2f) {
+                offsetX += 0.02f * sin(loopProgress * PI.toFloat() * 10f)
+            }
             TextAnimLoop.WAVE -> rotation += 5f * sin(loopProgress * PI.toFloat() * 2f)
             TextAnimLoop.SWING -> rotation += 15f * sin(loopProgress * PI.toFloat() * 2f)
+            TextAnimLoop.FLOAT -> {
+                offsetY += 0.02f * sin(loopProgress * PI.toFloat() * 2f)
+                offsetX += 0.01f * cos(loopProgress * PI.toFloat() * 2f)
+            }
             else -> Unit
         }
     }
@@ -815,17 +898,44 @@ private fun textLayerMotion(
         val outDuration = animOutDurationMs.coerceAtLeast(1L)
         val progress = ((relativeTimeMs - exitStart - outDelay).toFloat() / outDuration).coerceIn(0f, 1f)
         val inverseEase = 1f - easedProgress(progress)
+        val ease = 1f - inverseEase
         when (animOut) {
             TextAnimOut.FADE_OUT -> alpha *= inverseEase
+            TextAnimOut.SLIDE_OUT_UP -> {
+                alpha *= inverseEase
+                offsetY -= ease * 0.5f
+            }
+            TextAnimOut.SLIDE_OUT_DOWN -> {
+                alpha *= inverseEase
+                offsetY += ease * 0.5f
+            }
+            TextAnimOut.SLIDE_OUT_LEFT -> {
+                alpha *= inverseEase
+                offsetX -= ease * 0.5f
+            }
+            TextAnimOut.SLIDE_OUT_RIGHT -> {
+                alpha *= inverseEase
+                offsetX += ease * 0.5f
+            }
             TextAnimOut.SCALE_OUT -> {
                 alpha *= inverseEase
                 scale *= inverseEase.coerceAtLeast(0.001f)
+            }
+            TextAnimOut.BOUNCE_OUT -> {
+                scale *= inverseEase.coerceAtLeast(0.001f)
+                offsetY += ease * 0.2f
             }
             else -> Unit
         }
     }
 
-    return LayerMotion(alpha = alpha.coerceIn(0f, 1f), scale = scale, rotationDegrees = rotation)
+    return LayerMotion(
+        alpha = alpha.coerceIn(0f, 1f),
+        scale = scale,
+        rotationDegrees = rotation,
+        offsetX = offsetX,
+        offsetY = offsetY
+    )
 }
 
 private fun overlaySettings(
@@ -1043,17 +1153,6 @@ private fun renderSolidBitmap(color: Int): Bitmap {
     return Bitmap.createBitmap(1024, 1024, Bitmap.Config.ARGB_8888).also { bitmap ->
         Canvas(bitmap).drawColor(color)
     }
-}
-
-private fun renderLetterboxBitmap(intensity: Float): Bitmap {
-    val size = 1024
-    val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-    val canvas = Canvas(bitmap)
-    val barHeight = size * 0.15f * intensity.coerceIn(0f, 1f)
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.BLACK }
-    canvas.drawRect(0f, 0f, size.toFloat(), barHeight, paint)
-    canvas.drawRect(0f, size - barHeight, size.toFloat(), size.toFloat(), paint)
-    return bitmap
 }
 
 private fun loadBitmap(context: Context, uri: String): Bitmap? {
@@ -1403,8 +1502,8 @@ private fun buildTextSettings(text: TextOverlay, globalTimeMs: Long): OverlaySet
         animOutDelayMs = text.animOutDelayMs
     )
     return overlaySettings(
-        posX = text.keyframes.getValueAtTime("posX", relative, text.posX),
-        posY = text.keyframes.getValueAtTime("posY", relative, text.posY),
+        posX = text.keyframes.getValueAtTime("posX", relative, text.posX) + motion.offsetX,
+        posY = text.keyframes.getValueAtTime("posY", relative, text.posY) + motion.offsetY,
         scaleX = 0.55f * text.keyframes.getValueAtTime("scale", relative, text.scale) * motion.scale,
         scaleY = 0.55f * text.keyframes.getValueAtTime("scale", relative, text.scale) * motion.scale,
         rotation = text.keyframes.getValueAtTime("rotation", relative, text.rotation) + motion.rotationDegrees,
@@ -1428,8 +1527,8 @@ private fun buildStickerSettings(sticker: StickerOverlay, globalTimeMs: Long): O
         animOutDelayMs = sticker.animOutDelayMs
     )
     return overlaySettings(
-        posX = sticker.keyframes.getValueAtTime("posX", relative, sticker.posX),
-        posY = sticker.keyframes.getValueAtTime("posY", relative, sticker.posY),
+        posX = sticker.keyframes.getValueAtTime("posX", relative, sticker.posX) + motion.offsetX,
+        posY = sticker.keyframes.getValueAtTime("posY", relative, sticker.posY) + motion.offsetY,
         scaleX = 0.28f * sticker.keyframes.getValueAtTime("scale", relative, sticker.scale) * motion.scale,
         scaleY = 0.28f * sticker.keyframes.getValueAtTime("scale", relative, sticker.scale) * motion.scale,
         rotation = sticker.keyframes.getValueAtTime("rotation", relative, sticker.rotation) + motion.rotationDegrees,
@@ -1690,14 +1789,6 @@ internal fun buildExportOverlays(
         }
     }
 
-    clip.effects.filter { it.type == EffectType.LETTERBOX }.forEach { effect ->
-        addWindowed(
-            renderLetterboxBitmap(effect.intensity),
-            clipStartMs,
-            clipStartMs + clipDurationMs
-        ) { _ -> overlaySettings(0.5f, 0.5f, 1f, 1f) }
-    }
-
     clip.effects.filter {
         it.type == EffectType.FILM_GRAIN ||
             it.type == EffectType.ANAMORPHIC_FLARE ||
@@ -1824,15 +1915,18 @@ private fun AppliedEffect.isRenderableTransitionEffect(
     allowedEffects: Set<EffectType>,
     clipDurationMs: Long
 ): Boolean {
-    val endMs = if (endTimeMs == -1L) clipDurationMs else endTimeMs
     return type in allowedEffects &&
-        startTimeMs >= 0L &&
-        endTimeMs >= -1L &&
-        endMs >= startTimeMs &&
+        hasValidExportTiming(clipDurationMs) &&
         intensity.isFinite() &&
         intensity in 0f..1f &&
-        (startTimeMs == 0L || type in EXPORT_TIMED_OVERLAY_EFFECTS) &&
-        (endTimeMs == -1L || endTimeMs >= clipDurationMs || type in EXPORT_TIMED_OVERLAY_EFFECTS)
+        (startTimeMs == 0L || type in EXPORT_TIMED_EFFECTS) &&
+        (endTimeMs == -1L || endTimeMs >= clipDurationMs || type in EXPORT_TIMED_EFFECTS)
+}
+
+private fun AppliedEffect.hasValidExportTiming(clipDurationMs: Long): Boolean {
+    if (startTimeMs < 0L || endTimeMs < -1L) return false
+    val resolvedEndMs = if (endTimeMs == -1L) clipDurationMs else endTimeMs
+    return resolvedEndMs > startTimeMs
 }
 
 internal fun buildExportVideoEffects(
@@ -1906,28 +2000,41 @@ internal fun buildExportVideoEffects(
     if (!isIdentity) effects += ExportRgbMatrix(matrix4x4)
 
     clip.effects.forEach { effect ->
+        val effectEndMs = if (effect.endTimeMs == -1L) clipDurationMs else effect.endTimeMs
         when (effect.type) {
             EffectType.GAUSSIAN_BLUR -> {
-                effects += GaussianBlur((24f * effect.intensity.coerceIn(0.05f, 1f)).coerceAtLeast(1f))
-            }
-            EffectType.MIRROR -> {
-                effects += ScaleAndRotateTransformation.Builder()
-                    .setScale(-1f, 1f)
-                    .build()
-            }
-            EffectType.SHAKE -> effects += ShakeTransformation(effect.intensity)
-            EffectType.COMIC_BOOK,
-            EffectType.PENCIL_SKETCH,
-            EffectType.POP_ART -> {
-                buildExportEffectColorMatrix(effect)?.let { effects += ExportRgbMatrix(it) }
-            }
-            in EXPORT_SHADER_EFFECTS -> {
-                val endTimeMs = if (effect.endTimeMs == -1L) clipDurationMs else effect.endTimeMs
                 effects += ShaderDistortionEffect(
                     type = effect.type,
                     intensity = effect.intensity,
                     startTimeMs = effect.startTimeMs,
-                    endTimeMs = endTimeMs
+                    endTimeMs = effectEndMs
+                )
+            }
+            EffectType.MIRROR -> {
+                effects += TimedMirrorTransformation(effect.startTimeMs, effectEndMs)
+            }
+            EffectType.SHAKE -> effects += ShakeTransformation(
+                intensity = effect.intensity,
+                startTimeMs = effect.startTimeMs,
+                endTimeMs = effectEndMs
+            )
+            EffectType.COMIC_BOOK,
+            EffectType.PENCIL_SKETCH,
+            EffectType.POP_ART -> {
+                buildExportEffectColorMatrix(effect)?.let {
+                    effects += ExportRgbMatrix(
+                        matrix = it,
+                        startTimeMs = effect.startTimeMs,
+                        endTimeMs = effectEndMs
+                    )
+                }
+            }
+            in EXPORT_SHADER_EFFECTS -> {
+                effects += ShaderDistortionEffect(
+                    type = effect.type,
+                    intensity = effect.intensity,
+                    startTimeMs = effect.startTimeMs,
+                    endTimeMs = effectEndMs
                 )
             }
             else -> Unit
@@ -1938,7 +2045,7 @@ internal fun buildExportVideoEffects(
     return effects
 }
 
-internal fun EditorState.exportUnsupportedReasons(): List<String> {
+internal fun EditorState.exportUnsupportedReasons(exportSettings: ExportSettings? = null): List<String> {
     val reasons = mutableListOf<String>()
     clips.forEachIndexed { index, clip ->
         if (clip.hasUnsupportedExportEdits()) reasons += "an unsupported clip edit"
@@ -1973,10 +2080,9 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
             reasons += "this visual effect"
         }
         if (clip.effects.any {
-                it.startTimeMs < 0L ||
-                    it.endTimeMs < -1L ||
-                    (it.startTimeMs > 0L && it.type !in EXPORT_TIMED_OVERLAY_EFFECTS) ||
-                    (it.endTimeMs != -1L && it.endTimeMs < clip.durationMs && it.type !in EXPORT_TIMED_OVERLAY_EFFECTS) ||
+                !it.hasValidExportTiming(clip.durationMs) ||
+                    (it.startTimeMs > 0L && it.type !in EXPORT_TIMED_EFFECTS) ||
+                    (it.endTimeMs != -1L && it.endTimeMs < clip.durationMs && it.type !in EXPORT_TIMED_EFFECTS) ||
                     !it.intensity.isFinite() ||
                     it.intensity !in 0f..1f
             }) {
@@ -2016,22 +2122,32 @@ internal fun EditorState.exportUnsupportedReasons(): List<String> {
     }
     if (audioClips.any { it.sourceUri.isNullOrBlank() && it.sourceClipId.isNullOrBlank() }) reasons += "an audio source"
     if (audioClips.any {
-            it.autoDucking ||
-                it.keyframes.keys.any { key -> key !in EXPORT_SUPPORTED_AUDIO_KEYFRAMES } ||
+            it.keyframes.keys.any { key -> key !in EXPORT_SUPPORTED_AUDIO_KEYFRAMES } ||
                 it.keyframes["volume"].orEmpty().any { keyframe ->
                     keyframe.timeMs < 0L || !keyframe.value.isFinite() || keyframe.value !in 0f..1f
                 } ||
-                it.audioEffects.hasUnsupportedExportAutomation()
+                it.audioEffects.hasUnsupportedExportAutomation(allowCrossfade = true)
     }) {
         reasons += "advanced audio automation"
     }
     val projectDurationMs = clips.sumOf { it.durationMs }
+    if (audioClips.any { audioClip ->
+            val maxCrossfadeMs = minOf(
+                MAX_EXPORT_CROSSFADE_MS,
+                audioClip.timelineDurationMs(projectDurationMs) / 2L
+            )
+            audioClip.audioEffects.crossfadeMs > maxCrossfadeMs
+        }) {
+        reasons += "audio crossfade is longer than half of its track"
+    }
     if (audioClips.any {
             it.isLooped && it.requiredExportSegmentCount(projectDurationMs) > MAX_AUDIO_LOOP_EXPORT_SEGMENTS
         }) {
         reasons += "audio loop is too short for this project"
     }
-    if (canvasSettings.aspectOption != AspectRatioOption.R_16_9 ||
+    // Explicit quality exports apply a Presentation with the canvas dimensions.
+    // The legacy automatic path still has no custom-aspect renderer.
+    if ((exportSettings == null && canvasSettings.aspectOption != AspectRatioOption.R_16_9) ||
         canvasSettings.fitMode != FitMode.Fit ||
         canvasSettings.backgroundType != BackgroundType.Blur
     ) reasons += "custom canvas output"

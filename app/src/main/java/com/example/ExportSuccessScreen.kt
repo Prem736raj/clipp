@@ -1,5 +1,6 @@
 package com.example
 
+import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -41,6 +42,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 
+internal fun buildExportShareIntent(outputUri: Uri): Intent = Intent(Intent.ACTION_SEND).apply {
+    type = "video/mp4"
+    putExtra(Intent.EXTRA_STREAM, outputUri)
+    clipData = ClipData.newRawUri("Clipp export", outputUri)
+    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+}
+
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun ExportSuccessScreen(
@@ -63,11 +71,7 @@ fun ExportSuccessScreen(
     }
 
     fun shareVideo() {
-        val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "video/mp4"
-            putExtra(Intent.EXTRA_STREAM, outputUri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
+        val intent = buildExportShareIntent(outputUri)
         runCatching {
             context.startActivity(Intent.createChooser(intent, "Share Clipp export"))
         }.onFailure {

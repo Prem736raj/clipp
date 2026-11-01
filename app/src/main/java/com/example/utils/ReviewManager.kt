@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
+import com.example.BuildConfig
 
 object ReviewManager {
     var lastSessionDurationMs: Long = 0L
@@ -60,7 +61,7 @@ object ReviewManager {
         try {
             context.startActivity(Intent.createChooser(intent, "Send email..."))
         } catch (e: Exception) {
-            Log.e("ReviewManager", "No email app found")
+            if (BuildConfig.DEBUG) Log.e("ReviewManager", "No email app found", e)
         }
     }
     
@@ -80,7 +81,7 @@ object ReviewManager {
                 }
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            if (BuildConfig.DEBUG) Log.e("ReviewManager", "Native review flow unavailable", e)
             // Graceful fallback for environments without Play Core
             setReviewShown(activity)
         }

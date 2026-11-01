@@ -85,7 +85,9 @@ fun parseCubeLut(context: android.content.Context, uri: android.net.Uri): FloatA
             return values
         }
     } catch (e: Exception) {
-        e.printStackTrace()
+        if (BuildConfig.DEBUG) {
+            android.util.Log.e("ColorAdjustments", "Could not parse LUT", e)
+        }
     }
     return null
 }

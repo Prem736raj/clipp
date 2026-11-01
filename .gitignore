@@ -18,3 +18,8 @@ local.properties
 debug.keystore
 *.jks
 *.keystore
+
+# Temporary device/emulator capture artifacts
+/*.png
+/window.xml
+

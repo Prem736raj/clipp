@@ -12,11 +12,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -27,15 +29,20 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
@@ -55,6 +62,29 @@ fun ExportSettingsScreen(
     var outputUri by remember { mutableStateOf<Uri?>(null) }
     var outputMetadata by remember { mutableStateOf<ExportMetadata?>(null) }
     var activeExportHandle by remember { mutableStateOf<ExportHandle?>(null) }
+    var resolutionName by rememberSaveable { mutableStateOf(ExportResolution.HD.name) }
+    var frameRate by rememberSaveable { mutableStateOf(30) }
+    var videoBitrate by rememberSaveable { mutableStateOf(5_000_000) }
+    var initializedQuality by rememberSaveable { mutableStateOf(false) }
+    val settings = ExportSettings(ExportResolution.valueOf(resolutionName), frameRate, videoBitrate)
+    val aspectRatio = editorState.canvasSettings.aspectOption.ratio
+    val qualitySupport by produceState<ExportQualitySupport?>(null, aspectRatio) {
+        value = withContext(Dispatchers.IO) { inspectExportQualitySupport(aspectRatio) }
+    }
+    fun selectQuality(value: ExportSettings) {
+        resolutionName = value.resolution.name
+        frameRate = value.frameRate
+        videoBitrate = value.videoBitrate
+        errorMessage = null
+    }
+    LaunchedEffect(qualitySupport) {
+        if (!initializedQuality) {
+            qualitySupport?.defaultSettings()?.let {
+                selectQuality(it)
+                initializedQuality = true
+            }
+        }
+    }
 
     DisposableEffect(exporter) {
         onDispose { exporter.close() }
@@ -62,7 +92,11 @@ fun ExportSettingsScreen(
 
     val uri = outputUri
     val metadata = outputMetadata
-    val unsupportedReasons = editorState.exportUnsupportedReasons()
+    val unsupportedReasons = editorState.exportUnsupportedReasons(settings)
+    val deviceReadiness = remember(editorState) {
+        inspectExportDeviceReadiness(context, editorState)
+    }
+    val qualityBlockingReason = qualitySupport?.blockingReason(settings)
     fun cancelExport() {
         activeExportHandle?.cancel()
         activeExportHandle = null
@@ -102,60 +136,77 @@ fun ExportSettingsScreen(
                     Spacer(Modifier.height(8.dp))
                     Text("MP4 export", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     Text(
-                        "Clipp renders the source timeline and every export-ready capability below into a real MP4. The same registry also blocks preview-only controls before they can make this project unexportable.",
+                        "Choose the quality and size of your finished video.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 item {
+                    ExportQualityControls(
+                        settings = settings,
+                        support = qualitySupport,
+                        enabled = !isExporting,
+                        onSettingsChanged = ::selectQuality
+                    )
+                }
+                item {
+                    val dimensions = settings.dimensions(aspectRatio)
                     Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        color = MaterialTheme.colorScheme.surfaceVariant,
                         shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.Top) {
-                            Icon(Icons.Filled.Info, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                if (unsupportedReasons.isNotEmpty()) {
-                                    "This project still contains export-blocked items: ${unsupportedReasons.distinct().joinToString(", ")}. Remove them before exporting."
-                                } else {
-                                    "The current renderer includes clip positioning and transform/crop keyframes, static text, captions, supported text/sticker/image/GIF/video-overlay animations, drawings, frames, image overlays, GIF/video overlays, shape masks, blend modes, photo/video-overlay chroma key, crop, filters, shader distortion effects, sampled speed-curve automation with pitch preservation, push and simple photo/video-source transitions with bounded timing/easing, looped audio tracks, audio EQ/pitch/delay/reverb/distortion, volume keyframes/fade envelopes, and separate audio tracks. Transitions on curved clips, advanced text/sticker animations, noise reduction, voice effects, ducking, and audio crossfade are not enabled."
-                                },
-                                style = MaterialTheme.typography.bodySmall
-                            )
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("${dimensions.width} × ${dimensions.height} · ${editorState.canvasSettings.aspectOption.label}",
+                                fontWeight = FontWeight.SemiBold)
+                            Text("${clips.size} clips · ${formatExportDuration(videoDurationMs)} · MP4 (H.264)")
+                            Text("Estimated size: ${android.text.format.Formatter.formatShortFileSize(context,
+                                settings.estimatedBytes(videoDurationMs, editorState.requiresAudioEncoder()))}")
+                            Text("Actual file size varies with your video. Empty canvas space is filled with black.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
+                if (unsupportedReasons.isNotEmpty() || qualityBlockingReason != null) {
+                    item {
+                        Text(qualityBlockingReason ?: "Remove unsupported edits before exporting: ${unsupportedReasons.distinct().joinToString(", ")}",
+                            color = MaterialTheme.colorScheme.error)
+                    }
+                }
                 item {
-                    Text("Capability status", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FeatureCapabilityRegistry.launchStatuses.forEach { status ->
-                            val statusColor = when (status.capability) {
-                                FeatureCapability.PREVIEW_AND_EXPORT_SUPPORTED -> MaterialTheme.colorScheme.primary
-                                FeatureCapability.PREVIEW_ONLY_EXPERIMENTAL -> MaterialTheme.colorScheme.tertiary
-                                FeatureCapability.DISABLED,
-                                FeatureCapability.COMING_LATER -> MaterialTheme.colorScheme.onSurfaceVariant
-                            }
-                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(status.label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                                    Text(status.shortLabel, style = MaterialTheme.typography.labelSmall, color = statusColor)
+                    val blocked = deviceReadiness.blockingReason
+                    Surface(
+                        color = if (blocked != null) {
+                            MaterialTheme.colorScheme.errorContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        },
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text("Before you export", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                blocked ?: "Keep Clipp open until your video is saved.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (blocked != null) {
+                                    MaterialTheme.colorScheme.onErrorContainer
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
                                 }
+                            )
+                            deviceReadiness.warnings.forEach { warning ->
                                 Text(
-                                    status.detail,
-                                    style = MaterialTheme.typography.labelSmall,
+                                    warning,
+                                    style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
                     }
-                }
-                item {
-                    Text("${clips.size} source clip(s) · ${formatExportDuration(videoDurationMs)}", style = MaterialTheme.typography.titleMedium)
                 }
                 if (errorMessage != null) {
                     item {
@@ -199,6 +250,7 @@ fun ExportSettingsScreen(
                         activeExportHandle = exporter.export(
                             clips = clips,
                             editorState = editorState,
+                            exportSettings = settings,
                             onProgress = { progress = it },
                             onSuccess = { publishedUri, metadataValue ->
                                 isExporting = false
@@ -216,7 +268,8 @@ fun ExportSettingsScreen(
                         )
                     },
                     modifier = Modifier.fillMaxWidth().padding(16.dp).height(54.dp),
-                    enabled = !isExporting && clips.isNotEmpty() && unsupportedReasons.isEmpty()
+                    enabled = !isExporting && clips.isNotEmpty() && unsupportedReasons.isEmpty() &&
+                        qualitySupport != null && qualityBlockingReason == null && deviceReadiness.blockingReason == null
                 ) {
                     Icon(Icons.Filled.Download, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
@@ -224,6 +277,58 @@ fun ExportSettingsScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+internal fun ExportQualityControls(
+    settings: ExportSettings,
+    support: ExportQualitySupport?,
+    enabled: Boolean,
+    onSettingsChanged: (ExportSettings) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (support == null) Text("Checking available quality options…")
+        Text("Resolution", style = MaterialTheme.typography.titleMedium)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(ExportResolution.entries) { resolution ->
+                val choice = support?.settingsForResolution(resolution, settings.frameRate)
+                FilterChip(
+                    selected = settings.resolution == resolution,
+                    enabled = enabled && choice != null,
+                    onClick = { choice?.let(onSettingsChanged) },
+                    label = { Text(resolution.label) }
+                )
+            }
+        }
+        Text("Frame rate limit", style = MaterialTheme.typography.titleMedium)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(EXPORT_FRAME_RATES) { rate ->
+                val choice = support?.preferredSettings(settings.resolution, rate, settings.videoBitrate)
+                FilterChip(
+                    selected = settings.frameRate == rate,
+                    enabled = enabled && choice != null,
+                    onClick = { choice?.let(onSettingsChanged) },
+                    label = { Text("$rate fps") }
+                )
+            }
+        }
+        Text("Lower frame rates in source videos are preserved. Photos use the selected rate.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Video bitrate", style = MaterialTheme.typography.titleMedium)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(EXPORT_VIDEO_BITRATES) { bitrate ->
+                val choice = settings.copy(videoBitrate = bitrate)
+                FilterChip(
+                    selected = settings.videoBitrate == bitrate,
+                    enabled = enabled && support?.supportedSettings?.contains(choice) == true,
+                    onClick = { onSettingsChanged(choice) },
+                    label = { Text("${bitrate / 1_000_000} Mbps") }
+                )
+            }
+        }
+        Text("Higher bitrates preserve more detail and make larger files. Unavailable options are disabled.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
